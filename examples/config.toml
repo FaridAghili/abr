@@ -13,7 +13,6 @@ domain = "mango.example.com"
 aliases = ["www.mango.example.com"]
 domains = ["api.mango.example.com"]
 wildcards = []
-deploy_file = "deploy.sh"
 health_check = "https://mango.example.com/up"
 [apps.web]
 driver = "octane"
@@ -33,7 +32,6 @@ directory = "/srv/quiet"
 user = "quiet"
 type = "laravel"
 domain = "quiet.example.com"
-deploy_file = "deploy.sh"
 [apps.web]
 driver = "fpm"
 [apps.queue]
@@ -47,15 +45,3 @@ directory = "/srv/frontend"
 user = "frontend"
 type = "nuxt"
 domain = "frontend.example.com"
-deploy_file = "deploy.sh"
-[apps.nuxt]
-mode = "ssr"
-
-[[apps]]
-name = "docs"
-directory = "/srv/docs"
-user = "docs"
-type = "nuxt"
-domain = "docs.example.com"
-[apps.nuxt]
-mode = "static"

@@ -32,14 +32,13 @@ type App struct {
 	Aliases     []string  `toml:"aliases,omitempty"`
 	Domains     []string  `toml:"domains,omitempty"`
 	Wildcards   []string  `toml:"wildcards,omitempty"`
-	DeployFile  string    `toml:"deploy_file,omitempty"`
 	HealthCheck string    `toml:"health_check,omitempty"`
 	Web         Web       `toml:"web,omitempty"`
 	Queue       Queue     `toml:"queue,omitempty"`
 	Scheduler   Component `toml:"scheduler,omitempty"`
 	Nightwatch  Component `toml:"nightwatch,omitempty"`
 	InertiaSSR  Component `toml:"inertia_ssr,omitempty"`
-	Nuxt        Nuxt      `toml:"nuxt,omitempty"`
+	Database    Database  `toml:"database,omitempty"`
 }
 
 type Web struct {
@@ -53,8 +52,8 @@ type Queue struct {
 type Component struct {
 	Enabled bool `toml:"enabled,omitempty"`
 }
-type Nuxt struct {
-	Mode string `toml:"mode,omitempty"`
+type Database struct {
+	Enabled bool `toml:"enabled,omitempty"`
 }
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
@@ -119,6 +118,18 @@ func (c Config) Validate() error {
 			domains[d] = a.Name
 		}
 	}
+	// Separate runtime users and directory trees prevent cross-app ownership changes.
+	for i, a := range c.Apps {
+		for _, b := range c.Apps[i+1:] {
+			if a.User == b.User {
+				return fmt.Errorf("apps %q and %q share runtime user %q", a.Name, b.Name, a.User)
+			}
+			left, right := filepath.Clean(a.Directory)+string(filepath.Separator), filepath.Clean(b.Directory)+string(filepath.Separator)
+			if strings.HasPrefix(left, right) || strings.HasPrefix(right, left) {
+				return fmt.Errorf("apps %q and %q have overlapping directory trees", a.Name, b.Name)
+			}
+		}
+	}
 	return nil
 }
 
@@ -148,9 +159,6 @@ func (a App) Validate() error {
 			return fmt.Errorf("invalid wildcard %q; use *.example.com", d)
 		}
 	}
-	if strings.ContainsAny(a.DeployFile, "\x00\r\n") {
-		return fmt.Errorf("invalid deploy_file")
-	}
 	if a.HealthCheck != "" {
 		u, err := url.Parse(a.HealthCheck)
 		if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
@@ -168,14 +176,8 @@ func (a App) Validate() error {
 		if a.Web.Driver == "fpm" && a.Web.Workers != 0 {
 			return fmt.Errorf("web.workers is only used by Octane")
 		}
-		if a.Nuxt.Mode != "" {
-			return fmt.Errorf("nuxt.mode is only used by Nuxt apps")
-		}
 	case "nuxt":
-		if a.Nuxt.Mode != "ssr" && a.Nuxt.Mode != "static" {
-			return fmt.Errorf("nuxt.mode must be ssr or static")
-		}
-		if a.Web.Driver != "" || a.Web.Workers != 0 || a.Queue.Workers != 0 || a.Scheduler.Enabled || a.Nightwatch.Enabled || a.InertiaSSR.Enabled {
+		if a.Web.Driver != "" || a.Web.Workers != 0 || a.Queue.Workers != 0 || a.Scheduler.Enabled || a.Nightwatch.Enabled || a.InertiaSSR.Enabled || a.Database.Enabled {
 			return fmt.Errorf("Laravel components cannot be enabled for Nuxt apps")
 		}
 	default:
@@ -210,7 +212,7 @@ func (a App) Endpoints() []string {
 	if a.Type == "laravel" && a.Web.Driver == "octane" {
 		purposes = append(purposes, "octane-http", "roadrunner-rpc")
 	}
-	if a.Type == "nuxt" && a.Nuxt.Mode == "ssr" {
+	if a.Type == "nuxt" {
 		purposes = append(purposes, "nuxt-http")
 	}
 	if a.InertiaSSR.Enabled {

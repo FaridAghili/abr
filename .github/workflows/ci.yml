@@ -53,3 +53,25 @@ jobs:
             dist/sites-linux-amd64.tar.gz
             dist/sites-linux-amd64.tar.gz.sha256
           if-no-files-found: error
+
+  host-smoke:
+    name: Disposable Ubuntu host test
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build native production executable
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o bin/sites ./cmd/sites
+      - name: Setup and deploy sample Laravel, SSR Nuxt, and SPA Nuxt apps
+        run: bash scripts/host-smoke.sh bin/sites
+      - name: Host diagnostics on failure
+        if: failure()
+        run: |
+          sudo systemctl --no-pager --full status caddy php8.5-fpm mysql || true
+          sudo journalctl --no-pager -n 100 -u caddy -u php8.5-fpm || true

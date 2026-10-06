@@ -1,14 +1,15 @@
-# Draft: sites-{{.Name}}-inertia-ssr.service
 # The application's SSR bundle must honor the managed host and port.
 [Unit]
 Description=Sites {{.Name}} Inertia SSR
 After=network.target
 
 [Service]
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+UMask=0027
 User={{.User}}
-WorkingDirectory={{.Directory}}
-EnvironmentFile={{.ManagedEnvironmentFile}}
-ExecStart={{.PHPBinary}} artisan inertia:start-ssr --no-interaction
+WorkingDirectory={{unit .Directory}}
+EnvironmentFile={{unit .ManagedEnvironmentFile}}
+ExecStart={{unit .PHPBinary}} artisan inertia:start-ssr --no-interaction
 Restart=on-failure
 RestartSec=5
 

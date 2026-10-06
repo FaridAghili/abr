@@ -1,16 +1,17 @@
-# Draft: sites-{{.Name}}-queue@.service (one instance per configured worker)
 [Unit]
 Description=Sites {{.Name}} queue worker %i
 After=network.target
 
 [Service]
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+UMask=0027
 User={{.User}}
-WorkingDirectory={{.Directory}}
-EnvironmentFile={{.ManagedEnvironmentFile}}
-ExecStart={{.PHPBinary}} artisan queue:work --sleep=3 --tries=3 --timeout={{.QueueTimeout}} --no-interaction
+WorkingDirectory={{unit .Directory}}
+EnvironmentFile={{unit .ManagedEnvironmentFile}}
+ExecStart={{unit .PHPBinary}} artisan queue:work --sleep=3 --tries=3 --timeout=60 --no-interaction
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec={{.QueueStopTimeout}}
+TimeoutStopSec=120
 
 [Install]
 WantedBy=multi-user.target

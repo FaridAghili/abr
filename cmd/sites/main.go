@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
+	"sites-manager/internal/host"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -25,26 +27,39 @@ func main() {
 	}
 }
 
-const usage = `Usage: sites [--config PATH] [--state-dir DIR] COMMAND [FLAGS]
+const usage = `Usage: sites [FLAGS] COMMAND [FLAGS] [APP...]
 
 Commands:
-  version          Print build version and platform
-  config validate  Validate TOML configuration without host checks
-  list             List configured applications
-  register         Register an application and reserve required ports
-  ports            Show saved reservations (--allocate reconciles config edits)
-  doctor           Check config, registry, missing reservations, and listeners
+  version          Print version and platform
+  config validate  Validate TOML configuration
+  list             List applications
+  register         Register a clone, create its Ubuntu user and Laravel database
+  ports            Show reservations (--allocate reconciles config edits)
+  doctor           Portable config/registry/port checks
+  setup            Install shared VPS packages, Caddy, Node 24 and RoadRunner
+  database APP     Create/verify MySQL database (--show prints credentials)
+  enable APP       Render, validate and start services
+  disable APP      Stop services; retain users, databases and ports
+  remove APP       Remove managed services/user; retain projects and databases
+  status [APP]     Show actual service status
+  restart APP [SERVICE]  Restart managed services (web, queue, queue@1, etc.)
+  logs APP [SERVICE]     Show journal (--follow streams it)
+  deploy APP...    Pull, install dependencies, build, migrate, enable
+  deploy --all     Deploy sequentially
 
-Defaults: --config /etc/sites/config.toml --state-dir /var/lib/sites
-Path flags also work after the command. Use COMMAND --help for flags.
-Service lifecycle, provisioning, deployment, and the menu are not implemented.
+Paths: --config /etc/sites/config.toml --state-dir /var/lib/sites
+       --templates-dir /etc/sites/templates --apps-dir /srv/apps
+Host commands require root on Ubuntu 26.04 AMD64; --dry-run previews on macOS.
+Portable registration uses --config-only. Interactive menu is not implemented.
 `
 
 func run(args []string, out, stderr io.Writer) error {
 	m := manager.Manager{}
+	h := host.Host{Output: out}
 	root := flag.NewFlagSet("sites", flag.ContinueOnError)
 	root.SetOutput(stderr)
 	pathFlags(root, &m, "/etc/sites/config.toml", "/var/lib/sites")
+	hostFlags(root, &h, "/etc/sites/templates", "/srv/apps", false)
 	root.Usage = func() { fmt.Fprint(stderr, usage) }
 	if err := root.Parse(args); err != nil {
 		return helpError(err)
@@ -54,8 +69,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fmt.Fprint(out, usage)
 		return nil
 	}
-	command := args[0]
-	args = args[1:]
+	command, args := args[0], args[1:]
 	if command == "config" {
 		if len(args) == 0 || args[0] != "validate" {
 			return fmt.Errorf("use sites config validate")
@@ -63,51 +77,89 @@ func run(args []string, out, stderr io.Writer) error {
 		command, args = "config validate", args[1:]
 	}
 	switch command {
-	case "enable", "disable", "remove", "status", "restart", "logs", "deploy", "setup":
-		return fmt.Errorf("%s is not implemented in this milestone", command)
-	case "version", "config validate", "list", "register", "ports", "doctor":
+	case "version", "config validate", "list", "register", "ports", "doctor", "setup", "database", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
 	default:
 		return fmt.Errorf("unknown command %q; use sites help", command)
 	}
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	pathFlags(fs, &m, m.ConfigPath, m.StateDir)
-	var allocate bool
-	if command == "ports" {
-		fs.BoolVar(&allocate, "allocate", false, "reserve missing endpoints after config edits; keep saved assignments")
-	}
+	hostFlags(fs, &h, h.TemplatesDir, h.AppsDir, h.DryRun)
+	var allocate, configOnly, noDatabase, show, follow bool
 	var app config.App
-	var driver, mode string
 	var imports portFlags
-	if command == "register" {
+	var setup host.SetupOptions
+	var deploy host.DeployOptions
+	switch command {
+	case "ports":
+		fs.BoolVar(&allocate, "allocate", false, "reserve missing endpoints; retain assignments")
+	case "register":
 		fs.StringVar(&app.Name, "name", "", "unique application name (required)")
-		fs.StringVar(&app.Directory, "dir", "", "absolute application directory (required)")
-		fs.StringVar(&app.User, "user", "", "non-root runtime user (required)")
+		fs.StringVar(&app.Directory, "dir", "", "absolute cloned project directory (required)")
+		fs.StringVar(&app.User, "user", "", "dedicated runtime user (default: sites-NAME)")
 		fs.StringVar(&app.Type, "type", "", "laravel or nuxt (required)")
 		fs.StringVar(&app.Domain, "domain", "", "main domain (required)")
 		fs.Var((*stringsFlag)(&app.Aliases), "alias", "redirect domain (repeatable)")
 		fs.Var((*stringsFlag)(&app.Domains), "serving-domain", "additional serving domain (repeatable)")
-		fs.Var((*stringsFlag)(&app.Wildcards), "wildcard", "wildcard domain, e.g. *.example.com (repeatable)")
-		fs.StringVar(&app.DeployFile, "deploy-file", "deploy.sh", "project deployment file (stored only)")
-		fs.StringVar(&app.HealthCheck, "health-check", "", "optional http(s) URL (stored only)")
-		fs.StringVar(&driver, "web-driver", "fpm", "Laravel web driver: fpm or octane")
-		fs.IntVar(&app.Web.Workers, "octane-workers", 0, "Octane worker count (0 uses runtime default)")
+		fs.Var((*stringsFlag)(&app.Wildcards), "wildcard", "config-only wildcard; host DNS challenges are not implemented")
+		fs.StringVar(&app.HealthCheck, "health-check", "", "optional deployment health-check URL")
+		fs.StringVar(&app.Web.Driver, "web-driver", "", "Laravel: fpm (default) or octane")
+		fs.IntVar(&app.Web.Workers, "octane-workers", 0, "Octane worker count (default 2)")
 		fs.IntVar(&app.Queue.Workers, "queue-workers", 0, "Laravel queue worker count")
 		fs.BoolVar(&app.Scheduler.Enabled, "scheduler", false, "enable Laravel scheduler")
 		fs.BoolVar(&app.Nightwatch.Enabled, "nightwatch", false, "enable Laravel Nightwatch")
-		fs.BoolVar(&app.InertiaSSR.Enabled, "inertia-ssr", false, "enable Laravel Inertia SSR")
-		fs.StringVar(&mode, "nuxt-mode", "ssr", "Nuxt mode: ssr or static")
-		fs.Var(&imports, "port", "import a free port: ENDPOINT=PORT (repeatable)")
+		fs.BoolVar(&app.InertiaSSR.Enabled, "inertia-ssr", false, "enable Inertia SSR (bundle must honor SSR_PORT)")
+		fs.BoolVar(&configOnly, "config-only", false, "save portable config/ports only; do not create host users/databases")
+		fs.BoolVar(&noDatabase, "no-database", false, "Laravel: use an existing/self-managed database")
+		fs.Var(&imports, "port", "import free ENDPOINT=PORT (repeatable)")
+	case "setup":
+		fs.StringVar(&setup.RoadRunnerVersion, "roadrunner-version", host.DefaultRoadRunnerVersion, "shared RoadRunner release")
+		fs.IntVar(&setup.SSHPort, "ssh-port", 0, "SSH port to preserve (default: discover effective sshd ports)")
+		fs.BoolVar(&setup.NoFirewall, "no-firewall", false, "leave firewall unchanged")
+		fs.BoolVar(&setup.NoRedis, "no-redis", false, "skip Redis server")
+		fs.BoolVar(&setup.NoImages, "no-images", false, "skip image-processing utilities")
+	case "database":
+		fs.BoolVar(&show, "show", false, "print existing/generated credentials explicitly")
+	case "logs":
+		fs.BoolVar(&follow, "follow", false, "stream the journal")
+	case "deploy":
+		fs.BoolVar(&deploy.All, "all", false, "deploy all apps sequentially")
+		fs.BoolVar(&deploy.NoPull, "no-pull", false, "deploy current checkout without git pull")
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderFlags(args, fs)); err != nil {
 		return helpError(err)
 	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("%s: unexpected arguments: %s", command, strings.Join(fs.Args(), " "))
+	positional := fs.Args()
+	switch command {
+	case "enable", "disable", "remove", "database":
+		if len(positional) != 1 {
+			return fmt.Errorf("use sites %s APP", command)
+		}
+	case "restart", "logs":
+		if len(positional) < 1 || len(positional) > 2 {
+			return fmt.Errorf("use sites %s APP [SERVICE]", command)
+		}
+	case "status":
+		if len(positional) > 1 {
+			return fmt.Errorf("use sites status [APP]")
+		}
+	case "deploy":
+	default:
+		if len(positional) != 0 {
+			return fmt.Errorf("%s: unexpected arguments: %s", command, strings.Join(positional, " "))
+		}
 	}
-	if m.ConfigPath == "" || m.StateDir == "" {
-		return fmt.Errorf("config and state paths must not be empty")
+	if m.ConfigPath == "" || m.StateDir == "" || h.TemplatesDir == "" || h.AppsDir == "" {
+		return fmt.Errorf("paths must not be empty")
 	}
+	var err error
+	for _, path := range []*string{&m.ConfigPath, &m.StateDir, &h.TemplatesDir, &h.AppsDir} {
+		*path, err = filepath.Abs(*path)
+		if err != nil {
+			return err
+		}
+	}
+	h.Manager = m
 	switch command {
 	case "version":
 		fmt.Fprintf(out, "sites %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
@@ -123,47 +175,61 @@ func run(args []string, out, stderr io.Writer) error {
 			return err
 		}
 		w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tTYPE\tWEB\tDOMAIN\tDIRECTORY")
+		fmt.Fprintln(w, "NAME\tTYPE\tWEB\tUSER\tDOMAIN\tDIRECTORY")
 		for _, a := range c.Apps {
 			web := a.Web.Driver
 			if a.Type == "nuxt" {
-				web = a.Nuxt.Mode
+				web = "node"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", a.Name, a.Type, web, a.Domain, a.Directory)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", a.Name, a.Type, web, a.User, a.Domain, a.Directory)
 		}
 		return w.Flush()
 	case "register":
+		if app.User == "" && config.ValidName(app.Name) {
+			app.User = host.RuntimeUser(app.Name)
+		}
 		if app.Type == "laravel" {
-			app.Web.Driver = driver
-		}
-		if app.Type == "nuxt" {
-			app.Nuxt.Mode = mode
-		}
-		var irrelevant string
-		fs.Visit(func(f *flag.Flag) {
-			if app.Type == "laravel" && f.Name == "nuxt-mode" || app.Type == "nuxt" && f.Name == "web-driver" {
-				irrelevant = f.Name
+			if app.Web.Driver == "" {
+				app.Web.Driver = "fpm"
 			}
-		})
-		if irrelevant != "" {
-			return fmt.Errorf("--%s is not used by %s apps", irrelevant, app.Type)
+			app.Database.Enabled = !noDatabase
 		}
-		r, err := m.Register(app, imports)
+		if err := app.Validate(); err != nil {
+			return err
+		}
+		var r ports.Registry
+		if configOnly {
+			if h.DryRun {
+				r, err = m.PreviewRegister(app, imports)
+			} else {
+				r, err = m.Register(app, imports)
+			}
+			if err == nil {
+				if h.DryRun {
+					fmt.Fprintf(out, "Would register %s in config only\n", app.Name)
+				} else {
+					fmt.Fprintf(out, "Registered %s in config only; host user/database not created\n", app.Name)
+				}
+			}
+		} else {
+			r, err = h.Register(app, imports)
+		}
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(out, "Registered %s\n", app.Name)
 		var selected []ports.Assignment
-		for _, a := range r.Assignments {
-			if a.App == app.Name {
-				selected = append(selected, a)
+		for _, assignment := range r.Assignments {
+			if assignment.App == app.Name {
+				selected = append(selected, assignment)
 			}
 		}
 		return printPorts(out, selected)
 	case "ports":
 		var r ports.Registry
-		var err error
 		if allocate {
+			if h.DryRun {
+				return fmt.Errorf("ports --allocate does not support --dry-run")
+			}
 			r, err = m.Allocate()
 		} else {
 			r, err = m.Registry()
@@ -177,8 +243,97 @@ func run(args []string, out, stderr io.Writer) error {
 			return err
 		}
 		fmt.Fprintln(out, "Portable checks passed: config, registry, required reservations, and TCP availability")
+	case "setup":
+		executable, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		setup.DistributionTemplates = filepath.Join(filepath.Dir(executable), "templates")
+		if _, err := os.Stat(setup.DistributionTemplates); os.IsNotExist(err) {
+			setup.DistributionTemplates = "templates"
+		}
+		return h.Setup(setup)
+	case "database":
+		return h.Database(positional[0], show)
+	case "enable":
+		return h.Enable(positional[0])
+	case "disable":
+		return h.Disable(positional[0])
+	case "remove":
+		return h.Remove(positional[0])
+	case "deploy":
+		return h.Deploy(positional, deploy)
+	case "restart", "logs":
+		service := ""
+		if len(positional) == 2 {
+			service = positional[1]
+		}
+		if command == "restart" {
+			return h.Restart(positional[0], service)
+		}
+		return h.Logs(positional[0], service, follow)
+	case "status":
+		if len(positional) == 1 {
+			return h.Status(positional[0])
+		}
+		if !h.DryRun {
+			if err := host.Require(); err != nil {
+				return err
+			}
+		}
+		c, err := config.Load(m.ConfigPath)
+		if err != nil {
+			return err
+		}
+		var failures []error
+		for _, a := range c.Apps {
+			if err := h.Status(a.Name); err != nil {
+				failures = append(failures, err)
+			}
+		}
+		return errors.Join(failures...)
 	}
 	return nil
+}
+
+func hostFlags(fs *flag.FlagSet, h *host.Host, templates, apps string, dryRun bool) {
+	fs.StringVar(&h.TemplatesDir, "templates-dir", templates, "standalone template directory")
+	fs.StringVar(&h.AppsDir, "apps-dir", apps, "dedicated parent directory for project clones")
+	fs.BoolVar(&h.DryRun, "dry-run", dryRun, "preview host operations without commands or writes")
+}
+
+// Go's flag parser stops at the first positional argument. Permit APP --flags too.
+func reorderFlags(args []string, fs *flag.FlagSet) []string {
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positional = append(positional, arg)
+			continue
+		}
+		flags = append(flags, arg)
+		name := strings.TrimLeft(arg, "-")
+		if strings.Contains(name, "=") {
+			continue
+		}
+		f := fs.Lookup(name)
+		if f == nil {
+			continue
+		}
+		boolFlag, ok := f.Value.(interface{ IsBoolFlag() bool })
+		if ok && boolFlag.IsBoolFlag() {
+			continue
+		}
+		if i+1 < len(args) {
+			i++
+			flags = append(flags, args[i])
+		}
+	}
+	return append(append(flags, "--"), positional...)
 }
 
 func helpError(err error) error {

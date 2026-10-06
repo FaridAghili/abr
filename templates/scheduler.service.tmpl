@@ -1,10 +1,11 @@
-# Draft: sites-{{.Name}}-scheduler.service
 [Unit]
 Description=Sites {{.Name}} scheduler
 
 [Service]
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+UMask=0027
 Type=oneshot
 User={{.User}}
-WorkingDirectory={{.Directory}}
-EnvironmentFile={{.ManagedEnvironmentFile}}
-ExecStart={{.PHPBinary}} artisan schedule:run --no-interaction
+WorkingDirectory={{unit .Directory}}
+EnvironmentFile={{unit .ManagedEnvironmentFile}}
+ExecStart={{unit .PHPBinary}} artisan schedule:run --no-interaction

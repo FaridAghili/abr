@@ -1,189 +1,99 @@
-# Simple VPS Manager — Revised Plan
+# sites — current implementation and scope
 
-Build a small Go CLI named `sites`. Go suits configuration validation, port tracking, command execution, and service management while producing a single executable for the VPS.
+Build a small Go CLI for Ubuntu 26.04 LTS AMD64, developed on macOS Apple Silicon.
+Stay on version 0.1.0 while stabilizing. Use native packages and systemd; keep
+portable config/registry/template logic separate from Linux operations.
 
-Keep configuration and templates separate from the source code. Use native packages, systemd, Caddy, PHP-FPM, and RoadRunner.
+## Host model
 
-## Files
-
-Use a straightforward layout:
-
-```text
-/etc/sites/config.toml          Server settings and registered applications
-/etc/sites/templates/          Editable service, FPM, and Caddy templates
-/var/lib/sites/ports.json       Saved application port assignments
-
-PROJECT/deploy.sh              Application-specific deployment commands
-```
-
-PHP and Node remain shared system installations, upgraded manually by the owner. No per-project runtime versions.
-
-## Application configuration
-
-Each registered application has:
-
-- Name, directory, runtime user, and application type.
-- Main domain, redirect aliases, additional serving domains, and optional wildcards.
-- Laravel web driver: `fpm` or `octane`.
-- Octane and queue worker counts.
-- Scheduler, Nightwatch, and Inertia SSR settings.
-- Nuxt mode: `ssr` or `static`.
-- Deployment file path.
-- Optional health-check URL.
-
-Initially, Mango, Medfolio, and Menugar use Octane. The other Laravel applications use PHP-FPM. This choice remains configurable for every application.
-
-Application secrets stay in existing `.env` files.
+- Caddy serves directly with automatic HTTPS. No Nginx or Cloudflare dependency.
+- Shared PHP 8.5, Node 24/npm, Composer, MySQL, Redis and RoadRunner installations.
+- Setup includes image utilities, UFW, Fail2ban, ACL and build tools by default.
+- Runtime upgrades are deliberate owner actions. RoadRunner is one root-owned
+  shared executable with a versioned directory and stable symlink.
+- Each project has a dedicated automatically managed Ubuntu user and private home.
+- Project clones live under /srv/apps; per-project runtime versions are unnecessary.
+- Nuxt always runs a Node service. SSR is controlled by the project, with no
+  SSR/static manager mode or static template.
 
 ## Commands
 
-```text
-sites register
-sites list
-sites enable APP
-sites disable APP
-sites remove APP
-sites status [APP]
-sites restart APP [SERVICE]
-sites logs APP [SERVICE]
-sites deploy APP...
-sites deploy --all
-sites ports
-sites doctor
-sites setup
-```
+version, config validate, list, register, ports, doctor, setup, database,
+enable, disable, remove, status, restart, logs, deploy APP..., deploy --all.
+No arguments prints help. An interactive menu is not implemented.
 
-Running `sites` without arguments opens a simple menu. The menu calls the same commands available for direct use.
+Register validates a clone, creates its runtime user, assigns required ports,
+and creates a dedicated MySQL database/account for Laravel unless --no-database
+is selected. A --config-only path preserves portable registration for local work.
+Database credentials stay in private state files and can be printed explicitly;
+the owner copies them and other application secrets into the project's .env.
+Existing unrelated users/databases must not be adopted or reset.
 
-Registration asks for essential settings, assigns required ports, and saves the application configuration. Existing applications can import their current ports.
+## Configuration, state, and templates
 
-## Port tracking
+/etc/sites/config.toml: applications and allocation range.
+/etc/sites/templates/: editable standalone templates copied from the archive.
+/var/lib/sites/: ports, account ownership, database credentials, generated-file
+manifests, managed environment, locks, private deployment logs/results.
 
-Maintain a small persistent registry recording the application, endpoint purpose, and assigned port.
+Laravel web.driver selects fpm or octane. Queues, scheduler, Nightwatch and
+Inertia SSR are independent optional components. Names, users, domains and
+project directory trees are unique. Config uses strict maintained TOML parsing.
+Aliases redirect permanently; extra domains serve the same backend. Wildcard
+DNS challenge provisioning remains outside the implemented scope and errors
+when enabling wildcard apps.
 
-Allocate ports only for enabled components:
+Reserve ports only for Octane HTTP/RPC, Nuxt HTTP, Inertia SSR, and Nightwatch.
+FPM uses Unix sockets; queues/scheduler have no ports. Keep saved assignments
+stable, detect duplicates/listeners, lock writers, write atomically, and refuse
+corrupt state. Disabling retains ports; removal releases only after services stop.
 
-| Component           | Endpoint                 |
-| ------------------- | ------------------------ |
-| Octane              | HTTP and RoadRunner RPC  |
-| Nuxt SSR            | HTTP                     |
-| Inertia SSR         | SSR server               |
-| Nightwatch          | Agent ingest             |
-| PHP-FPM             | Unix socket; no TCP port |
-| Queue and scheduler | No ports                 |
+Templates cover each service, scheduler timer, per-app FPM pool, and Caddy site.
+Only generated files with recorded paths/ownership markers are modified.
+Validate FPM/Caddy before reload. Restore previous generated files/services on
+ordinary configuration failures and report any failed restoration. Changes are
+not crash-atomic across multiple files or host operations; preserve recovery state.
+FPM pools share one master; use ondemand for quieter apps.
 
-Before allocating, check both saved reservations and actual listeners. Keep allocations stable across restarts and redeployments.
+## Standard deployments
 
-Protect registry changes with a lock and save them atomically. Refuse corrupt state rather than silently replacing it.
+Use only standard commands; do not run deploy.sh, custom shell files, or hooks.
+Lock host operations, reject dirty worktrees, pull with --ff-only, then run all
+project commands as its unprivileged managed user. Git credentials must be
+available to that user for private repositories; --no-pull supports initial clones.
 
-Disabling a component retains its reservations. Removal releases them only after its services have stopped. Verify startup because another process can occupy a port after the initial check.
+Laravel: composer install with locked production dependencies, check platform
+requirements, generate missing APP_KEY once, clear configuration caches, and
+create the public storage link if absent. For projects with package.json:
+npm ci --include=dev and npm run build. Then Laravel migrate --force and optimize.
+Enable configured services, verify expected sockets/listeners, reload Caddy,
+and run the optional health-check URL. Record commit, timestamps, result and logs.
+Deploy multiple apps sequentially and fail overall if any app fails.
 
-Internal TCP services bind to loopback where supported. RoadRunner RPC is distinct from gRPC.
+Deployment is in place and deliberately has downtime. Disable managed routing
+and services before changing code. A failed install/build/migration leaves the
+app disabled. No automatic code/database rollback is provided. Preserve existing
+app keys, secrets, uploaded files and queued jobs.
 
-## Standalone templates
+## Removal and operating limits
 
-Provide editable templates for:
+Stop all owned services, including active scheduler jobs. Remove owned generated
+files and the owned Ubuntu account only after checking its identity and remaining
+processes. Preserve project files, home directories, secrets, databases, database
+accounts and credentials. Never recursively delete a project or kill unknown
+processes. Draining FPM workers may require waiting and retrying removal.
 
-- Octane service.
-- Queue worker service.
-- Nightwatch agent service.
-- Inertia SSR service.
-- Nuxt SSR service.
-- Scheduler service and timer.
-- PHP-FPM pool.
-- Caddy site.
+SSH authentication and the administrator account remain owner-controlled.
+Setup preserves reachable SSH ports before enabling UFW and preserves existing
+rules. Do not attach Ubuntu Pro or add personal shell preferences automatically.
+No automated backups, database imports/deletion, wildcard certificate setup,
+interactive menu, or zero-downtime deployment is promised in this version.
 
-The manager fills placeholders, installs its generated configuration, and handles enable, disable, remove, status, and restart.
+## Verification
 
-Use an identifiable naming prefix for generated files. Manage only files owned by this tool.
-
-For quieter applications, start with FPM `ondemand` pools and configurable child limits. FPM pools share one master service; adding or removing pools requires a shared reload.
-
-Validate generated configuration before reloading FPM or Caddy.
-
-## Project deployment files
-
-Each project owns a normal shell deployment file. Go executes it rather than trying to interpret individual commands.
-
-Example:
-
-```sh
-composer install --no-dev --optimize-autoloader
-npm ci
-npm run build
-php artisan migrate --force
-php artisan optimize
-```
-
-Execute the file using Bash with error checking and pipeline failure detection, in the project directory, as the configured deployment user.
-
-This supports ordinary command-per-line files while also allowing variables, conditionals, and multiline commands when needed. Stop immediately when a command fails.
-
-Deployment files are trusted owner-controlled code. They never run as root.
-
-The manager provides the application’s managed environment, including Nightwatch and SSR endpoints, consistently to deployment commands and services.
-
-## Deployment workflow
-
-1. Lock the application against concurrent deployment or configuration changes.
-2. Check the working directory and reject uncommitted Git changes.
-3. Run `git pull --ff-only`.
-4. Execute the project’s deployment file.
-5. Restart its configured long-running services.
-6. Run the optional health check.
-7. Show the outcome and retain deployment output.
-
-Deploy applications sequentially to limit build memory usage. For multiple selections, report each result and return failure if any deployment fails.
-
-Allow optional `pre-deploy.sh` and `post-deploy.sh` hooks for maintenance mode or application-specific work.
-
-A cleanup hook may restore availability after failure, but the original failure must still be reported.
-
-Queue restarts should let legitimate jobs finish. `queue:restart` means worker recycling; avoid clearing queued jobs. Coordinate deployment hooks and manager restarts so workers are not restarted twice unnecessarily.
-
-Deploy directly in existing directories. Automatic code and database rollback are outside this version.
-
-## Switching web drivers
-
-Changing `web.driver` between `fpm` and `octane`, then enabling the app again, reconciles its configuration:
-
-1. Prepare and validate the new backend.
-2. Start it and check that it responds.
-3. Update and reload Caddy.
-4. Check the website.
-5. Drain and disable the previous backend.
-
-Keep queues, scheduler, Nightwatch, and SSR independent of the web driver.
-
-## Small additions worth including
-
-- **Preview:** `--dry-run` shows intended changes without applying them.
-- **Doctor:** checks required executables, permissions, configuration, and port conflicts.
-- **Useful status:** shows configured components, service failures, and assigned ports.
-- **Deployment history:** records timestamp, Git commit, duration, and result.
-- **Clear errors:** identify the application and failed command or service.
-- **Safe removal:** preserve project files, uploads, `.env`, and databases.
-- **Runtime checks:** detect missing PHP extensions or inconsistent CLI/FPM installations after a manual upgrade.
-
-Keep deployment logs private because application commands can print sensitive information.
-
-## Server setup and Caddy
-
-Keep initial setup limited to packages, runtime users, required directories, and firewall configuration. Preserve SSH access and existing unrelated rules.
-
-Caddy handles domains, redirects, static resources, and routing to the selected backend.
-
-Support TCP 80/443, UDP 443 for HTTP/3, dynamic gzip/zstd, and precompressed Brotli assets. Apply long immutable caching only to verified versioned assets.
-
-Wildcard certificate setup remains a separate initial task, with explicit certificate renewal arrangements.
-
-Initial cloning, database imports, uploads, and `.env` preparation remain manual. Backups remain deferred.
-
-## Implementation order
-
-1. Configuration, registration, port registry, and doctor.
-2. Templates and service lifecycle commands.
-3. Deployment files, selection menu, logging, and health checks.
-4. Basic server setup.
-
-Verify the Go logic locally and test host operations on disposable Ubuntu before using the production VPS.
+Run gofmt, go vet, go test, race tests and the CGO-free Linux AMD64 build locally.
+Tests use temporary config/state and mocked host commands; no production access.
+GitHub Actions packages executable/templates/example config and SHA256 artifacts
+on pushes, pull requests and manual runs. A separate disposable Ubuntu job tests
+actual setup, Laravel/FPM/MySQL, SSR and SPA Nuxt, direct local HTTPS, and lifecycle.
+Verify that job succeeds before using the implementation on a real VPS.

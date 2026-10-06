@@ -1,5 +1,4 @@
-// Package manager coordinates configuration and registry files. Linux service
-// lifecycle and provisioning operations intentionally do not exist here.
+// Package manager coordinates portable configuration and registry files.
 package manager
 
 import (
@@ -36,8 +35,17 @@ func (m Manager) locked(fn func() error) error {
 }
 
 func (m Manager) Register(app config.App, imports map[string]int) (ports.Registry, error) {
+	return m.register(app, imports, true)
+}
+
+// PreviewRegister validates and allocates in memory without creating files or locks.
+func (m Manager) PreviewRegister(app config.App, imports map[string]int) (ports.Registry, error) {
+	return m.register(app, imports, false)
+}
+
+func (m Manager) register(app config.App, imports map[string]int, save bool) (ports.Registry, error) {
 	var result ports.Registry
-	err := m.locked(func() error {
+	fn := func() error {
 		c, err := config.Load(m.ConfigPath)
 		if errors.Is(err, os.ErrNotExist) {
 			c, err = config.Default(), nil
@@ -61,6 +69,10 @@ func (m Manager) Register(app config.App, imports map[string]int) (ports.Registr
 		if err := ensureAll(&r, c, m.probe()); err != nil {
 			return err
 		}
+		result = r
+		if !save {
+			return nil
+		}
 		// Two files cannot be atomically renamed together. Save reservations first:
 		// a crash or config write failure may retain safe, reusable reservations.
 		if err := r.Save(m.RegistryPath()); err != nil {
@@ -69,10 +81,58 @@ func (m Manager) Register(app config.App, imports map[string]int) (ports.Registr
 		if err := storage.AtomicWrite(m.ConfigPath, data); err != nil {
 			return fmt.Errorf("save config (port reservations retained; retry registration): %w", err)
 		}
-		result = r
 		return nil
-	})
+	}
+	var err error
+	if save {
+		err = m.locked(fn)
+	} else {
+		err = fn()
+	}
 	return result, err
+}
+
+// Remove must only be called after host services are confirmed stopped.
+// Config is saved first; interruption can leave conservative orphan reservations.
+func (m Manager) Remove(name string) error {
+	return m.locked(func() error {
+		c, err := config.Load(m.ConfigPath)
+		if err != nil {
+			return err
+		}
+		r, err := ports.Load(m.RegistryPath())
+		if err != nil {
+			return err
+		}
+		found := false
+		apps := c.Apps[:0]
+		for _, a := range c.Apps {
+			if a.Name == name {
+				found = true
+			} else {
+				apps = append(apps, a)
+			}
+		}
+		if !found {
+			return fmt.Errorf("unknown application %q", name)
+		}
+		c.Apps = apps
+		data, err := config.Encode(c)
+		if err != nil {
+			return err
+		}
+		if err := storage.AtomicWrite(m.ConfigPath, data); err != nil {
+			return err
+		}
+		assignments := r.Assignments[:0]
+		for _, a := range r.Assignments {
+			if a.App != name {
+				assignments = append(assignments, a)
+			}
+		}
+		r.Assignments = assignments
+		return r.Save(m.RegistryPath())
+	})
 }
 
 func ensureAll(r *ports.Registry, c config.Config, probe ports.Probe) error {

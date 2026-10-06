@@ -21,8 +21,7 @@ func TestEndpointSelection(t *testing.T) {
 		{"fpm queues scheduler", func() App { a := testApp(); a.Queue.Workers = 2; a.Scheduler.Enabled = true; return a }(), nil},
 		{"octane", func() App { a := testApp(); a.Web.Driver = "octane"; return a }(), []string{"octane-http", "roadrunner-rpc"}},
 		{"fpm optional", func() App { a := testApp(); a.InertiaSSR.Enabled = true; a.Nightwatch.Enabled = true; return a }(), []string{"inertia-ssr", "nightwatch-ingest"}},
-		{"nuxt ssr", App{Name: "nuxt", Directory: "/srv/nuxt", User: "nuxt", Type: "nuxt", Domain: "nuxt.test", Nuxt: Nuxt{Mode: "ssr"}}, []string{"nuxt-http"}},
-		{"nuxt static", App{Name: "static", Directory: "/srv/static", User: "static", Type: "nuxt", Domain: "static.test", Nuxt: Nuxt{Mode: "static"}}, nil},
+		{"nuxt ssr", App{Name: "nuxt", Directory: "/srv/nuxt", User: "nuxt", Type: "nuxt", Domain: "nuxt.test"}, []string{"nuxt-http"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -82,7 +81,7 @@ func TestDuplicateAndInvalidApps(t *testing.T) {
 		{"domain", func(a *App) { a.Domain = "https://example.com" }},
 		{"wildcard", func(a *App) { a.Wildcards = []string{"example.com"} }},
 		{"negative workers", func(a *App) { a.Queue.Workers = -1 }},
-		{"nuxt laravel", func(a *App) { a.Type = "nuxt"; a.Nuxt.Mode = "ssr" }},
+		{"nuxt laravel", func(a *App) { a.Type = "nuxt"; a.Database.Enabled = true }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			a := testApp()

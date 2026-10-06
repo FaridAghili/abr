@@ -1,12 +1,13 @@
-; Draft: sites-{{.Name}}.conf
 [sites-{{.Name}}]
 user = {{.User}}
-group = {{.Group}}
+group = {{.User}}
 listen = {{.FPMSocket}}
-listen.owner = {{.CaddyUser}}
-listen.group = {{.CaddyGroup}}
+listen.owner = caddy
+listen.group = caddy
 listen.mode = 0660
 pm = ondemand
-pm.max_children = {{.FPMMaxChildren}}
+pm.max_children = 5
 pm.process_idle_timeout = 10s
-chdir = {{.Directory}}
+chdir = {{quote .Directory}}
+clear_env = yes
+{{.FPMEnvironment}}

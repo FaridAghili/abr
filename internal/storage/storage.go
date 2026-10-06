@@ -27,6 +27,11 @@ func WithLock(path string, fn func() error) error {
 
 // AtomicWrite never truncates the old file. Temp files stay on the same filesystem.
 func AtomicWrite(path string, data []byte) error {
+	return AtomicWriteMode(path, data, 0600)
+}
+
+// AtomicWriteMode sets permissions before exposing the replacement file.
+func AtomicWriteMode(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -37,6 +42,9 @@ func AtomicWrite(path string, data []byte) error {
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
+	if err := f.Chmod(mode); err != nil {
+		return err
+	}
 	if _, err := f.Write(data); err != nil {
 		return err
 	}

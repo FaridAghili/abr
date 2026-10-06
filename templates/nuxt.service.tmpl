@@ -1,5 +1,5 @@
 [Unit]
-Description=Sites {{.Name}} Nightwatch agent
+Description=Sites {{.Name}} Nuxt
 After=network.target
 
 [Service]
@@ -8,7 +8,9 @@ UMask=0027
 User={{.User}}
 WorkingDirectory={{unit .Directory}}
 EnvironmentFile={{unit .ManagedEnvironmentFile}}
-ExecStart={{unit .PHPBinary}} artisan nightwatch:agent --listen-on=127.0.0.1:{{.NightwatchIngestPort}} --no-interaction
+Environment=NITRO_HOST=127.0.0.1
+Environment=NITRO_PORT={{.NuxtHTTPPort}}
+ExecStart={{unit .NodeBinary}} --env-file-if-exists=.env .output/server/index.mjs
 Restart=on-failure
 RestartSec=5
 

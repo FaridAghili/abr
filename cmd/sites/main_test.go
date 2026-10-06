@@ -20,7 +20,7 @@ func invoke(t *testing.T, args ...string) (string, error) {
 func TestCommands(t *testing.T) {
 	dir := t.TempDir()
 	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state")}
-	register := append(append([]string{}, paths...), "register", "--name", "quiet", "--dir", "/srv/quiet", "--user", "quiet", "--type", "laravel", "--domain", "quiet.test", "--queue-workers", "2", "--scheduler")
+	register := append(append([]string{}, paths...), "register", "--config-only", "--name", "quiet", "--dir", "/srv/quiet", "--user", "quiet", "--type", "laravel", "--domain", "quiet.test", "--queue-workers", "2", "--scheduler")
 	out, err := invoke(t, register...)
 	if err != nil || !strings.Contains(out, "Registered quiet") {
 		t.Fatalf("%s %v", out, err)
@@ -46,7 +46,7 @@ func TestCommands(t *testing.T) {
 	if out, err := invoke(t, args...); err != nil || !strings.Contains(out, "quiet") {
 		t.Fatalf("%s %v", out, err)
 	}
-	for _, cmd := range []string{"deploy", "enable", "setup", "remove", "status", "unknown"} {
+	for _, cmd := range []string{"deploy", "enable", "remove", "unknown"} {
 		if out, err := invoke(t, cmd); err == nil || out != "" {
 			t.Fatalf("%s reported success: %s %v", cmd, out, err)
 		}
@@ -73,7 +73,7 @@ func TestOccupiedImportDoesNotRegister(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
-	args := []string{"register", "--config", path, "--state-dir", filepath.Join(dir, "state"), "--name", "octane", "--dir", "/srv/octane", "--user", "octane", "--type", "laravel", "--domain", "octane.test", "--web-driver", "octane", "--port", "octane-http=" + port}
+	args := []string{"register", "--config-only", "--config", path, "--state-dir", filepath.Join(dir, "state"), "--name", "octane", "--dir", "/srv/octane", "--user", "octane", "--type", "laravel", "--domain", "octane.test", "--web-driver", "octane", "--port", "octane-http=" + port}
 	out, err := invoke(t, args...)
 	if err == nil || out != "" || !strings.Contains(err.Error(), "occupied") {
 		t.Fatalf("%s %v", out, err)

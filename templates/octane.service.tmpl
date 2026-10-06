@@ -1,13 +1,14 @@
-# Draft: sites-{{.Name}}-octane.service
 [Unit]
 Description=Sites {{.Name}} Octane
 After=network.target
 
 [Service]
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+UMask=0027
 User={{.User}}
-WorkingDirectory={{.Directory}}
-EnvironmentFile={{.ManagedEnvironmentFile}}
-ExecStart={{.PHPBinary}} artisan octane:start --server=roadrunner --host=127.0.0.1 --port={{.OctaneHTTPPort}} --rpc-port={{.RoadRunnerRPCPort}} --workers={{.OctaneWorkers}} --no-interaction
+WorkingDirectory={{unit .Directory}}
+EnvironmentFile={{unit .ManagedEnvironmentFile}}
+ExecStart={{unit .PHPBinary}} artisan octane:start --server=roadrunner --host=127.0.0.1 --port={{.OctaneHTTPPort}} --rpc-host=127.0.0.1 --rpc-port={{.RoadRunnerRPCPort}} --workers={{.OctaneWorkers}} --no-interaction
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=60

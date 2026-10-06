@@ -1,22 +1,25 @@
-# Standalone template drafts
+# Standalone templates
 
-These editable Go `text/template` drafts are shipped with the distribution.
-Milestone one does not load, render, install, or validate host templates.
-They are starting points for milestone two, not production-ready generated files.
+These files are loaded at runtime with Go text/template and shipped in every
+archive. Setup copies missing files into /etc/sites/templates; existing edits
+remain. Use --templates-dir for another source directory. Source edits take
+effect on the next enable/deploy. Missing templates/placeholders return errors.
 
-Future generated files must use the `sites-` prefix. Paths, executable locations,
-systemd quoting, runtime versions, permissions, managed environment, graceful
-shutdown, Caddy routing, and shared FPM reloads must be validated on disposable
-Ubuntu before enabling services. Never interpolate raw TOML into host files.
+The renderer supplies validated application values, escaped paths, required
+ports, and a private managed environment file. Generated files have a sites-
+prefix and ownership marker. Edit source templates instead of generated files.
+Caddy and FPM configurations are validated before reload; ordinary failures
+restore previous generated files. User-edited templates remain trusted root
+configuration and must be tested on a disposable Ubuntu machine.
 
-The draft placeholders describe future rendering inputs; they are not additional
-TOML settings. Each draft expects Name, User, Directory, and component-specific
-values (PHPBinary, NodeBinary, port fields, FPMSocket, etc.).
-ManagedEnvironmentFile is a future per-app environment file, not the project's
-.env file; Laravel loads that itself. Inertia's built SSR bundle must read the
-managed port and bind to loopback. RoadRunner RPC must also bind to loopback in
-its application configuration. The future renderer must supply escaped values.
+Nuxt has one service template, independent of ssr: true/false. Caddy serves
+directly with automatic HTTPS, redirects aliases, and proxies Nuxt/Octane or
+uses a per-app FPM socket. No Nginx, Cloudflare or static-Nuxt branch is used.
+FPM pools use ondemand with five children by default; customize the pool template
+for other limits. Queue timeout is 60s and shutdown grace is 120s.
 
-The Caddy draft covers only the main domain/backend. Alias redirects, serving
-and wildcard domains, static Nuxt output, versioned asset caching, and certificate
-arrangements are deferred to the lifecycle milestone.
+Laravel reads its own .env. Nuxt reads .env through Node's --env-file-if-exists.
+Managed environment values reach services, FPM, and deployment commands.
+Inertia's bundle must explicitly honor SSR_PORT; INERTIA_SSR_URL configures the
+Laravel client. Nightwatch uses the reserved ingest endpoint. Octane finds the
+shared /usr/local/bin/rr through PATH, though an app-local rr would take precedence.

@@ -1,11 +1,12 @@
-# Draft: sites-{{.Name}}.caddy
-{{.Domain}} {
+{{.SiteDomains}} {
     encode zstd gzip
 {{if eq .Type "laravel"}}
-    root * {{.Directory}}/public
 {{if eq .WebDriver "fpm"}}
+    root * {{quote (printf "%s/public" .Directory)}}
     php_fastcgi unix/{{.FPMSocket}}
-    file_server
+    file_server {
+        precompressed br gzip
+    }
 {{else}}
     reverse_proxy 127.0.0.1:{{.OctaneHTTPPort}}
 {{end}}
@@ -13,3 +14,8 @@
     reverse_proxy 127.0.0.1:{{.NuxtHTTPPort}}
 {{end}}
 }
+{{range .Aliases}}
+{{.}} {
+    redir https://{{$.Domain}}{uri} permanent
+}
+{{end}}
