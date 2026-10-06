@@ -366,6 +366,40 @@ func TestDeploymentStopsOnFailureAndRecordsResult(t *testing.T) {
 	}
 }
 
+func TestDeploymentMigratesBeforeClearingDatabaseCache(t *testing.T) {
+	h, r, _, a := fixture(t)
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Stop at cache clearing to inspect the first-deployment sequence without
+	// simulating an active FPM socket. A missing cache table would fail here.
+	r.fail = func(c Command) error {
+		if strings.Contains(strings.Join(c.Args, " "), "artisan optimize:clear") {
+			return testExit(9)
+		}
+		return nil
+	}
+	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
+		t.Fatal("expected the simulated cache clear failure")
+	}
+	configClear, migrate, cacheClear := -1, -1, -1
+	for i, c := range r.calls {
+		args := strings.Join(c.Args, " ")
+		if strings.Contains(args, "artisan config:clear") {
+			configClear = i
+		}
+		if strings.Contains(args, "artisan migrate") {
+			migrate = i
+		}
+		if strings.Contains(args, "artisan optimize:clear") {
+			cacheClear = i
+		}
+	}
+	if configClear < 0 || migrate <= configClear || cacheClear <= migrate {
+		t.Fatalf("unsafe first-deploy order: config=%d migrate=%d cache=%d", configClear, migrate, cacheClear)
+	}
+}
+
 func TestDryRunNeverExecutesOrWrites(t *testing.T) {
 	h, r, out, a := fixture(t)
 	h.DryRun = true

@@ -39,7 +39,7 @@ func TestRenderAllComponents(t *testing.T) {
 			t.Fatal(text)
 		}
 	}
-	if p.Environment["NIGHTWATCH_INGEST_URI"] != "127.0.0.1:10003" || p.Environment["SSR_PORT"] != "10002" || p.Environment["APP_DEBUG"] != "false" {
+	if p.Environment["NIGHTWATCH_INGEST_URI"] != "127.0.0.1:10003" || p.Environment["SSR_PORT"] != "10002" || p.Environment["APP_DEBUG"] != "false" || p.Environment["OCTANE_HTTPS"] != "true" {
 		t.Fatalf("bad environment: %v", p.Environment)
 	}
 }

@@ -156,7 +156,9 @@ run `git pull --ff-only` unless `--no-pull` is specified, and then execute:
 - Nuxt, and Laravel projects with `package.json`: `npm ci --include=dev`, then
   `npm run build`. Build tools require dev dependencies even in production.
 - Laravel: `php8.5 artisan migrate --force --no-interaction`, then
-  `php8.5 artisan optimize --no-interaction`.
+  `php8.5 artisan optimize:clear --no-interaction` and
+  `php8.5 artisan optimize --no-interaction`. Application caches are cleared
+  after migrations so the first deployment can create the database cache table.
 - Render/validate configuration, start services, verify sockets/listeners,
   reload Caddy, and perform the optional HTTP health check.
 
@@ -175,6 +177,7 @@ schema rollback are not automatic. Private logs/history record the commit,
 timestamps, and outcome under `/var/lib/sites/deployments/`. No `deploy.sh`, shell
 hooks, or interactive menu are executed. Laravel always runs with production
 `APP_ENV` and debug disabled through the managed environment.
+Octane also receives `OCTANE_HTTPS=true` for direct HTTPS through Caddy.
 
 ## Manage services
 

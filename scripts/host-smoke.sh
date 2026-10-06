@@ -24,6 +24,7 @@ trap 'rm -rf "$fixture_source"' EXIT
 composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel:^13.0' "$fixture_source/laravel"
 (
   cd "$fixture_source/laravel"
+  composer require laravel/octane spiral/roadrunner-cli spiral/roadrunner-http --no-update --no-scripts --no-interaction
   composer update --no-install --no-scripts --no-interaction
   npm install --package-lock-only --ignore-scripts
 )
@@ -56,6 +57,18 @@ sites_ci enable fixture-php
 sites_ci status fixture-php
 sites_ci logs fixture-php scheduler
 
+sudo cp -R "$fixture_source/laravel" /srv/apps/fixture-octane
+sudo cp /srv/apps/fixture-php/routes/web.php /srv/apps/fixture-octane/routes/web.php
+printf '\n.rr.yaml\n' | sudo tee -a /srv/apps/fixture-octane/.gitignore >/dev/null
+fixture_git /srv/apps/fixture-octane
+sites_ci register --name fixture-octane --dir /srv/apps/fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost
+sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-octane/.env.example > /srv/apps/fixture-octane/.env; cat /var/lib/sites-ci/credentials/fixture-octane.env >> /srv/apps/fixture-octane/.env; chmod 600 /srv/apps/fixture-octane/.env'
+sites_ci deploy fixture-octane --no-pull
+curl --fail --silent --show-error --insecure --resolve fixture-octane.localhost:443:127.0.0.1 https://fixture-octane.localhost/ | rg 'Laravel fixture database=1'
+sudo test ! -f /srv/apps/fixture-octane/rr
+sudo test -x /usr/local/bin/rr
+sites_ci restart fixture-octane web
+
 for rendering in true false; do
   if [[ $rendering == true ]]; then app=fixture-ssr; else app=fixture-spa; fi
   dir=/srv/apps/$app
@@ -77,6 +90,7 @@ done
 sites_ci ports
 sites_ci remove fixture-ssr
 sites_ci remove fixture-spa
+sites_ci remove fixture-octane
 sites_ci remove fixture-php
 sudo test -f /srv/apps/fixture-php/.env
 sudo test -f /var/lib/sites-ci/credentials/fixture-php.env

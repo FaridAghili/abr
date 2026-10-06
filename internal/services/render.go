@@ -53,6 +53,9 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 	}}
 	if a.Type == "laravel" {
 		p.Environment["APP_DEBUG"] = "false"
+		if a.Web.Driver == "octane" {
+			p.Environment["OCTANE_HTTPS"] = "true"
+		}
 	}
 	d := data{Name: a.Name, User: a.User, Directory: a.Directory, Type: a.Type, WebDriver: a.Web.Driver,
 		Domain: a.Domain, SiteDomains: strings.Join(append([]string{a.Domain}, a.Domains...), ", "), Aliases: a.Aliases,

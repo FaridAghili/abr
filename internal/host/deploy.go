@@ -196,7 +196,9 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 				}
 			}
 		}
-		if err := run(php, "artisan", "optimize:clear", "--no-interaction"); err != nil {
+		// Clearing the application cache before the first migration fails when
+		// Laravel uses its default database cache store and the table is absent.
+		if err := run(php, "artisan", "config:clear", "--no-interaction"); err != nil {
 			return err
 		}
 		if h.DryRun {
@@ -233,6 +235,9 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	}
 	if a.Type == "laravel" {
 		if err := run(php, "artisan", "migrate", "--force", "--no-interaction"); err != nil {
+			return err
+		}
+		if err := run(php, "artisan", "optimize:clear", "--no-interaction"); err != nil {
 			return err
 		}
 		if err := run(php, "artisan", "optimize", "--no-interaction"); err != nil {

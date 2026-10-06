@@ -68,13 +68,13 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: go build -o bin/sites ./cmd/sites
-      - name: Setup and deploy sample Laravel, SSR Nuxt, and SPA Nuxt apps
+      - name: Setup and deploy Laravel FPM, Octane, SSR Nuxt, and SPA Nuxt
         run: bash scripts/host-smoke.sh bin/sites
       - name: Host diagnostics on failure
         if: failure()
         run: |
           sudo systemctl --no-pager --full status caddy php8.5-fpm mysql || true
-          sudo journalctl --no-pager -n 100 -u caddy -u php8.5-fpm || true
+          sudo journalctl --no-pager -n 100 -u caddy -u php8.5-fpm -u sites-fixture-octane-octane.service || true
           if getent passwd sites-fixture-php >/dev/null; then
             sudo runuser --user sites-fixture-php -- env -i HOME=/var/lib/sites-users/sites-fixture-php PATH=/usr/bin:/bin git -C /srv/apps/fixture-php status --porcelain || true
           fi
