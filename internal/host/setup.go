@@ -95,6 +95,11 @@ func (h Host) Setup(o SetupOptions) error {
 		if _, err := h.run("Install Caddy and shared Node 24/npm", Command{Name: "apt-get", Args: []string{"install", "-y", "caddy", "nodejs"}, Env: []string{"DEBIAN_FRONTEND=noninteractive"}}); err != nil {
 			return err
 		}
+		if !o.NoImages {
+			if err := h.command("npm", "install", "--global", "--prefix", "/usr/local", "--ignore-scripts", "svgo@4.1.0"); err != nil {
+				return err
+			}
+		}
 		if err := h.installRoadRunner(o.RoadRunnerVersion); err != nil {
 			return err
 		}

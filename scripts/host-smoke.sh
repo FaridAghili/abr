@@ -18,6 +18,7 @@ if [[ ${GITHUB_ACTIONS:-false} == true ]]; then
   sudo chmod 600 /root/.my.cnf
 fi
 sites_ci setup --no-firewall --ssh-port 22
+test "$(/usr/local/bin/svgo --version)" = 4.1.0
 
 fixture_source=$(mktemp -d)
 trap 'rm -rf "$fixture_source"' EXIT

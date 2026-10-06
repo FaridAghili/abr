@@ -60,7 +60,8 @@ sudo install -m 755 sites /usr/local/bin/sites
 Setup installs PHP 8.5 CLI/FPM and extensions (bcmath, curl, gd, imagick, intl,
 mbstring, mysql, redis, xml, zip), Composer, MySQL, Redis, Node 24/npm, Caddy,
 Git, build tools, ACL tools, UFW, Fail2ban, unattended-upgrades, ncdu, and the
-image tools from the server checklist. Caddy uses its official stable repository;
+image tools from the server checklist, including shared SVGO 4.1.0.
+Caddy uses its official stable repository;
 Node uses the signed NodeSource 24 repository. Composer comes from Ubuntu.
 RoadRunner defaults to release `2025.1.15`, installed once under
 `/opt/roadrunner/VERSION/rr`, with `/usr/local/bin/rr` pointing at it. Downloads
