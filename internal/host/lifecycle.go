@@ -318,8 +318,10 @@ func (h Host) apply(a config.App, r ports.Registry, p services.Plan) (result err
 	allUnits := stopUnits(next.Units)
 	// Stop managed processes before checking reservations, including after a redeploy.
 	if len(allUnits) > 0 {
-		if err := h.command("systemctl", append([]string{"stop"}, allUnits...)...); err != nil {
-			return err
+		for _, unit := range allUnits {
+			if err := h.stopUnit(unit); err != nil {
+				return err
+			}
 		}
 	}
 	if !h.DryRun {
@@ -458,6 +460,23 @@ func (h Host) disable(a config.App) error {
 	return nil
 }
 
+func (h Host) stopUnit(unit string) error {
+	if !h.DryRun {
+		output, err := h.run("Check managed unit activity "+unit, Command{Name: "systemctl", Args: []string{"show", "--property=ActiveState", "--value", unit}, Private: true})
+		if err != nil {
+			return err
+		}
+		switch strings.TrimSpace(string(output)) {
+		case "inactive", "failed":
+			return nil // stop does not load a never-started unit, and can fail with exit 5.
+		case "active", "activating", "deactivating", "reloading", "refreshing", "maintenance":
+		default:
+			return fmt.Errorf("unexpected activity state for managed unit %s", unit)
+		}
+	}
+	return h.command("systemctl", "stop", unit)
+}
+
 func (h Host) stopAndDisable(units []string) error {
 	for _, unit := range stopUnits(units) {
 		if !h.DryRun {
@@ -469,7 +488,7 @@ func (h Host) stopAndDisable(units []string) error {
 				continue
 			}
 		}
-		if err := h.command("systemctl", "stop", unit); err != nil {
+		if err := h.stopUnit(unit); err != nil {
 			return err
 		}
 		if slices.Contains(units, unit) {

@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -75,6 +76,9 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 		r.database = true
 	case "systemctl":
 		if len(c.Args) > 0 && c.Args[0] == "show" {
+			if slices.Contains(c.Args, "--property=ActiveState") {
+				return []byte("active\n"), nil
+			}
 			return []byte("loaded\n"), nil
 		}
 	case "runuser":
@@ -401,6 +405,35 @@ func TestDeploymentMigratesBeforeClearingDatabaseCache(t *testing.T) {
 	if configClear < 0 || migrate <= configClear || cacheClear <= migrate {
 		t.Fatalf("unsafe first-deploy order: config=%d migrate=%d cache=%d", configClear, migrate, cacheClear)
 	}
+}
+
+func TestStopUnitSkipsNeverStartedService(t *testing.T) {
+	h, r, _, _ := fixture(t)
+	r.fail = func(c Command) error {
+		if c.Name == "systemctl" && c.Args[0] == "stop" {
+			return testExit(5)
+		}
+		return nil
+	}
+	h.Runner = inactiveRunner{r}
+	if err := h.stopUnit("sites-app-scheduler.service"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range r.calls {
+		if c.Name == "systemctl" && c.Args[0] == "stop" {
+			t.Fatal("attempted to stop a never-started unit")
+		}
+	}
+}
+
+type inactiveRunner struct{ *fakeRunner }
+
+func (r inactiveRunner) Run(c Command) ([]byte, error) {
+	if c.Name == "systemctl" && slices.Contains(c.Args, "--property=ActiveState") {
+		r.calls = append(r.calls, c)
+		return []byte("inactive\n"), nil
+	}
+	return r.fakeRunner.Run(c)
 }
 
 func TestDryRunNeverExecutesOrWrites(t *testing.T) {
