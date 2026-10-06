@@ -1,0 +1,55 @@
+name: Check and package
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Check formatting
+        run: |
+          files=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$files" ]; then
+            echo "Run gofmt on:"
+            echo "$files"
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Build Linux AMD64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist/package
+          go build -trimpath -ldflags '-s -w' -o dist/package/sites ./cmd/sites
+      - name: Package and checksum
+        run: |
+          cp -R templates dist/package/templates
+          cp examples/config.toml dist/package/config.example.toml
+          cp README.md dist/package/README.md
+          tar -czf dist/sites-linux-amd64.tar.gz -C dist/package sites templates config.example.toml README.md
+          cd dist
+          sha256sum sites-linux-amd64.tar.gz > sites-linux-amd64.tar.gz.sha256
+      - name: Upload distribution
+        uses: actions/upload-artifact@v7
+        with:
+          name: sites-linux-amd64
+          path: |
+            dist/sites-linux-amd64.tar.gz
+            dist/sites-linux-amd64.tar.gz.sha256
+          if-no-files-found: error

@@ -1,0 +1,61 @@
+# Shared runtimes and application .env files remain owner-managed.
+# The range controls new automatic allocations; saved/imported ports stay stable.
+[ports]
+first = 10000
+last = 19999
+
+[[apps]]
+name = "mango"
+directory = "/srv/mango"
+user = "mango"
+type = "laravel"
+domain = "mango.example.com"
+aliases = ["www.mango.example.com"]
+domains = ["api.mango.example.com"]
+wildcards = []
+deploy_file = "deploy.sh"
+health_check = "https://mango.example.com/up"
+[apps.web]
+driver = "octane"
+workers = 2
+[apps.queue]
+workers = 2
+[apps.scheduler]
+enabled = true
+[apps.nightwatch]
+enabled = true
+[apps.inertia_ssr]
+enabled = false
+
+[[apps]]
+name = "quiet"
+directory = "/srv/quiet"
+user = "quiet"
+type = "laravel"
+domain = "quiet.example.com"
+deploy_file = "deploy.sh"
+[apps.web]
+driver = "fpm"
+[apps.queue]
+workers = 1
+[apps.scheduler]
+enabled = true
+
+[[apps]]
+name = "frontend"
+directory = "/srv/frontend"
+user = "frontend"
+type = "nuxt"
+domain = "frontend.example.com"
+deploy_file = "deploy.sh"
+[apps.nuxt]
+mode = "ssr"
+
+[[apps]]
+name = "docs"
+directory = "/srv/docs"
+user = "docs"
+type = "nuxt"
+domain = "docs.example.com"
+[apps.nuxt]
+mode = "static"

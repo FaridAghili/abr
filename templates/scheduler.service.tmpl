@@ -1,0 +1,10 @@
+# Draft: sites-{{.Name}}-scheduler.service
+[Unit]
+Description=Sites {{.Name}} scheduler
+
+[Service]
+Type=oneshot
+User={{.User}}
+WorkingDirectory={{.Directory}}
+EnvironmentFile={{.ManagedEnvironmentFile}}
+ExecStart={{.PHPBinary}} artisan schedule:run --no-interaction

@@ -1,0 +1,16 @@
+# Draft: sites-{{.Name}}-octane.service
+[Unit]
+Description=Sites {{.Name}} Octane
+After=network.target
+
+[Service]
+User={{.User}}
+WorkingDirectory={{.Directory}}
+EnvironmentFile={{.ManagedEnvironmentFile}}
+ExecStart={{.PHPBinary}} artisan octane:start --server=roadrunner --host=127.0.0.1 --port={{.OctaneHTTPPort}} --rpc-port={{.RoadRunnerRPCPort}} --workers={{.OctaneWorkers}} --no-interaction
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

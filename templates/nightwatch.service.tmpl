@@ -1,0 +1,15 @@
+# Draft: sites-{{.Name}}-nightwatch.service
+[Unit]
+Description=Sites {{.Name}} Nightwatch agent
+After=network.target
+
+[Service]
+User={{.User}}
+WorkingDirectory={{.Directory}}
+EnvironmentFile={{.ManagedEnvironmentFile}}
+ExecStart={{.PHPBinary}} artisan nightwatch:agent --listen-on=127.0.0.1:{{.NightwatchIngestPort}} --no-interaction
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
