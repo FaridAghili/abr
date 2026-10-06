@@ -53,7 +53,7 @@ fixture_git /srv/apps/fixture-php
 sites_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --scheduler
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/sites-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 sites_ci deploy fixture-php --no-pull
-fixture_https fixture-php.localhost | rg 'Laravel fixture database=1'
+fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 sudo test -S /run/php/sites-fixture-php.sock
 sudo test "$(stat -c '%a' /srv/apps/fixture-php/.env)" = 600
 sudo test "$(stat -c '%a' /var/lib/sites-ci/credentials/fixture-php.env)" = 600
@@ -70,7 +70,7 @@ fixture_git /srv/apps/fixture-octane
 sites_ci register --name fixture-octane --dir /srv/apps/fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-octane/.env.example > /srv/apps/fixture-octane/.env; cat /var/lib/sites-ci/credentials/fixture-octane.env >> /srv/apps/fixture-octane/.env; chmod 600 /srv/apps/fixture-octane/.env'
 sites_ci deploy fixture-octane --no-pull
-fixture_https fixture-octane.localhost | rg 'Laravel fixture database=1'
+fixture_https fixture-octane.localhost | grep -F 'Laravel fixture database=1'
 sudo test ! -f /srv/apps/fixture-octane/rr
 sudo test -x /usr/local/bin/rr
 sites_ci restart fixture-octane web
@@ -90,7 +90,7 @@ JSON
   sites_ci register --name "$app" --dir "$dir" --type nuxt --domain "$app.localhost"
   sites_ci deploy "$app" --no-pull
   fixture_https "$app.localhost" -o "$fixture_source/$app.html"
-  if [[ $rendering == true ]]; then rg 'Sites Nuxt fixture' "$fixture_source/$app.html"; else rg '__nuxt' "$fixture_source/$app.html"; fi
+  if [[ $rendering == true ]]; then grep -F 'Sites Nuxt fixture' "$fixture_source/$app.html"; else grep -F '__nuxt' "$fixture_source/$app.html"; fi
   sites_ci restart "$app" web
 done
 sites_ci ports
@@ -105,7 +105,7 @@ if getent passwd sites-fixture-php; then echo 'Managed user was not removed' >&2
 # Reuse retained data/credentials and verify a repeated deployment stays clean.
 sites_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --scheduler
 sites_ci deploy fixture-php --no-pull
-fixture_https fixture-php.localhost | rg 'Laravel fixture database=1'
+fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 sites_ci remove fixture-php
 sites_ci doctor
 echo 'Disposable host smoke test passed.'
