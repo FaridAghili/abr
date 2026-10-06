@@ -98,6 +98,11 @@ func (h Host) ensureUser(a config.App) error {
 		if saved == nil || len(parts) != 7 || parts[4] != "sites-"+a.Name || parts[5] != record.Home || (record.UID != "" && record.UID != parts[2]) {
 			return fmt.Errorf("refusing to adopt existing Ubuntu user %s; choose a new dedicated user", a.User)
 		}
+		if record.UID == "" {
+			if err := h.prepareHome(a.User, record.Home); err != nil {
+				return err
+			}
+		}
 		return h.saveUser(a, record, parts[2])
 	}
 	// Record intent first, so interruption after useradd can be recovered by identity.
@@ -119,15 +124,19 @@ func (h Host) ensureUser(a config.App) error {
 	if !exists || len(parts) != 7 {
 		return fmt.Errorf("could not verify newly created user %s", a.User)
 	}
-	// Removal retains the home as root-owned data. Re-registration must make
-	// those caches and deploy credentials accessible to the new managed UID.
-	if err := h.command("chown", "-hR", a.User+":"+a.User, "--", record.Home); err != nil {
-		return err
-	}
-	if err := h.command("chmod", "700", "--", record.Home); err != nil {
+	if err := h.prepareHome(a.User, record.Home); err != nil {
 		return err
 	}
 	return h.saveUser(a, record, parts[2])
+}
+
+func (h Host) prepareHome(user, home string) error {
+	// Removal retains the home as root-owned data. Re-registration (including
+	// retry after interrupted useradd) must restore access for the new UID.
+	if err := h.command("chown", "-hR", user+":"+user, "--", home); err != nil {
+		return err
+	}
+	return h.command("chmod", "700", "--", home)
 }
 
 func (h Host) saveUser(a config.App, record userRecord, uid string) error {

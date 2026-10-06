@@ -202,7 +202,17 @@ func stopUnits(units []string) []string {
 			all = append(all, strings.TrimSuffix(unit, ".timer")+".service")
 		}
 	}
-	slices.Sort(all)
+	slices.SortFunc(all, func(a, b string) int {
+		// Stop timers before their jobs, so no new job starts during shutdown.
+		at, bt := strings.HasSuffix(a, ".timer"), strings.HasSuffix(b, ".timer")
+		if at != bt {
+			if at {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a, b)
+	})
 	return slices.Compact(all)
 }
 
@@ -256,7 +266,7 @@ func (h Host) apply(a config.App, r ports.Registry, p services.Plan) (result err
 			h.say("Configuration failed; restoring previous managed files and services")
 			var cleanup []error
 			if len(next.Units) > 0 {
-				cleanup = append(cleanup, h.command("systemctl", append([]string{"disable", "--now"}, next.Units...)...))
+				cleanup = append(cleanup, h.stopAndDisable(next.Units))
 			}
 			for _, path := range paths {
 				f := backup[path]

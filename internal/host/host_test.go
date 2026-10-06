@@ -426,6 +426,13 @@ func TestStopUnitSkipsNeverStartedService(t *testing.T) {
 	}
 }
 
+func TestSchedulerTimerStopsBeforeItsJob(t *testing.T) {
+	units := stopUnits([]string{"sites-app-scheduler.timer", "sites-app-queue@1.service"})
+	if len(units) != 3 || units[0] != "sites-app-scheduler.timer" {
+		t.Fatalf("timer can start a job during shutdown: %v", units)
+	}
+}
+
 type inactiveRunner struct{ *fakeRunner }
 
 func (r inactiveRunner) Run(c Command) ([]byte, error) {
