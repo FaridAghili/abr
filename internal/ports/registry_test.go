@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
+	"time"
 
 	"sites-manager/internal/config"
 )
@@ -138,5 +140,37 @@ func TestListenerConflicts(t *testing.T) {
 				t.Fatalf("closed port unavailable: %v", err)
 			}
 		})
+	}
+}
+
+func TestLinuxClosedConnectionsDoNotReservePorts(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux TIME_WAIT bind semantics")
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	client, err := net.Dial("tcp4", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	server, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Close() // Server-initiated close leaves this listening port in TIME_WAIT.
+	client.SetReadDeadline(time.Now().Add(time.Second))
+	var b [1]byte
+	if _, err := client.Read(b[:]); err == nil {
+		t.Fatal("connection was not closed")
+	}
+	client.Close()
+	listener.Close()
+	if err := CheckAvailable(port); err != nil {
+		t.Fatalf("closed connection blocks reuse after service shutdown: %v", err)
 	}
 }

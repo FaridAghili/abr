@@ -5,20 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"syscall"
 )
 
 // CheckAvailable probes wildcard IPv4 and IPv6 binds, catching loopback,
 // wildcard, and interface-specific listeners. IPv6 may be disabled on the host.
-// This is a point-in-time check; service startup must check again in a later milestone.
+// This is a point-in-time check; service startup checks again before starting.
 func CheckAvailable(port int) error {
 	// Go enables SO_REUSEADDR by default. On macOS that can let a wildcard
 	// probe coexist with an existing loopback listener, hiding a conflict.
+	// Linux needs reuse enabled to ignore TIME_WAIT connections after shutdown;
+	// an active overlapping listener still prevents the bind on Linux.
 	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
 		var socketErr error
 		if err := c.Control(func(fd uintptr) {
-			socketErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 0)
+			reuse := 1
+			if runtime.GOOS == "darwin" {
+				reuse = 0
+			}
+			socketErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, reuse)
 		}); err != nil {
 			return err
 		}
