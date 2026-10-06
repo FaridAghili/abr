@@ -71,13 +71,19 @@ func waitEvent(ch <-chan event) tea.Cmd { return func() tea.Msg { return <-ch } 
 
 const outputLimit = 128 * 1024
 
-var accent = lipgloss.NewStyle().Foreground(lipgloss.Color("#8B9FFF")).Bold(true)
-var muted = lipgloss.NewStyle().Foreground(lipgloss.Color("#9198A1"))
-var danger = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF838B")).Bold(true)
-var success = lipgloss.NewStyle().Foreground(lipgloss.Color("#68D391")).Bold(true)
+type palette struct{ accent, muted, danger, success lipgloss.Style }
+
+func colors(dark bool) palette {
+	choose := lipgloss.LightDark(dark)
+	style := func(light, dark string) lipgloss.Style {
+		return lipgloss.NewStyle().Foreground(choose(lipgloss.Color(light), lipgloss.Color(dark)))
+	}
+	return palette{style("#5145B5", "#8B9FFF").Bold(true), style("#59636F", "#9198A1"), style("#B4233C", "#FF838B").Bold(true), style("#187346", "#68D391").Bold(true)}
+}
 
 type model struct {
 	options              Options
+	dark                 bool
 	width, height        int
 	form                 *huh.Form
 	next                 func() tea.Cmd
@@ -96,15 +102,15 @@ type model struct {
 }
 
 func newModel(o Options) *model {
-	m := &model{options: o, width: 80, height: 24, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(14)), spinner: spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(accent))}
+	m := &model{options: o, dark: true, width: 80, height: 24, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(14)), spinner: spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(colors(true).accent))}
 	m.viewport.SoftWrap = true
 	m.home()
 	return m
 }
-func (m *model) Init() tea.Cmd { return m.form.Init() }
+func (m *model) Init() tea.Cmd { return tea.Batch(m.form.Init(), tea.RequestBackgroundColor) }
 func (m *model) setForm(page, title string, next func() tea.Cmd, groups ...*huh.Group) tea.Cmd {
 	m.page, m.title, m.next = page, title, next
-	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(huh.ThemeCharm)).WithWidth(m.bodyWidth()).WithHeight(m.formHeight()).WithShowHelp(true)
+	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(func(bool) *huh.Styles { return huh.ThemeCharm(m.dark) })).WithWidth(m.bodyWidth()).WithHeight(m.formHeight()).WithShowHelp(true)
 	return m.form.Init()
 }
 func (m *model) bodyWidth() int  { return max(20, min(m.width-4, 96)) }
@@ -316,6 +322,9 @@ func (m *model) start(a action) tea.Cmd {
 }
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		m.dark = msg.IsDark()
+		m.spinner.Style = colors(m.dark).accent
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.viewport.SetWidth(m.bodyWidth())
@@ -424,6 +433,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m *model) View() tea.View {
+	palette := colors(m.dark)
+	accent, muted, danger, success := palette.accent, palette.muted, palette.danger, palette.success
 	width := m.bodyWidth()
 	mode := "LIVE · host operations require Ubuntu 26.04 AMD64 / root"
 	if m.options.DryRun {

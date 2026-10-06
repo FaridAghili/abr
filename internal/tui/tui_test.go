@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"image/color"
 	"io"
 	"os"
 	"path/filepath"
@@ -193,5 +194,23 @@ func TestAppMenuFitsSmallTerminal(t *testing.T) {
 	m.appMenu(config.App{Name: "example", Directory: "/srv/apps/example", User: "sites-example", Type: "laravel", Domain: "example.com", Web: config.Web{Driver: "octane"}, Database: config.Database{Enabled: true}})
 	if view := m.View().Content; !strings.Contains(view, "Esc back") {
 		t.Fatalf("app navigation clipped: %q", view)
+	}
+}
+
+func TestTerminalThemePersistsAcrossForms(t *testing.T) {
+	m := newModel(testOptions(t))
+	for _, dark := range []bool{false, true} {
+		background := color.RGBA{255, 255, 255, 255}
+		if dark {
+			background = color.RGBA{0, 0, 0, 255}
+		}
+		m.Update(tea.BackgroundColorMsg{Color: background})
+		m.setupForm()
+		if m.dark != dark {
+			t.Fatal("terminal theme lost when opening a new form")
+		}
+		if got, want := m.spinner.Style.GetForeground(), colors(dark).accent.GetForeground(); got != want {
+			t.Fatal("spinner ignored terminal theme")
+		}
 	}
 }
