@@ -55,8 +55,8 @@ sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /s
 sites_ci deploy fixture-php --no-pull
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 sudo test -S /run/php/sites-fixture-php.sock
-sudo test "$(stat -c '%a' /srv/apps/fixture-php/.env)" = 600
-sudo test "$(stat -c '%a' /var/lib/sites-ci/credentials/fixture-php.env)" = 600
+sudo test "$(sudo stat -c '%a' /srv/apps/fixture-php/.env)" = 600
+sudo test "$(sudo stat -c '%a' /var/lib/sites-ci/credentials/fixture-php.env)" = 600
 sites_ci restart fixture-php web
 sites_ci disable fixture-php
 sites_ci enable fixture-php
@@ -100,7 +100,7 @@ sites_ci remove fixture-octane
 sites_ci remove fixture-php
 sudo test -f /srv/apps/fixture-php/.env
 sudo test -f /var/lib/sites-ci/credentials/fixture-php.env
-sudo test "$(stat -c '%U' /srv/apps/fixture-php/.env)" = root
+sudo test "$(sudo stat -c '%U' /srv/apps/fixture-php/.env)" = root
 if getent passwd sites-fixture-php; then echo 'Managed user was not removed' >&2; exit 1; fi
 # Reuse retained data/credentials and verify a repeated deployment stays clean.
 sites_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --scheduler
