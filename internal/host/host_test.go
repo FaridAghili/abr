@@ -373,6 +373,35 @@ func TestDeploymentStopsOnFailureAndRecordsResult(t *testing.T) {
 	}
 }
 
+func TestLaravelFrontendFailureStopsBeforeComposer(t *testing.T) {
+	for _, failed := range []string{"npm ci", "npm run build"} {
+		t.Run(failed, func(t *testing.T) {
+			h, r, out, a := fixture(t)
+			if _, err := h.Register(a, nil); err != nil {
+				t.Fatal(err)
+			}
+			r.fail = func(c Command) error {
+				if c.Name == "runuser" && strings.Contains(strings.Join(c.Args, " "), failed) {
+					return testExit(8)
+				}
+				return nil
+			}
+			if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
+				t.Fatal("frontend failure reported success")
+			}
+			for _, c := range r.calls {
+				args := strings.Join(c.Args, " ")
+				if c.Name == "runuser" && (strings.Contains(args, "composer ") || strings.Contains(args, "artisan ")) {
+					t.Fatalf("PHP deployment continued after frontend failure: %s", args)
+				}
+			}
+			if strings.Contains(out.String(), "Deployed app") {
+				t.Fatal("false success printed")
+			}
+		})
+	}
+}
+
 func TestDeploymentMigratesBeforeClearingDatabaseCache(t *testing.T) {
 	h, r, _, a := fixture(t)
 	if _, err := h.Register(a, nil); err != nil {
@@ -389,9 +418,18 @@ func TestDeploymentMigratesBeforeClearingDatabaseCache(t *testing.T) {
 	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
 		t.Fatal("expected the simulated cache clear failure")
 	}
-	configClear, migrate, cacheClear := -1, -1, -1
+	npmCI, npmBuild, composer, configClear, migrate, cacheClear := -1, -1, -1, -1, -1, -1
 	for i, c := range r.calls {
 		args := strings.Join(c.Args, " ")
+		if strings.Contains(args, "npm ci") {
+			npmCI = i
+		}
+		if strings.Contains(args, "npm run build") {
+			npmBuild = i
+		}
+		if strings.Contains(args, "composer install") {
+			composer = i
+		}
 		if strings.Contains(args, "artisan config:clear") {
 			configClear = i
 		}
@@ -402,8 +440,8 @@ func TestDeploymentMigratesBeforeClearingDatabaseCache(t *testing.T) {
 			cacheClear = i
 		}
 	}
-	if configClear < 0 || migrate <= configClear || cacheClear <= migrate {
-		t.Fatalf("unsafe first-deploy order: config=%d migrate=%d cache=%d", configClear, migrate, cacheClear)
+	if npmCI < 0 || npmBuild <= npmCI || composer <= npmBuild || configClear <= composer || migrate <= configClear || cacheClear <= migrate {
+		t.Fatalf("unsafe first-deploy order: npm ci=%d build=%d composer=%d config=%d migrate=%d cache=%d", npmCI, npmBuild, composer, configClear, migrate, cacheClear)
 	}
 }
 

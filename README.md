@@ -177,25 +177,81 @@ The service binds to loopback with `NITRO_HOST` and `NITRO_PORT`. Static generat
 is outside this version; there is no SSR/static mode flag or separate static
 service template.
 
+## Private GitHub repositories
+
+For the initial clone, use your administrator account's existing GitHub access
+(or transfer a clean Git checkout from your computer), then register it as above.
+Registration creates the app's Linux user. Later pulls run as that user, not your
+administrator or root account.
+
+Use a separate **read-only deploy key per repository**, as described in
+[GitHub's deploy key guide](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys).
+For the registered `mango-api` app with its default user:
+
+```sh
+sudo install -d -m 700 -o sites-mango-api -g sites-mango-api \
+  /var/lib/sites-users/sites-mango-api/.ssh
+sudo runuser -u sites-mango-api -- ssh-keygen -t ed25519 -N '' \
+  -C 'sites-mango-api deploy' \
+  -f /var/lib/sites-users/sites-mango-api/.ssh/id_ed25519
+sudo cat /var/lib/sites-users/sites-mango-api/.ssh/id_ed25519.pub
+```
+
+Add the printed **public** key in the GitHub repository's **Settings → Deploy
+keys → Add deploy key**. Leave **Allow write access** unchecked. Keep the private
+key on the VPS. If the key already exists, reuse its public key rather than
+replacing it. Repeat for each app, substituting its managed user and home path;
+`--user` overrides and long app names can change the generated username, which
+registration prints.
+
+Add GitHub's published Ed25519 host key to this new user's `known_hosts` file
+([official host keys](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)):
+
+```sh
+printf '%s\n' 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+  | sudo tee -a /var/lib/sites-users/sites-mango-api/.ssh/known_hosts >/dev/null
+sudo chown sites-mango-api:sites-mango-api \
+  /var/lib/sites-users/sites-mango-api/.ssh/known_hosts
+sudo chmod 600 /var/lib/sites-users/sites-mango-api/.ssh/known_hosts
+sudo runuser -u sites-mango-api -- env -i \
+  HOME=/var/lib/sites-users/sites-mango-api PATH=/usr/local/bin:/usr/bin:/bin \
+  git -C /srv/apps/mango-api remote set-url origin git@github.com:OWNER/PROJECT.git
+sudo runuser -u sites-mango-api -- env -i \
+  HOME=/var/lib/sites-users/sites-mango-api PATH=/usr/local/bin:/usr/bin:/bin \
+  GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=yes' \
+  git -C /srv/apps/mango-api ls-remote origin HEAD
+```
+
+Replace `OWNER/PROJECT` with your repository. A successful `ls-remote` prints its
+HEAD commit and verifies read access without changing the checkout. After that,
+`sudo sites deploy mango-api` pulls using this key, including from the TUI.
+The manager currently uses existing Git/SSH credentials; it does not generate
+keys or add them to GitHub. Private Composer/npm dependencies need their own
+access configuration if they live outside the app repository.
+
 ## Standard deployment commands
 
 `deploy APP...` deploys sequentially; `deploy --all` selects all registered apps.
 Flags also work after an app name. Deployments reject dirty Git working trees,
 run `git pull --ff-only` unless `--no-pull` is specified, and then execute:
 
+- Nuxt, and Laravel projects with `package.json`: `npm ci --include=dev`, then
+  `npm run build`. Build tools require dev dependencies even in production.
 - Laravel: `composer install --no-dev --optimize-autoloader --no-interaction
   --prefer-dist`, then `composer check-platform-reqs --no-dev`.
 - Laravel initialization: generate `APP_KEY` only when absent, clear cached
   configuration, and create `public/storage` only when absent. Existing keys
   and uploads remain intact.
-- Nuxt, and Laravel projects with `package.json`: `npm ci --include=dev`, then
-  `npm run build`. Build tools require dev dependencies even in production.
 - Laravel: `php8.5 artisan migrate --force --no-interaction`, then
   `php8.5 artisan optimize:clear --no-interaction` and
   `php8.5 artisan optimize --no-interaction`. Application caches are cleared
   after migrations so the first deployment can create the database cache table.
 - Render/validate configuration, start services, verify sockets/listeners,
   reload Caddy, and perform the optional HTTP health check.
+
+Laravel frontend builds must work before `vendor/` is installed on a fresh clone;
+any build script that invokes Artisan needs adjusting for this order. Laravel
+projects without `package.json` skip npm.
 
 Composer and npm lockfiles must be committed. Commands run as the app user,
 including Git. A private repository needs a read-only deploy key/credentials

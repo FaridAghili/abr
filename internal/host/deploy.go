@@ -176,6 +176,24 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		_, err := h.asUser(a, plan.Environment, false, name, args...)
 		return err
 	}
+	// Build frontend assets before installing PHP dependencies or running Artisan.
+	_, packageErr := os.Stat(h.path(filepath.Join(a.Directory, "package.json")))
+	if a.Type == "nuxt" || packageErr == nil || h.DryRun {
+		if !h.DryRun {
+			if _, err := os.Stat(h.path(filepath.Join(a.Directory, "package-lock.json"))); err != nil {
+				return fmt.Errorf("commit package-lock.json before deployment: %w", err)
+			}
+		}
+		// Build tools are often dev dependencies even for production builds.
+		if err := run("npm", "ci", "--include=dev"); err != nil {
+			return err
+		}
+		if err := run("npm", "run", "build"); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(packageErr) {
+		return packageErr
+	}
 	if a.Type == "laravel" {
 		if err := run("composer", "install", "--no-dev", "--optimize-autoloader", "--no-interaction", "--prefer-dist"); err != nil {
 			return err
@@ -215,23 +233,6 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 				return fmt.Errorf("public/storage exists but is not a symlink")
 			}
 		}
-	}
-	_, packageErr := os.Stat(h.path(filepath.Join(a.Directory, "package.json")))
-	if a.Type == "nuxt" || packageErr == nil || h.DryRun {
-		if !h.DryRun {
-			if _, err := os.Stat(h.path(filepath.Join(a.Directory, "package-lock.json"))); err != nil {
-				return fmt.Errorf("commit package-lock.json before deployment: %w", err)
-			}
-		}
-		// Build tools are often dev dependencies even for production builds.
-		if err := run("npm", "ci", "--include=dev"); err != nil {
-			return err
-		}
-		if err := run("npm", "run", "build"); err != nil {
-			return err
-		}
-	} else if !os.IsNotExist(packageErr) {
-		return packageErr
 	}
 	if a.Type == "laravel" {
 		if err := run(php, "artisan", "migrate", "--force", "--no-interaction"); err != nil {

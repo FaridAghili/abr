@@ -64,10 +64,10 @@ Lock host operations, reject dirty worktrees, pull with --ff-only, then run all
 project commands as its unprivileged managed user. Git credentials must be
 available to that user for private repositories; --no-pull supports initial clones.
 
+Nuxt and Laravel with package.json: npm ci --include=dev and npm run build first.
 Laravel: composer install with locked production dependencies, check platform
 requirements, generate missing APP_KEY once, clear configuration caches, and
-create the public storage link if absent. For projects with package.json:
-npm ci --include=dev and npm run build. Then Laravel migrate --force and optimize.
+create the public storage link if absent. Then Laravel migrate --force and optimize.
 Enable configured services, verify expected sockets/listeners, reload Caddy,
 and run the optional health-check URL. Record commit, timestamps, result and logs.
 Deploy multiple apps sequentially and fail overall if any app fails.
