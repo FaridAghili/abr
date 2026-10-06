@@ -163,6 +163,10 @@ func (h Host) enable(a config.App, r ports.Registry) error {
 	}
 	if !h.DryRun {
 		if a.Web.Driver == "octane" {
+			info, err := os.Stat(h.path("/usr/local/bin/rr"))
+			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+				return fmt.Errorf("shared RoadRunner is missing or not executable; run sites setup before enabling Octane")
+			}
 			local := h.path(filepath.Join(a.Directory, "rr"))
 			if _, err := os.Lstat(local); err == nil {
 				resolved, err := filepath.EvalSymlinks(local)

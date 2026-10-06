@@ -433,6 +433,22 @@ func TestSchedulerTimerStopsBeforeItsJob(t *testing.T) {
 	}
 }
 
+func TestOctaneCannotDownloadAnAppLocalRoadRunner(t *testing.T) {
+	h, r, _, a := fixture(t)
+	a.Web.Driver = "octane"
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Enable(a.Name); err == nil || !strings.Contains(err.Error(), "shared RoadRunner") {
+		t.Fatalf("missing shared executable was accepted: %v", err)
+	}
+	for _, c := range r.calls {
+		if c.Name == "systemctl" && slices.Contains(c.Args, "--now") {
+			t.Fatal("started Octane, which could download an app-local binary")
+		}
+	}
+}
+
 type inactiveRunner struct{ *fakeRunner }
 
 func (r inactiveRunner) Run(c Command) ([]byte, error) {
