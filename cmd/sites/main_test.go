@@ -94,3 +94,25 @@ func TestInteractiveCommandNeedsTerminal(t *testing.T) {
 		t.Fatalf("unexpected args accepted: %v", err)
 	}
 }
+
+func TestSharedGitCommandsAndPortablePreviews(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state")
+	apps := filepath.Join(dir, "apps")
+	paths := []string{"--state-dir", state, "--apps-dir", apps, "--dry-run"}
+	for _, command := range [][]string{{"git", "setup"}, {"git", "setup", "--key", "/nonexistent/key"}, {"clone", "git@github.com:owner/repo.git", filepath.Join(apps, "repo")}} {
+		args := append(append([]string{}, paths...), command...)
+		out, err := invoke(t, args...)
+		if err != nil || !strings.Contains(out, "Would") {
+			t.Fatalf("preview %v: %s %v", command, out, err)
+		}
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Fatal("Git preview wrote state")
+	}
+	for _, command := range [][]string{{"git"}, {"git", "unknown"}, {"git", "setup", "extra"}, {"clone"}, {"clone", "one"}, {"clone", "one", "two", "three"}} {
+		if _, err := invoke(t, command...); err == nil {
+			t.Fatalf("invalid command succeeded: %v", command)
+		}
+	}
+}

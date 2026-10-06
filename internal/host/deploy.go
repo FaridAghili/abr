@@ -66,6 +66,20 @@ func (h Host) Deploy(names []string, o DeployOptions) error {
 }
 
 func (h Host) asUser(a config.App, environment map[string]string, private bool, name string, args ...string) ([]byte, error) {
+	if name == "git" {
+		configured, err := h.sharedGit()
+		if err != nil {
+			return nil, err
+		}
+		if configured {
+			if err := h.gitAccess(a, false); err != nil {
+				return nil, err
+			}
+			environment = copyEnvironment(environment)
+			environment["GIT_SSH_COMMAND"] = h.gitSSH()
+			environment["GIT_TERMINAL_PROMPT"] = "0"
+		}
+	}
 	command := []string{"--user", a.User, "--", "env", "-i", "HOME=/var/lib/sites-users/" + a.User, "USER=" + a.User, "LOGNAME=" + a.User, "LANG=C.UTF-8", "PATH=/usr/local/bin:/usr/bin:/bin"}
 	keys := make([]string, 0, len(environment))
 	for key := range environment {

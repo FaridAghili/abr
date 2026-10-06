@@ -24,6 +24,9 @@ if [[ ${GITHUB_ACTIONS:-false} == true ]]; then
 fi
 sites_ci setup --no-firewall --ssh-port 22
 test "$(/usr/local/bin/svgo --version)" = 4.1.0
+# Shared identity tests remain offline: no GitHub account or private repository.
+sites_ci git setup
+sites_ci git setup
 
 fixture_source=$(mktemp -d)
 trap 'rm -rf "$fixture_source"' EXIT
@@ -53,6 +56,11 @@ fixture_git /srv/apps/fixture-php
 sites_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --scheduler
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/sites-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 sites_ci deploy fixture-php --no-pull
+sudo runuser -u sites-fixture-php -- test -r /var/lib/sites-ci/git/id_ed25519
+sudo runuser -u sites-fixture-php -- ssh-keygen -y -P '' -f /var/lib/sites-ci/git/id_ed25519 >/dev/null
+sites_ci git setup
+sudo runuser -u sites-fixture-php -- test ! -r /var/lib/sites-ci/credentials/fixture-php.env
+sudo runuser -u nobody -- test ! -r /var/lib/sites-ci/git/id_ed25519
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 sudo test -S /run/php/sites-fixture-php.sock
 sudo test "$(sudo stat -c '%a' /srv/apps/fixture-php/.env)" = 600
@@ -97,7 +105,9 @@ sites_ci ports
 sites_ci remove fixture-ssr
 sites_ci remove fixture-spa
 sites_ci remove fixture-octane
+removed_git_uid=$(id -u sites-fixture-php)
 sites_ci remove fixture-php
+sudo getfacl -cn /var/lib/sites-ci/git/id_ed25519 | grep -Fx "user:$removed_git_uid:---"
 sudo test -f /srv/apps/fixture-php/.env
 sudo test -f /var/lib/sites-ci/credentials/fixture-php.env
 sudo test "$(sudo stat -c '%U' /srv/apps/fixture-php/.env)" = root

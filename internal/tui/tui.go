@@ -152,6 +152,8 @@ func (m *model) home() tea.Cmd {
 	choices = append(choices,
 		huh.NewOption("+ Register application", "register"),
 		huh.NewOption("Set up this VPS", "setup"),
+		huh.NewOption("Set up shared GitHub key", "git-setup"),
+		huh.NewOption("Clone application", "clone"),
 		huh.NewOption("Port reservations", "ports"),
 		huh.NewOption("Validate configuration", "validate"),
 		huh.NewOption("Doctor / port checks", "doctor"),
@@ -174,6 +176,10 @@ func (m *model) home() tea.Cmd {
 			return m.registerForm()
 		case "setup":
 			return m.setupForm()
+		case "git-setup":
+			return m.gitSetupForm()
+		case "clone":
+			return m.cloneForm()
 		case "ports":
 			return m.start(action{title: "Port reservations", args: []string{"ports"}})
 		case "validate":

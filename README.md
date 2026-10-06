@@ -122,7 +122,8 @@ packages and reload shared services. Runtime upgrades are manual owner actions.
 ## Add and deploy Laravel
 
 Clone the project into its own directory under `/srv/apps`. This example uses a
-public HTTPS repository; replace the URL and domain with yours:
+public HTTPS repository; for your private repositories, set up the shared VPS
+key and use `sites clone` as shown below. Replace the URL and domain with yours:
 
 ```sh
 sudo git clone https://github.com/OWNER/PROJECT.git /srv/apps/mango-api
@@ -177,57 +178,59 @@ The service binds to loopback with `NITRO_HOST` and `NITRO_PORT`. Static generat
 is outside this version; there is no SSR/static mode flag or separate static
 service template.
 
-## Private GitHub repositories
+## One VPS key for private GitHub repositories
 
-For the initial clone, use your administrator account's existing GitHub access
-(or transfer a clean Git checkout from your computer), then register it as above.
-Registration creates the app's Linux user. Later pulls run as that user, not your
-administrator or root account.
-
-Use a separate **read-only deploy key per repository**, as described in
-[GitHub's deploy key guide](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys).
-For the registered `mango-api` app with its default user:
+Create the shared VPS identity once, or import an existing unencrypted private
+key with `sudo sites git setup --key /home/ubuntu/.ssh/id_ed25519`:
 
 ```sh
-sudo install -d -m 700 -o sites-mango-api -g sites-mango-api \
-  /var/lib/sites-users/sites-mango-api/.ssh
-sudo runuser -u sites-mango-api -- ssh-keygen -t ed25519 -N '' \
-  -C 'sites-mango-api deploy' \
-  -f /var/lib/sites-users/sites-mango-api/.ssh/id_ed25519
-sudo cat /var/lib/sites-users/sites-mango-api/.ssh/id_ed25519.pub
+sudo sites git setup
 ```
 
-Add the printed **public** key in the GitHub repository's **Settings → Deploy
-keys → Add deploy key**. Leave **Allow write access** unchecked. Keep the private
-key on the VPS. If the key already exists, reuse its public key rather than
-replacing it. Repeat for each app, substituting its managed user and home path;
-`--user` overrides and long app names can change the generated username, which
-registration prints.
+Copy the printed public key into your **GitHub account → Settings → SSH and GPG
+keys → New SSH key**, choosing **Authentication Key**. Add it to your account
+once; there is no separate key per repository. See
+[GitHub's account SSH key instructions](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
+Rerunning the command prints the same public key without replacing the private
+key. An import cannot overwrite an existing different shared identity.
 
-Add GitHub's published Ed25519 host key to this new user's `known_hosts` file
-([official host keys](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)):
+Then clone using SSH URLs:
 
 ```sh
-printf '%s\n' 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
-  | sudo tee -a /var/lib/sites-users/sites-mango-api/.ssh/known_hosts >/dev/null
-sudo chown sites-mango-api:sites-mango-api \
-  /var/lib/sites-users/sites-mango-api/.ssh/known_hosts
-sudo chmod 600 /var/lib/sites-users/sites-mango-api/.ssh/known_hosts
-sudo runuser -u sites-mango-api -- env -i \
-  HOME=/var/lib/sites-users/sites-mango-api PATH=/usr/local/bin:/usr/bin:/bin \
-  git -C /srv/apps/mango-api remote set-url origin git@github.com:OWNER/PROJECT.git
-sudo runuser -u sites-mango-api -- env -i \
-  HOME=/var/lib/sites-users/sites-mango-api PATH=/usr/local/bin:/usr/bin:/bin \
-  GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=yes' \
-  git -C /srv/apps/mango-api ls-remote origin HEAD
+sudo sites clone git@github.com:FaridAghili/mango-web.git /srv/apps/mango-web
+sudo sites register --name mango-web --dir /srv/apps/mango-web \
+  --type nuxt --domain mango.example.com
+# Prepare the project's .env if required.
+sudo sites deploy mango-web --no-pull
+# Subsequent deployments pull from GitHub first:
+sudo sites deploy mango-web
 ```
 
-Replace `OWNER/PROJECT` with your repository. A successful `ls-remote` prints its
-HEAD commit and verifies read access without changing the checkout. After that,
-`sudo sites deploy mango-api` pulls using this key, including from the TUI.
-The manager currently uses existing Git/SSH credentials; it does not generate
-keys or add them to GitHub. Private Composer/npm dependencies need their own
-access configuration if they live outside the app repository.
+Use **Set up shared GitHub key** and **Clone application** for the same operations
+in the TUI. Clone requires a new directory directly under `--apps-dir` and does
+not register or deploy it. A failed clone is reported; an existing destination
+is never overwritten. Existing clones must have an SSH remote, for example:
+
+```sh
+sudo runuser -u sites-mango-web -- \
+  git -C /srv/apps/mango-web remote set-url origin git@github.com:FaridAghili/mango-web.git
+```
+
+The root-owned identity is stored under `--state-dir/git` (normally
+`/var/lib/sites/git`). The manager grants only managed app users read access to
+this key and traversal access to its directory, using filesystem ACLs. Other
+state files remain private. Git commands automatically select the shared key
+with strict verification against
+[GitHub's published host key](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints).
+Removing an app revokes its access before deleting the user, including protection
+against UID reuse. Composer/npm/build/Artisan still run as each app's own user.
+Without a shared identity, existing per-app Git/SSH credentials continue to work.
+
+All managed apps share this key's GitHub account permissions, including write
+access where your account has it. Back up the shared identity privately with the
+state directory. Private Composer/npm dependencies need their own credentials
+if they live outside the application repository; this identity is selected for
+the manager's Git commands.
 
 ## Standard deployment commands
 
@@ -254,9 +257,9 @@ any build script that invokes Artisan needs adjusting for this order. Laravel
 projects without `package.json` skip npm.
 
 Composer and npm lockfiles must be committed. Commands run as the app user,
-including Git. A private repository needs a read-only deploy key/credentials
-available to that account's home; the manager does not copy your personal SSH
-keys. Use `--no-pull` for the initial clone or an intentionally prepared checkout.
+including Git. Configure the shared VPS key once as described above, or supply
+per-app credentials if no shared key is configured. Use `--no-pull` for the
+initial clone or an intentionally prepared checkout.
 Projects must already declare Octane/RoadRunner or other selected Composer
 packages; the manager installs locked dependencies without editing requirements.
 Nuxt's `.env` is read by Node at runtime as well as by Nuxt at build time.

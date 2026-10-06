@@ -24,6 +24,33 @@ func workerCount(s string) error {
 	}
 	return nil
 }
+func (m *model) gitSetupForm() tea.Cmd {
+	m.context, m.notice = "", ""
+	var key string
+	return m.setForm("form", "Shared GitHub key", func() tea.Cmd {
+		args := []string{"git", "setup"}
+		if key != "" {
+			args = append(args, "--key", key)
+		}
+		return m.review(action{title: "Set up shared GitHub key", args: args, note: "Generate/reuse one VPS SSH key, or import the specified unencrypted private key. Prints the public key to add once to your GitHub account's SSH and GPG keys. All managed apps use this identity and share its repository permissions."})
+	}, huh.NewGroup(huh.NewInput().Title("Existing SSH private key path · optional").Description("Leave empty to generate/reuse the VPS key.").Value(&key).Validate(func(s string) error {
+		if s != "" && (!filepath.IsAbs(s) || strings.ContainsAny(s, "\x00\r\n")) {
+			return errors.New("Use an absolute file path, or leave empty")
+		}
+		return nil
+	})))
+}
+
+func (m *model) cloneForm() tea.Cmd {
+	m.context, m.notice = "", ""
+	var repository, directory string
+	return m.setForm("form", "Clone application", func() tea.Cmd {
+		return m.review(action{title: "Clone application", args: []string{"clone", repository, directory}, note: "Clone with the shared VPS SSH key. Add its public key to GitHub first. The destination must be new and directly under the apps directory. Register the clone afterward to create its managed user and selected database."})
+	}, huh.NewGroup(
+		huh.NewInput().Title("GitHub SSH repository URL").Placeholder("git@github.com:OWNER/PROJECT.git").Value(&repository).Validate(required),
+		huh.NewInput().Title("New application directory").Placeholder(filepath.Join(m.options.AppsDir, "mango")).Value(&directory).Validate(required)))
+}
+
 func (m *model) registerForm() tea.Cmd {
 	m.context, m.notice = "", ""
 	var name, dir, domain, kind, driver, aliases, domains, health string

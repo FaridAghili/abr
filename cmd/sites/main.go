@@ -41,6 +41,8 @@ Commands:
   ports            Show reservations (--allocate reconciles config edits)
   doctor           Portable config/registry/port checks
   setup            Install shared VPS packages, Caddy, Node 24 and RoadRunner
+  git setup        Create/reuse one VPS GitHub SSH key (--key imports an existing key)
+  clone URL DIR    Clone a GitHub SSH repository into a new directory under apps-dir
   database APP     Create/verify MySQL database (--show prints credentials)
   enable APP       Render, validate and start services
   disable APP      Stop services; retain users, databases and ports
@@ -83,8 +85,14 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		command, args = "config validate", args[1:]
 	}
+	if command == "git" {
+		if len(args) == 0 || args[0] != "setup" {
+			return fmt.Errorf("use sites git setup [--key PATH]")
+		}
+		command, args = "git setup", args[1:]
+	}
 	switch command {
-	case "tui", "version", "config validate", "list", "register", "ports", "doctor", "setup", "database", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
+	case "tui", "version", "config validate", "list", "register", "ports", "doctor", "setup", "git setup", "clone", "database", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
 	default:
 		return fmt.Errorf("unknown command %q; use sites help", command)
 	}
@@ -97,7 +105,10 @@ func run(args []string, out, stderr io.Writer) error {
 	var imports portFlags
 	var setup host.SetupOptions
 	var deploy host.DeployOptions
+	var gitKey string
 	switch command {
+	case "git setup":
+		fs.StringVar(&gitKey, "key", "", "import an existing unencrypted SSH private key (default: generate/reuse VPS key)")
 	case "ports":
 		fs.BoolVar(&allocate, "allocate", false, "reserve missing endpoints; retain assignments")
 	case "register":
@@ -138,6 +149,10 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	positional := fs.Args()
 	switch command {
+	case "clone":
+		if len(positional) != 2 {
+			return fmt.Errorf("use sites clone git@github.com:OWNER/REPO.git /srv/apps/APP")
+		}
 	case "enable", "disable", "remove", "database":
 		if len(positional) != 1 {
 			return fmt.Errorf("use sites %s APP", command)
@@ -168,6 +183,10 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	h.Manager = m
 	switch command {
+	case "git setup":
+		return h.GitSetup(gitKey)
+	case "clone":
+		return h.Clone(positional[0], positional[1])
 	case "tui":
 		if !terminalAvailable(out) {
 			return fmt.Errorf("tui requires terminal input and output; use sites help for scriptable commands")

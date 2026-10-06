@@ -622,6 +622,9 @@ func (h Host) removeUser(a config.App) error {
 		if err := h.command("chown", "-hR", "root:root", "--", a.Directory, record.Home); err != nil {
 			return err
 		}
+		if err := h.gitAccess(a, true); err != nil {
+			return err
+		}
 		if err := h.command("userdel", a.User); err != nil {
 			return err
 		}

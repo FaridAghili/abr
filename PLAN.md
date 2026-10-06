@@ -61,8 +61,12 @@ FPM pools share one master; use ondemand for quieter apps.
 
 Use only standard commands; do not run deploy.sh, custom shell files, or hooks.
 Lock host operations, reject dirty worktrees, pull with --ff-only, then run all
-project commands as its unprivileged managed user. Git credentials must be
-available to that user for private repositories; --no-pull supports initial clones.
+project commands as its unprivileged managed user. Configure one shared VPS SSH
+identity with git setup, add it once to the GitHub account, then clone SSH URLs
+with sites clone. Managed users get read/traverse ACL access to this identity;
+remove revokes access before user deletion. Keep other state private. Existing
+per-app credentials still work without a shared identity. --no-pull supports
+initial clones.
 
 Nuxt and Laravel with package.json: npm ci --include=dev and npm run build first.
 Laravel: composer install with locked production dependencies, check platform
