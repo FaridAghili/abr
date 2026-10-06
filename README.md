@@ -8,6 +8,40 @@ is required. PHP, Node, Composer, MySQL, Redis, and RoadRunner are shared system
 installations. Every application gets a dedicated managed Ubuntu user.
 Nuxt always runs through its Node server; the project controls SSR itself.
 
+## Interactive terminal
+
+Run `sudo sites` or `sudo sites tui` on the VPS to open the menu. It includes
+searchable applications, guided setup and registration, deployment, status,
+service restart, recent logs, database management, and port/config checks.
+Use arrows to navigate, `/` to search menus, Tab/Shift+Tab to move between form
+fields, and Space to toggle components. Esc goes back; Ctrl+C goes back or quits
+from the home menu. Confirmation starts on **Cancel**; choose **Run command**
+and press Enter to proceed. Long reviews and output scroll with arrows/Page Up/
+Page Down. Use a terminal of at least 48 columns and 16 rows.
+
+The header shows config/state paths and live or dry-run mode. Opening the menu
+writes no state and does not infer service health; **Service status** queries
+systemd. Changes run through the same CLI commands, with live output and explicit
+failure messages. Wait for an operation to finish before leaving its screen.
+Database credentials require an explicit reveal action and are discarded from
+the UI when leaving the output screen. Recent logs are a snapshot; use
+`sudo sites logs APP --follow` for streaming outside the menu.
+
+For local use, choose temporary paths. This opens a host preview menu on macOS:
+
+```sh
+go build -o bin/sites ./cmd/sites
+work=$(mktemp -d)
+./bin/sites --config "$work/config.toml" --state-dir "$work/state" \
+  --templates-dir ./templates --apps-dir "$work/apps" --dry-run tui
+```
+
+To save local registrations, omit `--dry-run` and choose **Config only** in the
+registration form. Real host commands still require root on Ubuntu. Full CLI
+flags remain available for advanced options such as explicit imported ports.
+`sites help` always prints command help; when stdin or stdout is redirected,
+no arguments prints help and `sites tui` reports that a terminal is required.
+
 ## Local development
 
 Use the Go version in `go.mod`:
@@ -175,8 +209,8 @@ Deployment is **in place with downtime**: managed routing/services are disabled
 before pulling or replacing code. A failed deployment stops immediately and
 leaves the app disabled, or reports a failed health check after startup. Code and
 schema rollback are not automatic. Private logs/history record the commit,
-timestamps, and outcome under `/var/lib/sites/deployments/`. No `deploy.sh`, shell
-hooks, or interactive menu are executed. Laravel always runs with production
+timestamps, and outcome under `/var/lib/sites/deployments/`. No `deploy.sh` or shell
+hooks are executed. Laravel always runs with production
 `APP_ENV` and debug disabled through the managed environment.
 Octane also receives `OCTANE_HTTPS=true` for direct HTTPS through Caddy.
 

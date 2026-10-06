@@ -19,8 +19,10 @@ portable config/registry/template logic separate from Linux operations.
 ## Commands
 
 version, config validate, list, register, ports, doctor, setup, database,
-enable, disable, remove, status, restart, logs, deploy APP..., deploy --all.
-No arguments prints help. An interactive menu is not implemented.
+enable, disable, remove, status, restart, logs, deploy APP..., deploy --all, tui.
+No arguments opens the TUI when input/output are terminals; otherwise it prints
+help. The TUI uses maintained Charm components, guides setup/registration, and
+runs the same commands after review. Existing commands remain scriptable.
 
 Register validates a clone, creates its runtime user, assigns required ports,
 and creates a dedicated MySQL database/account for Laravel unless --no-database
@@ -87,7 +89,7 @@ SSH authentication and the administrator account remain owner-controlled.
 Setup preserves reachable SSH ports before enabling UFW and preserves existing
 rules. Do not attach Ubuntu Pro or add personal shell preferences automatically.
 No automated backups, database imports/deletion, wildcard certificate setup,
-interactive menu, or zero-downtime deployment is promised in this version.
+or zero-downtime deployment is promised in this version.
 
 ## Verification
 

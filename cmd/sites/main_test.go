@@ -82,3 +82,15 @@ func TestOccupiedImportDoesNotRegister(t *testing.T) {
 		t.Fatalf("failed registration saved config: %v", err)
 	}
 }
+
+func TestInteractiveCommandNeedsTerminal(t *testing.T) {
+	if out, err := invoke(t, "tui"); err == nil || out != "" || !strings.Contains(err.Error(), "requires terminal") {
+		t.Fatalf("%s %v", out, err)
+	}
+	if out, err := invoke(t); err != nil || !strings.Contains(out, "Usage:") {
+		t.Fatalf("no-argument noninteractive invocation: %s %v", out, err)
+	}
+	if _, err := invoke(t, "tui", "extra"); err == nil || !strings.Contains(err.Error(), "unexpected arguments") {
+		t.Fatalf("unexpected args accepted: %v", err)
+	}
+}

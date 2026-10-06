@@ -8,14 +8,17 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sites-manager/internal/host"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 
+	"golang.org/x/term"
+
 	"sites-manager/internal/config"
+	"sites-manager/internal/host"
 	"sites-manager/internal/manager"
 	"sites-manager/internal/ports"
+	"sites-manager/internal/tui"
 )
 
 const version = "0.1.0"
@@ -30,6 +33,7 @@ func main() {
 const usage = `Usage: sites [FLAGS] COMMAND [FLAGS] [APP...]
 
 Commands:
+  tui              Interactive application and server menu (default in a terminal)
   version          Print version and platform
   config validate  Validate TOML configuration
   list             List applications
@@ -50,7 +54,7 @@ Commands:
 Paths: --config /etc/sites/config.toml --state-dir /var/lib/sites
        --templates-dir /etc/sites/templates --apps-dir /srv/apps
 Host commands require root on Ubuntu 26.04 AMD64; --dry-run previews on macOS.
-Portable registration uses --config-only. Interactive menu is not implemented.
+Portable registration uses --config-only. Without a terminal, no arguments prints help.
 `
 
 func run(args []string, out, stderr io.Writer) error {
@@ -65,6 +69,9 @@ func run(args []string, out, stderr io.Writer) error {
 		return helpError(err)
 	}
 	args = root.Args()
+	if len(args) == 0 && terminalAvailable(out) {
+		args = []string{"tui"}
+	}
 	if len(args) == 0 || args[0] == "help" {
 		fmt.Fprint(out, usage)
 		return nil
@@ -77,7 +84,7 @@ func run(args []string, out, stderr io.Writer) error {
 		command, args = "config validate", args[1:]
 	}
 	switch command {
-	case "version", "config validate", "list", "register", "ports", "doctor", "setup", "database", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
+	case "tui", "version", "config validate", "list", "register", "ports", "doctor", "setup", "database", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
 	default:
 		return fmt.Errorf("unknown command %q; use sites help", command)
 	}
@@ -161,6 +168,21 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	h.Manager = m
 	switch command {
+	case "tui":
+		if !terminalAvailable(out) {
+			return fmt.Errorf("tui requires terminal input and output; use sites help for scriptable commands")
+		}
+		base := []string{"--config", m.ConfigPath, "--state-dir", m.StateDir,
+			"--templates-dir", h.TemplatesDir, "--apps-dir", h.AppsDir,
+			"--dry-run=" + strconv.FormatBool(h.DryRun)}
+		return tui.Run(tui.Options{
+			Version: version, ConfigPath: m.ConfigPath, StateDir: m.StateDir,
+			TemplatesDir: h.TemplatesDir, AppsDir: h.AppsDir, DryRun: h.DryRun,
+			RoadRunnerVersion: host.DefaultRoadRunnerVersion, Input: os.Stdin, Output: out,
+			RunCommand: func(command []string, output io.Writer) error {
+				return run(append(append([]string(nil), base...), command...), output, output)
+			},
+		})
 	case "version":
 		fmt.Fprintf(out, "sites %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
 	case "config validate":
@@ -294,6 +316,11 @@ func run(args []string, out, stderr io.Writer) error {
 		return errors.Join(failures...)
 	}
 	return nil
+}
+
+func terminalAvailable(out io.Writer) bool {
+	file, ok := out.(*os.File)
+	return ok && term.IsTerminal(int(file.Fd())) && term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 func hostFlags(fs *flag.FlagSet, h *host.Host, templates, apps string, dryRun bool) {
