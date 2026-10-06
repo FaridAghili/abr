@@ -66,7 +66,7 @@ func (h Host) Deploy(names []string, o DeployOptions) error {
 }
 
 func (h Host) asUser(a config.App, environment map[string]string, private bool, name string, args ...string) ([]byte, error) {
-	command := []string{"--user", a.User, "--", "env", "HOME=/var/lib/sites-users/" + a.User, "PATH=/usr/local/bin:/usr/bin:/bin"}
+	command := []string{"--user", a.User, "--", "env", "-i", "HOME=/var/lib/sites-users/" + a.User, "USER=" + a.User, "LOGNAME=" + a.User, "LANG=C.UTF-8", "PATH=/usr/local/bin:/usr/bin:/bin"}
 	keys := make([]string, 0, len(environment))
 	for key := range environment {
 		if key != "PATH" {

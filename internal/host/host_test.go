@@ -401,6 +401,44 @@ func TestPrivateRunnerDoesNotPrintInputOrErrors(t *testing.T) {
 	}
 }
 
+func TestRunnerKeepsDiagnosticsOutOfQueryResults(t *testing.T) {
+	var out bytes.Buffer
+	r := ExecRunner{Output: &out}
+	data, err := r.Run(Command{Name: "sh", Args: []string{"-c", "printf '0\\n'; printf 'diagnostic warning\\n' >&2"}, Private: true})
+	if err != nil || string(data) != "0\n" || out.Len() != 0 {
+		t.Fatalf("diagnostic polluted query: %q %v", data, err)
+	}
+	h, runner, _, a := fixture(t)
+	_, err = h.asUser(a, map[string]string{"APP_ENV": "production"}, true, "git", "status", "--porcelain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(runner.calls[0].Args, " "), "env -i HOME=") {
+		t.Fatal("app command inherited root environment")
+	}
+}
+
+func TestProjectEnvSymlinkCannotChangeOutsidePermissions(t *testing.T) {
+	h, _, _, a := fixture(t)
+	outside := filepath.Join(h.root, "outside")
+	if err := os.WriteFile(outside, []byte("unchanged"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(a.Directory, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(a.Directory, ".env")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Register(a, nil); err == nil {
+		t.Fatal("accepted secret symlink")
+	}
+	info, err := os.Stat(outside)
+	if err != nil || info.Mode().Perm() != 0644 {
+		t.Fatal("changed symlink target")
+	}
+}
+
 func TestRoadRunnerDigestAndArchiveEntryValidation(t *testing.T) {
 	makeArchive := func(name string, kind byte) []byte {
 		var b bytes.Buffer

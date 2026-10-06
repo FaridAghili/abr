@@ -164,7 +164,7 @@ func (h Host) permissions(a config.App) error {
 		h.say("Would secure a regular project .env to mode 0600")
 	} else {
 		// Use a file descriptor and refuse symlinks before changing secret permissions.
-		f, err := os.OpenFile(h.path(filepath.Join(a.Directory, ".env")), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+		f, err := os.OpenFile(h.path(filepath.Join(a.Directory, ".env")), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 		if err == nil {
 			info, statErr := f.Stat()
 			if statErr != nil || !info.Mode().IsRegular() {

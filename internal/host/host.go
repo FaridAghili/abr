@@ -39,7 +39,11 @@ func (r ExecRunner) Run(c Command) ([]byte, error) {
 	if !c.Private && r.Output != nil {
 		w = io.MultiWriter(w, r.Output)
 	}
-	cmd.Stdout, cmd.Stderr = w, w
+	cmd.Stdout = w
+	cmd.Stderr = io.Discard
+	if !c.Private && r.Output != nil {
+		cmd.Stderr = r.Output
+	}
 	if err := cmd.Run(); err != nil {
 		// Output is streamed/logged for ordinary commands; never put it in errors.
 		return output.Bytes(), fmt.Errorf("%s failed: %w", c.Name, err)
