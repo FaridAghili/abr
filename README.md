@@ -286,8 +286,9 @@ packages it with `templates/`, the example config, and README, generates SHA256,
 and uploads the archive/checksum. It runs on pushes, pull requests, and manual
 runs, using the Go version in `go.mod` and official supported actions.
 A separate disposable Ubuntu job runs setup (without enabling UFW), deploys
-sample Laravel/FPM and both SSR/SPA Nuxt apps, checks local HTTPS and MySQL, and
-exercises restart/disable/remove. It uses localhost certificates and never
+sample Laravel/FPM, shared RoadRunner/Octane, and both SSR/SPA Nuxt apps, checks
+local HTTPS and MySQL, and exercises restart/disable/remove and re-registration.
+It uses localhost certificates and never
 connects to the production server. The same destructive fixture script is
 `scripts/host-smoke.sh`; outside Actions it requires `SITES_HOST_TEST=1` explicitly.
 

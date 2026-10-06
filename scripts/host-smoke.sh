@@ -9,6 +9,11 @@ sites_test_binary=$(realpath "${1:-bin/sites}")
 sites_ci() {
   sudo "$sites_test_binary" --config /etc/sites-ci/config.toml --state-dir /var/lib/sites-ci "$@"
 }
+fixture_https() {
+  # Local Caddy certificates can finish issuance shortly after configuration reload.
+  curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 1 \
+    --max-time 10 --insecure --resolve "$1:443:127.0.0.1" "https://$1/" "${@:2}"
+}
 
 # GitHub runner images ship MySQL with this documented test password and other
 # inactive web servers. These adjustments belong only to the disposable fixture.
@@ -48,7 +53,7 @@ fixture_git /srv/apps/fixture-php
 sites_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --scheduler
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/sites-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 sites_ci deploy fixture-php --no-pull
-curl --fail --silent --show-error --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/ | rg 'Laravel fixture database=1'
+fixture_https fixture-php.localhost | rg 'Laravel fixture database=1'
 sudo test -S /run/php/sites-fixture-php.sock
 sudo test "$(stat -c '%a' /srv/apps/fixture-php/.env)" = 600
 sudo test "$(stat -c '%a' /var/lib/sites-ci/credentials/fixture-php.env)" = 600
@@ -65,7 +70,7 @@ fixture_git /srv/apps/fixture-octane
 sites_ci register --name fixture-octane --dir /srv/apps/fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-octane/.env.example > /srv/apps/fixture-octane/.env; cat /var/lib/sites-ci/credentials/fixture-octane.env >> /srv/apps/fixture-octane/.env; chmod 600 /srv/apps/fixture-octane/.env'
 sites_ci deploy fixture-octane --no-pull
-curl --fail --silent --show-error --insecure --resolve fixture-octane.localhost:443:127.0.0.1 https://fixture-octane.localhost/ | rg 'Laravel fixture database=1'
+fixture_https fixture-octane.localhost | rg 'Laravel fixture database=1'
 sudo test ! -f /srv/apps/fixture-octane/rr
 sudo test -x /usr/local/bin/rr
 sites_ci restart fixture-octane web
@@ -84,7 +89,7 @@ JSON
   fixture_git "$dir"
   sites_ci register --name "$app" --dir "$dir" --type nuxt --domain "$app.localhost"
   sites_ci deploy "$app" --no-pull
-  curl --fail --silent --show-error --insecure --resolve "$app.localhost:443:127.0.0.1" "https://$app.localhost/" -o "$fixture_source/$app.html"
+  fixture_https "$app.localhost" -o "$fixture_source/$app.html"
   if [[ $rendering == true ]]; then rg 'Sites Nuxt fixture' "$fixture_source/$app.html"; else rg '__nuxt' "$fixture_source/$app.html"; fi
   sites_ci restart "$app" web
 done
@@ -97,5 +102,10 @@ sudo test -f /srv/apps/fixture-php/.env
 sudo test -f /var/lib/sites-ci/credentials/fixture-php.env
 sudo test "$(stat -c '%U' /srv/apps/fixture-php/.env)" = root
 if getent passwd sites-fixture-php; then echo 'Managed user was not removed' >&2; exit 1; fi
+# Reuse retained data/credentials and verify a repeated deployment stays clean.
+sites_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --scheduler
+sites_ci deploy fixture-php --no-pull
+fixture_https fixture-php.localhost | rg 'Laravel fixture database=1'
+sites_ci remove fixture-php
 sites_ci doctor
 echo 'Disposable host smoke test passed.'
