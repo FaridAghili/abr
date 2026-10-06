@@ -73,8 +73,8 @@ jobs:
       - name: Host diagnostics on failure
         if: failure()
         run: |
-          sudo systemctl --no-pager --full status caddy php8.5-fpm mysql || true
-          sudo journalctl --no-pager -n 100 -u caddy -u php8.5-fpm -u sites-fixture-octane-octane.service || true
+          sudo systemctl --no-pager --full status caddy php8.5-fpm mysql sites-fixture-php-scheduler.service sites-fixture-php-scheduler.timer sites-fixture-octane-octane.service || true
+          sudo journalctl --no-pager -b -n 300 || true
           if getent passwd sites-fixture-php >/dev/null; then
             sudo runuser --user sites-fixture-php -- env -i HOME=/var/lib/sites-users/sites-fixture-php PATH=/usr/bin:/bin git -C /srv/apps/fixture-php status --porcelain || true
           fi

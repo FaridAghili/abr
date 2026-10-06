@@ -307,6 +307,17 @@ func (h Host) apply(a config.App, r ports.Registry, p services.Plan) (result err
 	if err := h.command("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
+	var unitFiles []string
+	for _, f := range p.Files {
+		if strings.HasSuffix(f.Path, ".service") || strings.HasSuffix(f.Path, ".timer") {
+			unitFiles = append(unitFiles, f.Path)
+		}
+	}
+	if len(unitFiles) > 0 {
+		if err := h.command("systemd-analyze", append([]string{"verify"}, unitFiles...)...); err != nil {
+			return err
+		}
+	}
 	if old.FPM || p.FPM {
 		if err := h.command("/usr/sbin/php-fpm"+services.PHPVersion, "--test"); err != nil {
 			return err
