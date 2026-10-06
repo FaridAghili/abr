@@ -102,6 +102,14 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 		t, err := template.New(source).Option("missingkey=error").Funcs(template.FuncMap{
 			"quote": strconv.Quote,
 			"unit":  func(s string) string { return strconv.Quote(strings.ReplaceAll(s, "%", "%%")) },
+			"unitPath": func(s string) (string, error) {
+				// WorkingDirectory/EnvironmentFile are literal paths, not shell
+				// words. Quotes are part of the filename for these directives.
+				if strings.TrimSpace(s) != s || strings.ContainsAny(s, "\\\x00\r\n") {
+					return "", fmt.Errorf("unsupported characters in systemd path")
+				}
+				return strings.ReplaceAll(s, "%", "%%"), nil
+			},
 		}).ParseFiles(filepath.Join(templates, source))
 		if err != nil {
 			return fmt.Errorf("template %s: %w", source, err)

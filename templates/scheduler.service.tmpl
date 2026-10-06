@@ -6,6 +6,6 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 UMask=0027
 Type=oneshot
 User={{.User}}
-WorkingDirectory={{unit .Directory}}
-EnvironmentFile={{unit .ManagedEnvironmentFile}}
+WorkingDirectory={{unitPath .Directory}}
+EnvironmentFile={{unitPath .ManagedEnvironmentFile}}
 ExecStart={{unit .PHPBinary}} artisan schedule:run --no-interaction

@@ -35,7 +35,7 @@ func TestRenderAllComponents(t *testing.T) {
 				}
 			}
 		}
-		if strings.HasSuffix(f.Path, "octane.service") && (!strings.Contains(text, `WorkingDirectory="/srv/apps/my app%%"`) || !strings.Contains(text, "--rpc-host=127.0.0.1 --rpc-port=10001")) {
+		if strings.HasSuffix(f.Path, "octane.service") && (!strings.Contains(text, "WorkingDirectory=/srv/apps/my app%%\n") || !strings.Contains(text, "EnvironmentFile=/var/lib/sites/env/app.env\n") || !strings.Contains(text, "--rpc-host=127.0.0.1 --rpc-port=10001")) {
 			t.Fatal(text)
 		}
 	}

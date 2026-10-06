@@ -6,8 +6,8 @@ After=network.target
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 UMask=0027
 User={{.User}}
-WorkingDirectory={{unit .Directory}}
-EnvironmentFile={{unit .ManagedEnvironmentFile}}
+WorkingDirectory={{unitPath .Directory}}
+EnvironmentFile={{unitPath .ManagedEnvironmentFile}}
 ExecStart={{unit .PHPBinary}} artisan octane:start --server=roadrunner --host=127.0.0.1 --port={{.OctaneHTTPPort}} --rpc-host=127.0.0.1 --rpc-port={{.RoadRunnerRPCPort}} --workers={{.OctaneWorkers}} --no-interaction
 Restart=on-failure
 RestartSec=5

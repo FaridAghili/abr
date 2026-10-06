@@ -6,8 +6,8 @@ After=network.target
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 UMask=0027
 User={{.User}}
-WorkingDirectory={{unit .Directory}}
-EnvironmentFile={{unit .ManagedEnvironmentFile}}
+WorkingDirectory={{unitPath .Directory}}
+EnvironmentFile={{unitPath .ManagedEnvironmentFile}}
 Environment=NITRO_HOST=127.0.0.1
 Environment=NITRO_PORT={{.NuxtHTTPPort}}
 ExecStart={{unit .NodeBinary}} --env-file-if-exists=.env .output/server/index.mjs
