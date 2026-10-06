@@ -95,5 +95,6 @@ Run gofmt, go vet, go test, race tests and the CGO-free Linux AMD64 build locall
 Tests use temporary config/state and mocked host commands; no production access.
 GitHub Actions packages executable/templates/example config and SHA256 artifacts
 on pushes, pull requests and manual runs. A separate disposable Ubuntu job tests
-actual setup, Laravel/FPM/MySQL, SSR and SPA Nuxt, direct local HTTPS, and lifecycle.
+actual setup, Laravel/FPM/MySQL, shared RoadRunner/Octane, SSR and SPA Nuxt,
+direct local HTTPS, and lifecycle.
 Verify that job succeeds before using the implementation on a real VPS.

@@ -573,6 +573,11 @@ func (h Host) removeUser(a config.App) error {
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 			return err
 		}
+		// Linux can reuse a deleted UID. Retained secrets must not become
+		// readable by the next application assigned that UID.
+		if err := h.command("chown", "-hR", "root:root", "--", a.Directory, record.Home); err != nil {
+			return err
+		}
 		if err := h.command("userdel", a.User); err != nil {
 			return err
 		}

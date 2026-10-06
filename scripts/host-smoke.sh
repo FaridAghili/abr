@@ -94,6 +94,7 @@ sites_ci remove fixture-octane
 sites_ci remove fixture-php
 sudo test -f /srv/apps/fixture-php/.env
 sudo test -f /var/lib/sites-ci/credentials/fixture-php.env
+sudo test "$(stat -c '%U' /srv/apps/fixture-php/.env)" = root
 if getent passwd sites-fixture-php; then echo 'Managed user was not removed' >&2; exit 1; fi
 sites_ci doctor
 echo 'Disposable host smoke test passed.'

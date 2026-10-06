@@ -119,6 +119,11 @@ func (h Host) ensureUser(a config.App) error {
 	if !exists || len(parts) != 7 {
 		return fmt.Errorf("could not verify newly created user %s", a.User)
 	}
+	// Removal retains the home as root-owned data. Re-registration must make
+	// those caches and deploy credentials accessible to the new managed UID.
+	if err := h.command("chown", "-hR", a.User+":"+a.User, "--", record.Home); err != nil {
+		return err
+	}
 	if err := h.command("chmod", "700", "--", record.Home); err != nil {
 		return err
 	}

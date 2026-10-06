@@ -208,7 +208,8 @@ ports are free and the owned user has no remaining processes, removes managed
 configuration and the Ubuntu account, then unregisters and releases ports.
 It preserves the clone, `.env`, uploads, home directory, MySQL accounts/databases,
 and credentials. Draining FPM requests can delay removal; retry once they finish.
-Removed files retain their old numeric ownership until deliberately reassigned.
+Retained project/home files become root-owned before account deletion, so a
+reused Linux UID cannot read their secrets. Registration restores ownership.
 An interrupted removal may leave conservative orphan reservations; errors are
 reported and `doctor` detects them. Accounts/files with changed identities or
 unmanaged content are refused.

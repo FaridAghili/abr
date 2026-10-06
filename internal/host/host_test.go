@@ -309,7 +309,7 @@ func TestRemovalStopsBeforeUserDeletionAndPreservesData(t *testing.T) {
 			t.Fatalf("data removed: %s", path)
 		}
 	}
-	stop, del := -1, -1
+	stop, secure, del := -1, -1, -1
 	for i, c := range r.calls {
 		if c.Name == "systemctl" && len(c.Args) > 0 && c.Args[0] == "stop" {
 			stop = i
@@ -320,9 +320,12 @@ func TestRemovalStopsBeforeUserDeletionAndPreservesData(t *testing.T) {
 				t.Fatal("user files would be deleted")
 			}
 		}
+		if c.Name == "chown" && strings.Contains(strings.Join(c.Args, " "), "root:root") {
+			secure = i
+		}
 	}
-	if stop < 0 || del <= stop {
-		t.Fatal("user deleted before services stopped")
+	if stop < 0 || secure <= stop || del <= secure {
+		t.Fatal("user deleted before services stopped and retained files secured")
 	}
 	c, err = config.Load(h.Manager.ConfigPath)
 	if err != nil || len(c.Apps) != 0 {
