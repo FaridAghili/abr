@@ -115,6 +115,18 @@ func (h Host) configureRedis() (result error) {
 	if err := h.command("chmod", "0750", "/etc/redis"); err != nil {
 		return err
 	}
+	if !h.DryRun {
+		// Check after adopting the directory so redis cannot replace the file
+		// between this check and the read. A symlink could expose root secrets
+		// when the old contents are saved with the service-readable group.
+		info, err := os.Lstat(h.path(path))
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("Redis configuration must be a regular file without symlinks: %s", path)
+		}
+	}
 	old, err := h.read(path)
 	if err != nil && !h.DryRun {
 		return err

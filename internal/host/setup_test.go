@@ -306,6 +306,40 @@ func TestRedisRejectsSymlinkBeforeAdoptingDirectory(t *testing.T) {
 	}
 }
 
+func TestRedisRejectsSymlinkedConfigWithoutCopyingItsContents(t *testing.T) {
+	h, r := setupFixture(t)
+	private := []byte("private file outside Redis configuration\n")
+	if err := h.write("/private/secret", private, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(h.path("/etc/redis"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(h.path("/private/secret"), h.path("/etc/redis/redis.conf")); err != nil {
+		t.Fatal(err)
+	}
+	r.calls = nil
+	if err := h.configureRedis(); err == nil {
+		t.Fatal("accepted symlinked Redis configuration")
+	}
+	for _, c := range r.calls {
+		if c.Name != "chown" && c.Name != "chmod" {
+			t.Fatal("changed the service before rejecting a symlinked file")
+		}
+	}
+	info, err := os.Lstat(h.path("/etc/redis/redis.conf"))
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("replaced the symlink with service-readable private contents")
+	}
+	got, err := h.read("/private/secret")
+	if err != nil || !bytes.Equal(got, private) {
+		t.Fatal("modified private file")
+	}
+	if _, err := h.read("/etc/redis/abr.conf"); !os.IsNotExist(err) {
+		t.Fatal("installed configuration through an unsafe existing file")
+	}
+}
+
 func TestSetupRejectsMissingDefaultsAndDownloadCorruption(t *testing.T) {
 	if err := requireSetupTemplates(fstest.MapFS{}); err == nil {
 		t.Fatal("incomplete defaults accepted")
