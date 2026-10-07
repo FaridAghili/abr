@@ -58,7 +58,9 @@ composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel
   cd "$fixture_source/laravel"
   composer require laravel/octane spiral/roadrunner-cli spiral/roadrunner-http --no-update --no-scripts --no-interaction
   composer update --no-install --no-scripts --no-interaction
-  npm install --package-lock-only --ignore-scripts
+  # npm 12's lock-only resolution incorrectly blocks bundled registry tarballs.
+  # This opt-in is confined to generating our disposable fixture lockfile.
+  npm install --package-lock-only --ignore-scripts --allow-remote=all
 )
 sudo cp -R "$fixture_source/laravel" /srv/apps/fixture-php
 sudo tee /srv/apps/fixture-php/routes/web.php >/dev/null <<'PHP'
@@ -117,7 +119,7 @@ JSON
   printf 'export default defineNuxtConfig({ssr: %s, devtools: {enabled: false}})\n' "$rendering" | sudo tee "$dir/nuxt.config.ts" >/dev/null
   printf '<template><h1>Sites Nuxt fixture</h1></template>\n' | sudo tee "$dir/app/app.vue" >/dev/null
   printf 'node_modules\n.output\n.nuxt\n.env\n' | sudo tee "$dir/.gitignore" >/dev/null
-  sudo npm --prefix "$dir" install --package-lock-only --ignore-scripts
+  sudo npm --prefix "$dir" install --package-lock-only --ignore-scripts --allow-remote=all
   fixture_git "$dir"
   sites_ci register --name "$app" --dir "$dir" --type nuxt --domain "$app.localhost"
   sites_ci deploy "$app" --no-pull
