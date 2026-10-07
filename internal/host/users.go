@@ -162,7 +162,16 @@ func (h Host) ensureUser(a config.App) error {
 	if err := os.MkdirAll(h.path("/var/lib/abr-users"), 0755); err != nil {
 		return err
 	}
-	if err := h.command("useradd", "--system", "--user-group", "--create-home", "--home-dir", record.Home, "--shell", "/usr/sbin/nologin", "--comment", "abr-"+a.Name, a.User); err != nil {
+	homeOption := "--create-home"
+	if info, err := os.Lstat(h.path(record.Home)); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("managed home must be a directory without symlinks: %s", record.Home)
+		}
+		homeOption = "--no-create-home"
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := h.command("useradd", "--system", "--user-group", homeOption, "--home-dir", record.Home, "--shell", "/usr/sbin/nologin", "--comment", "abr-"+a.Name, a.User); err != nil {
 		return err
 	}
 	entry, exists, err = h.passwd(a.User)

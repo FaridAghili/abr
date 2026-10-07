@@ -466,6 +466,39 @@ func TestCaddyImportRecognizesActiveLinesAndRestoresOnFailure(t *testing.T) {
 	}
 }
 
+func TestCaddyFormattingExistingImportRestoresOnValidationFailure(t *testing.T) {
+	h, r := setupFixture(t)
+	const path = "/etc/caddy/Caddyfile"
+	original := []byte("# Custom configuration\n:80 {\n    respond 404\n}\nimport /etc/caddy/abr.d/abr-*.caddy\n")
+	if err := h.write(path, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+	formatted := false
+	r.fail = func(c Command) error {
+		if c.Name != "caddy" {
+			return nil
+		}
+		if c.Args[0] == "fmt" {
+			formatted = true
+			return os.WriteFile(h.path(path), bytes.ReplaceAll(original, []byte("    "), []byte("\t")), 0644)
+		}
+		if c.Args[0] == "validate" {
+			if !formatted {
+				t.Fatal("validated before formatting")
+			}
+			return testExit(1)
+		}
+		return nil
+	}
+	if err := h.configureCaddyImport(); err == nil {
+		t.Fatal("invalid formatted configuration accepted")
+	}
+	data, err := h.read(path)
+	if err != nil || !bytes.Equal(data, original) {
+		t.Fatal("failed validation did not restore custom configuration")
+	}
+}
+
 func TestRedisCommentedIncludeDoesNotSkipHardening(t *testing.T) {
 	h, _ := setupFixture(t)
 	if err := h.write("/etc/redis/redis.conf", []byte("# include /etc/redis/abr.conf\n"), 0640); err != nil {

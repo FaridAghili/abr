@@ -262,13 +262,28 @@ func (h Host) configureCaddyImport() error {
 			return err
 		}
 	}
+	if err := h.formatCaddy(path); err != nil {
+		if !h.DryRun {
+			return errors.Join(err, h.write(path, old, 0644))
+		}
+		return err
+	}
 	if err := h.command("caddy", "validate", "--config", path, "--adapter", "caddyfile"); err != nil {
-		if changed && !h.DryRun {
+		if !h.DryRun {
 			return errors.Join(err, h.write(path, old, 0644))
 		}
 		return err
 	}
 	return nil
+}
+
+func (h Host) formatCaddy(path string) error {
+	if !h.DryRun {
+		if err := h.trustedFile(h.path(path)); err != nil {
+			return err
+		}
+	}
+	return h.command("caddy", "fmt", "--overwrite", path)
 }
 
 // App users must not be able to reconfigure every site through the default

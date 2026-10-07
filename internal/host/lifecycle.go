@@ -310,6 +310,11 @@ func (h Host) apply(a config.App, r ports.Registry, p services.Plan) (result err
 		if err := h.write(f.Path, f.Data, f.Mode); err != nil {
 			return err
 		}
+		if strings.HasSuffix(f.Path, ".caddy") {
+			if err := h.formatCaddy(f.Path); err != nil {
+				return err
+			}
+		}
 	}
 	for _, path := range old.Files {
 		if !slices.Contains(next.Files, path) {
@@ -328,7 +333,8 @@ func (h Host) apply(a config.App, r ports.Registry, p services.Plan) (result err
 		}
 	}
 	if len(unitFiles) > 0 {
-		if err := h.command("systemd-analyze", append([]string{"verify"}, unitFiles...)...); err != nil {
+		// Verify our units strictly without loading unrelated host dependencies.
+		if err := h.command("systemd-analyze", append([]string{"verify", "--recursive-errors=no"}, unitFiles...)...); err != nil {
 			return err
 		}
 	}

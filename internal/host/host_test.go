@@ -261,44 +261,48 @@ func TestRefuseExistingAccountAndDatabase(t *testing.T) {
 }
 
 func TestValidationFailureRestoresFilesAndManifest(t *testing.T) {
-	h, r, _, a := fixture(t)
-	registry, err := h.Register(a, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := services.Render(a, registry, h.TemplatesDir, h.Manager.StateDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	old := manifest{Version: 1, App: a.Name, User: a.User, FPM: true, Enabled: true}
-	for _, f := range p.Files {
-		old.Files = append(old.Files, f.Path)
-		if err := h.write(f.Path, f.Data, f.Mode); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := h.saveManifest(old); err != nil {
-		t.Fatal(err)
-	}
-	r.fail = func(c Command) error {
-		if c.Name == "caddy" && c.Args[0] == "validate" {
-			return testExit(1)
-		}
-		return nil
-	}
-	p.Files[1].Data = []byte(services.Marker + "invalid caddy configuration")
-	if err := h.apply(a, registry, p); err == nil {
-		t.Fatal("configuration failure ignored")
-	}
-	for _, f := range p.Files {
-		data, _ := h.read(f.Path)
-		if bytes.Equal(data, []byte(services.Marker+"invalid caddy configuration")) {
-			t.Fatal("failed configuration retained")
-		}
-	}
-	m, _, err := h.loadManifest(a)
-	if err != nil || !m.Enabled {
-		t.Fatalf("old manifest not restored: %+v %v", m, err)
+	for _, verb := range []string{"fmt", "validate"} {
+		t.Run(verb, func(t *testing.T) {
+			h, r, _, a := fixture(t)
+			registry, err := h.Register(a, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := services.Render(a, registry, h.TemplatesDir, h.Manager.StateDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old := manifest{Version: 1, App: a.Name, User: a.User, FPM: true, Enabled: true}
+			for _, f := range p.Files {
+				old.Files = append(old.Files, f.Path)
+				if err := h.write(f.Path, f.Data, f.Mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := h.saveManifest(old); err != nil {
+				t.Fatal(err)
+			}
+			r.fail = func(c Command) error {
+				if c.Name == "caddy" && c.Args[0] == verb {
+					return testExit(1)
+				}
+				return nil
+			}
+			p.Files[1].Data = []byte(services.Marker + "invalid caddy configuration")
+			if err := h.apply(a, registry, p); err == nil {
+				t.Fatal("configuration failure ignored")
+			}
+			for _, f := range p.Files {
+				data, _ := h.read(f.Path)
+				if bytes.Equal(data, []byte(services.Marker+"invalid caddy configuration")) {
+					t.Fatal("failed configuration retained")
+				}
+			}
+			m, _, err := h.loadManifest(a)
+			if err != nil || !m.Enabled {
+				t.Fatalf("old manifest not restored: %+v %v", m, err)
+			}
+		})
 	}
 }
 

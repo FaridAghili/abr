@@ -24,16 +24,34 @@ fixture_denied() {
     echo "Expected access refusal for $1" >&2; exit 1
   fi
 }
+fixture_refused() {
+  local expected=$1
+  shift
+  local output="$abr_binary_directory/expected-refusal.log"
+  if abr_ci "$@" > "$output" 2>&1; then
+    cat "$output" >&2
+    echo "Expected refusal: $expected" >&2; exit 1
+  fi
+  if ! grep -Fq "$expected" "$output"; then
+    cat "$output" >&2
+    echo "Unexpected failure instead of: $expected" >&2; exit 1
+  fi
+  echo "Verified refusal: $expected"
+}
+fixture_caddy_format() {
+  # fmt exits nonzero if formatting differs; never rewrite configs in this check.
+  sudo caddy fmt "$1" > /dev/null
+}
 fixture_https() {
   # Local Caddy certificates can finish issuance shortly after configuration reload.
   curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 1 \
     --max-time 10 --insecure --resolve "$1:443:127.0.0.1" "https://$1/" "${@:2}"
 }
 fixture_security_headers() {
-  tr -d '\r' < "$1" | grep -Fix 'Strict-Transport-Security: max-age=15768000'
-  tr -d '\r' < "$1" | grep -Fix 'X-Frame-Options: SAMEORIGIN'
-  tr -d '\r' < "$1" | grep -Fix 'X-Content-Type-Options: nosniff'
-  tr -d '\r' < "$1" | grep -Fix 'Referrer-Policy: strict-origin-when-cross-origin'
+  tr -d '\r' < "$1" | grep -Fix 'Strict-Transport-Security: max-age=15768000' > /dev/null
+  tr -d '\r' < "$1" | grep -Fix 'X-Frame-Options: SAMEORIGIN' > /dev/null
+  tr -d '\r' < "$1" | grep -Fix 'X-Content-Type-Options: nosniff' > /dev/null
+  tr -d '\r' < "$1" | grep -Fix 'Referrer-Policy: strict-origin-when-cross-origin' > /dev/null
   if grep -Ei '^(server|x-powered-by):' "$1"; then echo 'Identifying response header leaked' >&2; exit 1; fi
 }
 fixture_missing_assets() {
@@ -97,6 +115,7 @@ sudo systemctl start redis-server
 sudo redis-cli SET abr-fixture-persist survives-setup >/dev/null
 sudo redis-cli SAVE >/dev/null
 abr_ci setup --no-firewall --ssh-port 22 --admin-user root
+fixture_caddy_format /etc/caddy/Caddyfile
 for repository in caddy node; do
   repository_key="/etc/apt/keyrings/abr/$repository.gpg"
   test "$(stat -c '%u:%g:%a' /etc/apt/keyrings/abr)" = 0:0:755
@@ -130,9 +149,10 @@ fixture_denied _apt touch /opt/abr/node-tools/current/.abr-ci-write-probe
 test "$(stat -Lc '%u:%g:%a' /opt/abr/node-tools/current)" = 0:0:755
 test ! -e /opt/abr/node-tools/current/.home
 sudo systemctl start ssh.service
-# The host key exemption is only for this disposable localhost fixture.
+# Trust only this disposable fixture's host key, with normal strict checking.
+sudo sh -c 'printf "127.0.0.1 "; cat /etc/ssh/ssh_host_ed25519_key.pub' > "$abr_binary_directory/known_hosts"
 sudo ssh -F /dev/null -i /root/.ssh/abr-fixture-ssh -o IdentitiesOnly=yes \
-  -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$abr_binary_directory/known_hosts" \
   -o ConnectTimeout=10 root@127.0.0.1 true
 sudo /usr/sbin/sshd -T | grep -Fx 'passwordauthentication no'
 sudo /usr/sbin/sshd -T | grep -Fx 'authenticationmethods publickey'
@@ -160,7 +180,7 @@ abr_ci git setup
 # SSH account. A disposable-only shim rewrites just this fixture URL to a local
 # bare repository, while preserving Abr's real runuser/setpriv invocation.
 test ! -e /usr/local/bin/git
-sudo /usr/bin/git init --bare /srv/abr-clone-fixture
+sudo /usr/bin/git init --bare --initial-branch=main /srv/abr-clone-fixture
 sudo chown -hR _apt /srv/abr-clone-fixture
 sudo chmod -R a+rX /srv/abr-clone-fixture
 cat > "$abr_binary_directory/git-fixture" <<'SH'
@@ -194,9 +214,12 @@ composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel
   cd "$fixture_source/laravel"
   composer require laravel/octane spiral/roadrunner-cli spiral/roadrunner-http --no-update --no-scripts --no-interaction
   composer update --no-install --no-scripts --no-interaction
+  # The skeleton pins concurrently's vulnerable shell-quote dependency.
+  npm pkg set overrides.shell-quote=1.12.0
   # npm 12's lock-only resolution incorrectly blocks bundled registry tarballs.
   # This opt-in is confined to generating our disposable fixture lockfile.
-  npm install --package-lock-only --ignore-scripts --allow-remote=all
+  npm install --package-lock-only --ignore-scripts --allow-remote=all --no-fund
+  npm audit --audit-level=critical
   cat > abr-fixture-privileges.php <<'PHP'
 <?php
 if (posix_geteuid() === 0 || !preg_match('/^NoNewPrivs:\s+1$/m', file_get_contents('/proc/self/status'))) {
@@ -248,22 +271,19 @@ sudo mysql --protocol=socket --user=root <<'SQL'
 CREATE DATABASE fixtureXphp;
 SQL
 printf 'USE fixtureXphp; CREATE TABLE forbidden (id INT);\n' | sudo tee /var/lib/abr-ci/foreign.sql >/dev/null
-if abr_ci database import fixture-php /var/lib/abr-ci/foreign.sql --yes; then
-  echo 'Wildcard database grant exposed another database' >&2; exit 1
-fi
+fixture_refused 'import failed; database may be partially changed' database import fixture-php /var/lib/abr-ci/foreign.sql --yes
 # Provision a new account with partial revokes enabled and verify its scope.
 sudo mysql --protocol=socket --user=root -e 'SET GLOBAL partial_revokes=ON;'
 sudo mkdir -p /srv/apps/fixture-literal/public /srv/apps/fixture-literal/storage/app/public
 abr_ci register --name fixture-literal --type laravel --domain fixture-literal.localhost
 sudo mysql --protocol=socket --user=root -e 'CREATE DATABASE fixtureXliteral;'
 printf 'USE fixtureXliteral; CREATE TABLE forbidden (id INT);\n' | sudo tee /var/lib/abr-ci/foreign-literal.sql >/dev/null
-if abr_ci database import fixture-literal /var/lib/abr-ci/foreign-literal.sql --yes; then
-  echo 'Literal grant exposed another database' >&2; exit 1
-fi
+fixture_refused 'import failed; database may be partially changed' database import fixture-literal /var/lib/abr-ci/foreign-literal.sql --yes
 abr_ci remove fixture-literal
 sudo mysql --protocol=socket --user=root -e 'SET GLOBAL partial_revokes=OFF;'
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/abr-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 abr_ci deploy fixture-php --no-pull
+fixture_caddy_format /etc/caddy/abr.d/abr-fixture-php.caddy
 fixture_denied abr-fixture-php sh -c 'printf overwritten >> /var/lib/abr-ci/composer/auth.json'
 fixture_denied nobody cat /var/lib/abr-ci/composer/auth.json
 sudo grep -Fx 'DB_DATABASE=fixture_php' /var/lib/abr-ci/credentials/fixture-php.env
@@ -313,9 +333,9 @@ abr_ci database import fixture-php "$sql_dump" --yes
 sudo mysql --protocol=socket --user=root --batch --skip-column-names fixture_php -e 'SELECT id FROM abr_backup_check;' | grep -Fx 42
 # SQL import cannot escape to another database or execute a root shell command.
 printf 'CREATE DATABASE forbidden_database;\n' | sudo tee /var/lib/abr-ci/forbidden.sql >/dev/null
-if abr_ci database import fixture-php /var/lib/abr-ci/forbidden.sql --yes; then echo 'Unscoped SQL was allowed' >&2; exit 1; fi
+fixture_refused 'import failed; database may be partially changed' database import fixture-php /var/lib/abr-ci/forbidden.sql --yes
 printf '\\! touch /var/lib/abr-ci/import-shell-executed\n' | sudo tee /var/lib/abr-ci/shell.sql >/dev/null
-if abr_ci database import fixture-php /var/lib/abr-ci/shell.sql --yes; then echo 'SQL client shell command was allowed' >&2; exit 1; fi
+fixture_refused 'import failed; database may be partially changed' database import fixture-php /var/lib/abr-ci/shell.sql --yes
 sudo test ! -e /var/lib/abr-ci/import-shell-executed
 abr_ci enable fixture-php
 fixture_https fixture-php.localhost --dump-header "$fixture_source/headers" >/dev/null
@@ -383,6 +403,15 @@ sudo test "$(sudo find /var/lib/abr-ci/selected-backups -name '*.sql' | wc -l)" 
 abr_ci database backup --all --output-dir /var/lib/abr-ci/all-backups
 sudo test "$(sudo find /var/lib/abr-ci/all-backups -name '*.sql' | wc -l)" = 2
 
+nuxt_fixture="$fixture_source/nuxt"
+mkdir -p "$nuxt_fixture"
+cat > "$nuxt_fixture/package.json" <<'JSON'
+{"name":"abr-nuxt-fixture","private":true,"type":"module","scripts":{"prebuild":"node abr-fixture-privileges.cjs","build":"nuxt build","postinstall":"nuxt prepare"},"dependencies":{"nuxt":"4.6.0","vue":"3.5.43","vue-router":"5.4.0"},"overrides":{"simple-git":"4.0.2"}}
+JSON
+# Resolve/audit the identical dependencies once for both rendering modes.
+npm --prefix "$nuxt_fixture" install --package-lock-only --ignore-scripts --allow-remote=all --no-fund
+# braces/node-forge have no published patches; keep their high findings visible.
+npm --prefix "$nuxt_fixture" audit --audit-level=critical
 for rendering in true false; do
   if [[ $rendering == true ]]; then app=fixture-ssr; else app=fixture-spa; fi
   dir=/srv/apps/$app
@@ -394,25 +423,23 @@ for rendering in true false; do
   fi
   nuxt_source="$fixture_source/$app"
   mkdir -p "$nuxt_source/app"
-  tee "$nuxt_source/package.json" >/dev/null <<'JSON'
-{"name":"abr-nuxt-fixture","private":true,"type":"module","scripts":{"prebuild":"node abr-fixture-privileges.cjs","build":"nuxt build","postinstall":"nuxt prepare"},"dependencies":{"nuxt":"4.5.2","vue":"3.5.43","vue-router":"5.3.1"}}
-JSON
+  cp "$nuxt_fixture/package.json" "$nuxt_fixture/package-lock.json" "$nuxt_source/"
   printf 'export default defineNuxtConfig({ssr: %s, devtools: {enabled: false}})\n' "$rendering" | tee "$nuxt_source/nuxt.config.ts" >/dev/null
   printf '<template><h1>Abr Nuxt fixture</h1></template>\n' | tee "$nuxt_source/app/app.vue" >/dev/null
   printf 'node_modules\n.output\n.nuxt\n.env\n' | tee "$nuxt_source/.gitignore" >/dev/null
   cp "$fixture_source/laravel/abr-fixture-privileges.cjs" "$nuxt_source/"
-  npm --prefix "$nuxt_source" install --package-lock-only --ignore-scripts --allow-remote=all
   sudo cp -R "$nuxt_source" "$dir"
   fixture_git "$dir"
   abr_ci register --name "$app" --type nuxt --domain "$app_domain"
   abr_ci deploy "$app" --no-pull
+  fixture_caddy_format "/etc/caddy/abr.d/abr-$app.caddy"
   test "$(sudo systemctl show "abr-$app-nuxt.service" --property=NoNewPrivileges --value)" = yes
   nuxt_pid=$(sudo systemctl show "abr-$app-nuxt.service" --property=MainPID --value)
   sudo awk '/^NoNewPrivs:/ {if ($2 != 1) exit 1; found=1} END {if (!found) exit 1}' "/proc/$nuxt_pid/status"
   fixture_redirect "$app_domain" "$app_domain" http
   fixture_https "$app_domain" -D "$fixture_source/nuxt-page-headers" -o "$fixture_source/$app.html"
   fixture_security_headers "$fixture_source/nuxt-page-headers"
-  if [[ $rendering == true ]]; then grep -F 'Abr Nuxt fixture' "$fixture_source/$app.html"; else grep -F '__nuxt' "$fixture_source/$app.html"; fi
+  if [[ $rendering == true ]]; then grep -Fq 'Abr Nuxt fixture' "$fixture_source/$app.html"; else grep -Fq '__nuxt' "$fixture_source/$app.html"; fi
   nuxt_asset=$(sudo find "$dir/.output/public/_nuxt" -type f -name '*.js' -size +511c -print -quit)
   sudo test -f "$nuxt_asset.br"
   nuxt_uri=${nuxt_asset#"$dir/.output/public"}
@@ -440,7 +467,7 @@ abr_ci remove fixture-spa
 abr_ci remove fixture-octane
 removed_git_uid=$(id -u abr-fixture-php)
 abr_ci remove fixture-php
-sudo getfacl -cn /var/lib/abr-ci/git/id_ed25519 | grep -Fx "user:$removed_git_uid:---"
+sudo getfacl -pcn /var/lib/abr-ci/git/id_ed25519 | grep -Fx "user:$removed_git_uid:---"
 sudo test -f /srv/apps/fixture-php/.env
 sudo test -f /var/lib/abr-ci/credentials/fixture-php.env
 sudo test "$(sudo stat -c '%U' /srv/apps/fixture-php/.env)" = root
@@ -449,9 +476,7 @@ if getent passwd abr-fixture-php; then echo 'Managed user was not removed' >&2; 
 abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost --scheduler
 abr_ci deploy fixture-php --no-pull
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
-if abr_ci remove fixture-php --purge; then
-  echo 'Full removal did not require explicit confirmation' >&2; exit 1
-fi
+fixture_refused 'use --purge --yes to confirm' remove fixture-php --purge
 abr_ci remove fixture-php --purge --dry-run
 sudo test -f /srv/apps/fixture-php/.env
 # Bind mounts must not cause deletion of storage outside the registered project.
@@ -459,9 +484,7 @@ mkdir -p "$fixture_source/mounted-uploads"
 touch "$fixture_source/mounted-uploads/keep"
 sudo mkdir -p /srv/apps/fixture-php/storage/abr-mount-fixture
 sudo mount --bind "$fixture_source/mounted-uploads" /srv/apps/fixture-php/storage/abr-mount-fixture
-if abr_ci remove fixture-php --purge --yes; then
-  echo 'Full removal traversed a mounted directory' >&2; exit 1
-fi
+fixture_refused 'before full removal' remove fixture-php --purge --yes
 sudo test -f "$fixture_source/mounted-uploads/keep"
 sudo umount /srv/apps/fixture-php/storage/abr-mount-fixture
 purged_git_uid=$(id -u abr-fixture-php)
@@ -490,7 +513,7 @@ SQL
 sudo test -f /srv/apps/fixture-octane/.env
 sudo test -f /var/lib/abr-ci/git/id_ed25519
 for path in /var/lib/abr-ci /var/lib/abr-ci/git/id_ed25519 /var/lib/abr-ci/composer/auth.json; do
-  if sudo getfacl -cn "$path" | grep -E "^user:$purged_git_uid:"; then
+  if sudo getfacl -pcn "$path" | grep -E "^user:$purged_git_uid:"; then
     echo 'Fully removed app retained a shared credential ACL' >&2; exit 1
   fi
 done

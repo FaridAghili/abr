@@ -195,6 +195,44 @@ func TestManagedHomeSymlinkRefusedBeforePermissionChanges(t *testing.T) {
 	}
 }
 
+func TestManagedUserCreatesFreshHomeAndReusesRetainedHome(t *testing.T) {
+	for _, retained := range []bool{false, true} {
+		t.Run(fmt.Sprint(retained), func(t *testing.T) {
+			h, runner, _, a := fixture(t)
+			home := h.path("/var/lib/abr-users/" + a.User)
+			if !retained {
+				if err := os.Remove(home); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(filepath.Join(home, "keep"), []byte("retained data"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			created := false
+			runner.fail = func(c Command) error {
+				if c.Name != "useradd" {
+					return nil
+				}
+				created = true
+				if slices.Contains(c.Args, "--create-home") == retained || slices.Contains(c.Args, "--no-create-home") != retained {
+					t.Fatal("wrong home creation option")
+				}
+				if !retained {
+					return os.Mkdir(home, 0700) // Simulate useradd creating a new home.
+				}
+				return nil
+			}
+			if err := h.ensureUser(a); err != nil || !created {
+				t.Fatalf("managed user creation failed: %v", err)
+			}
+			if retained {
+				if data, err := os.ReadFile(filepath.Join(home, "keep")); err != nil || string(data) != "retained data" {
+					t.Fatal("retained home data changed")
+				}
+			}
+		})
+	}
+}
+
 func TestPublicTreeACLsRunWithoutRootPrivileges(t *testing.T) {
 	h, runner, _, a := fixture(t)
 	if err := h.permissions(a); err != nil {
