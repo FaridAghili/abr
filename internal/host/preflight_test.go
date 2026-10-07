@@ -12,6 +12,36 @@ import (
 	"abr/internal/services"
 )
 
+func TestNuxtRegistrationAndPreflightNeedOnlyFrontendDependencies(t *testing.T) {
+	h, runner, _, a := fixture(t)
+	a.Type, a.Web.Driver = "nuxt", ""
+	for _, name := range []string{".env", "artisan", "composer.json", "composer.lock"} {
+		if err := os.Remove(filepath.Join(a.Directory, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.preflight(a, nil, strings.Repeat("a", 40), true); err != nil {
+		t.Fatal(err)
+	}
+	node, npm := false, false
+	for _, command := range runner.calls {
+		if command.Name == "mysql" || strings.Contains(command.Name, "php") || slices.Contains(command.Args, "composer") || slices.Contains(command.Args, "artisan") {
+			t.Fatalf("Nuxt ran Laravel host work: %s %v", command.Name, command.Args)
+		}
+		node = node || slices.Contains(command.Args, "node")
+		npm = npm || slices.Contains(command.Args, "npm")
+	}
+	if !node || !npm {
+		t.Fatal("Nuxt did not check frontend dependencies")
+	}
+	if _, err := os.Stat(h.path(h.credentialsPath(a.Name))); !os.IsNotExist(err) {
+		t.Fatal("Nuxt registration created database credentials")
+	}
+}
+
 func TestPreflightFailuresLeaveRunningAppAndCheckoutUntouched(t *testing.T) {
 	for _, failure := range []string{"env", "composer-lock", "package-lock", "platform", "composer-auth", "npm", "fetch", "diverged", "incoming-lock", "incoming-platform"} {
 		t.Run(failure, func(t *testing.T) {

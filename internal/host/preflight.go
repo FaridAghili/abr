@@ -45,7 +45,11 @@ func (h Host) deploymentTarget(a config.App, env map[string]string, noPull bool)
 
 func (h Host) preflight(a config.App, env map[string]string, commit string, noPull bool) error {
 	if h.DryRun {
-		h.say("Would check .env, dependency manifests/locks, runtime requirements and credential configuration before stopping %s", a.Name)
+		checks := "dependency manifests/locks and Node runtime requirements"
+		if a.Type == "laravel" {
+			checks = ".env, dependency manifests/locks, runtime requirements and credential configuration"
+		}
+		h.say("Would check %s before stopping %s", checks, a.Name)
 		return nil
 	}
 	if a.Type == "laravel" {

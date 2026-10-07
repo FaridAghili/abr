@@ -11,6 +11,9 @@ import (
 // their own commands and lockfiles.
 func (h Host) Update() error {
 	return h.locked(func() error {
+		if err := h.requireShell(); err != nil {
+			return err
+		}
 		if !h.DryRun {
 			if _, err := h.nodeToolsDirectory(); err != nil {
 				return fmt.Errorf("run abr setup before updating the server: %w", err)
@@ -59,10 +62,13 @@ func (h Host) Update() error {
 		if err := h.updateNodeTools(); err != nil {
 			return err
 		}
+		if err := h.updateShell(); err != nil {
+			return err
+		}
 		if h.DryRun {
 			h.say("Server update preview complete; no commands executed or files changed")
 		} else {
-			h.say("Server update complete; apt packages, Composer and global npm tools updated")
+			h.say("Server update complete; apt packages (including Zsh), Composer, global npm tools, Oh My Zsh and shell plugins updated")
 		}
 		return nil
 	})

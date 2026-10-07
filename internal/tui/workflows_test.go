@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 )
 
 func finishStep(t *testing.T, m *model) {
@@ -126,7 +127,10 @@ func TestCloneWorkflowCarriesDetectedFrameworkAndNameThroughDeployment(t *testin
 					if kind == "nuxt" {
 						file = "nuxt.config.ts"
 					}
-					return os.WriteFile(filepath.Join(dir, file), []byte(""), 0600)
+					if err := os.WriteFile(filepath.Join(dir, file), []byte(""), 0600); err != nil {
+						return err
+					}
+					return os.WriteFile(filepath.Join(dir, ".env.example"), []byte(""), 0600)
 				}
 				if args[0] == "env" {
 					_, _ = io.WriteString(out, "Prepared .env; set managed MySQL values\n")
@@ -190,6 +194,83 @@ func TestUnknownFrameworkKeepsNameAndAsksOnlyForType(t *testing.T) {
 	}
 }
 
+func TestCloneWithoutEnvExampleDeploysDirectlyForBothFrameworks(t *testing.T) {
+	for _, kind := range []string{"laravel", "nuxt"} {
+		t.Run(kind, func(t *testing.T) {
+			o := testOptions(t)
+			var commands []string
+			o.RunCommand = func(args []string, out io.Writer) error {
+				commands = append(commands, strings.Join(args, " "))
+				if args[0] == "clone" {
+					dir := filepath.Join(o.AppsDir, args[2])
+					if err := os.MkdirAll(dir, 0755); err != nil {
+						return err
+					}
+					file := "artisan"
+					if kind == "nuxt" {
+						file = "nuxt.config.ts"
+					}
+					return os.WriteFile(filepath.Join(dir, file), nil, 0600)
+				}
+				if args[0] == "env" || args[0] == "database" {
+					t.Error("unexpected environment or database command")
+				}
+				return nil
+			}
+			o.EnvEditor = func(string) (*exec.Cmd, error) {
+				t.Error("missing example opened an editor")
+				return nil, errors.New("unexpected editor")
+			}
+			m := newModel(o)
+			m.cloneForm()
+			m.Update(tea.PasteMsg{Content: "git@github.com:owner/app.git"})
+			m.form.NextGroup()
+			m.Update(tea.PasteMsg{Content: "example-app"})
+			m.next()
+			approve(m)
+			finishStep(t, m)
+			m.Update(tea.PasteMsg{Content: "example.com"})
+			m.next()
+			if kind == "nuxt" {
+				for _, unsupported := range []string{"database", "PHP", "Octane", "queue", "scheduler", "Nightwatch", "Inertia", "Composer", "migrations"} {
+					if strings.Contains(m.reviewText, unsupported) || strings.Contains(strings.Join(m.current.args, " "), "--"+unsupported) {
+						t.Fatalf("Nuxt registration includes %s", unsupported)
+					}
+				}
+			}
+			approve(m)
+			finishStep(t, m) // Register → deploy, with no environment step.
+			if !m.busy || !strings.Contains(m.output, "skipped environment") || strings.Join(m.current.args, " ") != "deploy example-app --no-pull" {
+				t.Fatal("missing example did not go directly to deployment")
+			}
+			finishStep(t, m)
+			if m.result != nil || len(commands) != 3 || commands[0] != "clone git@github.com:owner/app.git example-app" || !strings.Contains(commands[1], "--type "+kind) || commands[2] != "deploy example-app --no-pull" {
+				t.Fatalf("unexpected clone workflow: %v", commands)
+			}
+		})
+	}
+}
+
+func TestDetectedNuxtFormOmitsEveryLaravelFieldIncludingAdvancedFields(t *testing.T) {
+	m := newModel(testOptions(t))
+	m.registrationForm("frontend", "nuxt", true)
+	for step := 0; m.form.State == huh.StateNormal; step++ {
+		if step > 15 {
+			t.Fatal("Nuxt form cannot advance")
+		}
+		view := m.View().Content
+		for _, unsupported := range []string{"PHP-FPM", "Octane", "Queue workers", "MySQL", "Scheduler", "Nightwatch", "Inertia SSR", "Laravel"} {
+			if strings.Contains(view, unsupported) {
+				t.Fatalf("Nuxt form includes %s: %s", unsupported, view)
+			}
+		}
+		if strings.Contains(view, "Advanced settings?") {
+			press(m, tea.KeyDown) // Exercise advanced fields too.
+		}
+		m.form.NextGroup()
+	}
+}
+
 func TestWorkflowFailuresAndPreviewsDoNotAdvance(t *testing.T) {
 	for _, stage := range []string{"clone", "register", "env"} {
 		for _, preview := range []bool{false, true} {
@@ -217,6 +298,13 @@ func TestWorkflowFailuresAndPreviewsDoNotAdvance(t *testing.T) {
 
 func TestEnvironmentEditorSuccessDeploysAndFailureStops(t *testing.T) {
 	o := testOptions(t)
+	dir := filepath.Join(o.AppsDir, "app")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte(""), 0600); err != nil {
+		t.Fatal(err)
+	}
 	var command string
 	o.RunCommand = func(args []string, _ io.Writer) error { command = strings.Join(args, " "); return nil }
 	o.EnvEditor = func(name string) (*exec.Cmd, error) {

@@ -10,10 +10,11 @@ import (
 	"strings"
 
 	"abr/internal/config"
+	"abr/internal/project"
 )
 
-// PrepareEnv copies the example only when .env is absent, then applies recorded
-// database credentials. Secret content is never printed or passed in arguments.
+// PrepareEnv skips projects without an example. Otherwise it copies the example
+// only when .env is absent, then applies recorded database credentials.
 func (h Host) PrepareEnv(name string) error {
 	return h.locked(func() error {
 		a, _, err := h.application(name)
@@ -24,7 +25,15 @@ func (h Host) PrepareEnv(name string) error {
 			return err
 		}
 		if h.DryRun {
-			h.say("Would copy .env.example to .env if absent for %s, preserve existing settings and fill managed MySQL values when enabled", name)
+			h.say("Would copy .env.example to .env if absent for %s when the example exists, preserve existing settings and fill managed MySQL values when enabled; skip preparation if no example exists", name)
+			return nil
+		}
+		exists, err := project.HasEnvExample(h.path(a.Directory))
+		if err != nil {
+			return err
+		}
+		if !exists {
+			h.say("Skipped .env preparation for %s: no .env.example; existing files left untouched", name)
 			return nil
 		}
 		if _, err := h.environmentAccount(a); err != nil {
@@ -33,13 +42,8 @@ func (h Host) PrepareEnv(name string) error {
 		path := h.path(filepath.Join(a.Directory, ".env"))
 		data, err := readProjectEnv(path)
 		fresh := os.IsNotExist(err)
-		empty := false
 		if fresh {
 			data, err = readProjectEnv(h.path(filepath.Join(a.Directory, ".env.example")))
-			if os.IsNotExist(err) && a.Type == "nuxt" {
-				data, err = nil, nil
-				empty = true
-			}
 		}
 		if err != nil {
 			return fmt.Errorf("read .env or .env.example: %w", err)
@@ -60,9 +64,7 @@ func (h Host) PrepareEnv(name string) error {
 		if err := h.writeEnvironment(a, data); err != nil {
 			return err
 		}
-		if empty {
-			h.say("Created empty %s; this Nuxt project has no .env.example", filepath.Join(a.Directory, ".env"))
-		} else if fresh {
+		if fresh {
 			h.say("Copied .env.example to %s", filepath.Join(a.Directory, ".env"))
 		} else {
 			h.say("Preserved existing %s", filepath.Join(a.Directory, ".env"))
@@ -163,7 +165,8 @@ func environmentProcess(a config.App, program string, args ...string) *exec.Cmd 
 }
 
 // EnvEditor returns a foreground process for the TUI to run while its renderer
-// is suspended. The editor runs with the app's identity, never as root.
+// is suspended. No example means no editor (nil, nil). The editor runs with the
+// app's identity, never as root.
 func (h Host) EnvEditor(name string) (*exec.Cmd, error) {
 	var command *exec.Cmd
 	err := h.locked(func() error {
@@ -175,6 +178,10 @@ func (h Host) EnvEditor(name string) (*exec.Cmd, error) {
 			return err
 		}
 		if err := h.project(a); err != nil {
+			return err
+		}
+		exists, err := project.HasEnvExample(h.path(a.Directory))
+		if err != nil || !exists {
 			return err
 		}
 		if _, err := h.environmentAccount(a); err != nil {

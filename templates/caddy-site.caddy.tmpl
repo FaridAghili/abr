@@ -1,6 +1,7 @@
 {{.SiteDomains}} {
     header {
         -Server
+        -Via
         -X-Powered-By
         Strict-Transport-Security "max-age=15768000"
         X-Frame-Options "SAMEORIGIN"
@@ -53,6 +54,7 @@
             # File-serving errors must not retain immutable asset caching.
             -Cache-Control
             -Server
+            -Via
             -X-Powered-By
             Strict-Transport-Security "max-age=15768000"
             X-Frame-Options "SAMEORIGIN"
@@ -64,13 +66,17 @@
 }
 # Explicit HTTP routes also remove identifying headers from HTTPS redirects.
 {{.HTTPDomains}} {
-    header -Server
+    header {
+        -Server
+        -Via
+    }
     redir https://{host}{uri} 308
 }
 {{range .Aliases}}
 {{.}} {
     header {
         -Server
+        -Via
         -X-Powered-By
         Strict-Transport-Security "max-age=15768000"
         X-Frame-Options "SAMEORIGIN"
@@ -80,7 +86,10 @@
     redir https://{{$.Domain}}{uri} 308
 }
 http://{{.}} {
-    header -Server
+    header {
+        -Server
+        -Via
+    }
     redir https://{{$.Domain}}{uri} 308
 }
 {{end}}

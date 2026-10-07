@@ -69,6 +69,9 @@ func TestPrepareEnvCopiesExampleAndSetsPrivateManagedDatabase(t *testing.T) {
 
 func TestPrepareEnvPreservesExistingSecretsAndFailedWrites(t *testing.T) {
 	h, runner, _, a := fixture(t)
+	if err := os.WriteFile(filepath.Join(a.Directory, ".env.example"), []byte("APP_KEY=\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.Register(a, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +108,9 @@ func TestPrepareEnvPreservesExistingSecretsAndFailedWrites(t *testing.T) {
 
 func TestEnvironmentRejectsSymlinksAndForeignAccounts(t *testing.T) {
 	h, runner, _, a := fixture(t)
+	if err := os.WriteFile(filepath.Join(a.Directory, ".env.example"), []byte("APP_KEY=\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.Register(a, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -144,10 +150,13 @@ func TestEnvironmentRejectsSymlinksAndForeignAccounts(t *testing.T) {
 	}
 }
 
-func TestNuxtEnvironmentWithoutExampleAndEditorIdentity(t *testing.T) {
+func TestNuxtEnvironmentWithExampleAndEditorIdentity(t *testing.T) {
 	h, _, _, a := fixture(t)
 	a.Type = "nuxt"
 	a.Web.Driver = ""
+	if err := os.WriteFile(filepath.Join(a.Directory, ".env.example"), []byte("NUXT_PUBLIC_API_BASE=https://api.example.test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.Register(a, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +170,7 @@ func TestNuxtEnvironmentWithoutExampleAndEditorIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd.Path != "/usr/sbin/runuser" || cmd.Args[2] != a.User || !slices.Contains(cmd.Args, "/usr/bin/nano") || cmd.Dir != a.Directory {
+	if cmd == nil || cmd.Path != "/usr/sbin/runuser" || cmd.Args[2] != a.User || !slices.Contains(cmd.Args, "/usr/bin/nano") || cmd.Dir != a.Directory {
 		t.Fatal("editor is not an app-user foreground process")
 	}
 	if len(cmd.Env) != 2 {
@@ -169,7 +178,7 @@ func TestNuxtEnvironmentWithoutExampleAndEditorIdentity(t *testing.T) {
 	}
 }
 
-func TestMissingLaravelExampleAndEnvironmentPreview(t *testing.T) {
+func TestMissingExampleAndEnvironmentPreview(t *testing.T) {
 	h, _, out, a := fixture(t)
 	if _, err := h.Register(a, nil); err != nil {
 		t.Fatal(err)
@@ -177,8 +186,8 @@ func TestMissingLaravelExampleAndEnvironmentPreview(t *testing.T) {
 	if err := os.Remove(filepath.Join(a.Directory, ".env")); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.PrepareEnv(a.Name); err == nil {
-		t.Fatal("missing Laravel example hidden")
+	if err := h.PrepareEnv(a.Name); err != nil {
+		t.Fatal(err)
 	}
 	h.DryRun = true
 	if err := h.PrepareEnv(a.Name); err != nil {
@@ -192,5 +201,49 @@ func TestMissingLaravelExampleAndEnvironmentPreview(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Would copy .env.example") {
 		t.Fatal("missing preview")
+	}
+}
+
+func TestMissingExampleSkipsPreparationAndEditorWithoutChangingExistingFiles(t *testing.T) {
+	for _, kind := range []string{"laravel", "nuxt"} {
+		for _, existing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/existing=%t", kind, existing), func(t *testing.T) {
+				h, runner, out, a := fixture(t)
+				a.Type = kind
+				a.Database.Enabled = kind == "laravel"
+				if kind == "nuxt" {
+					a.Web.Driver = ""
+				}
+				if _, err := h.Register(a, nil); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(a.Directory, ".env")
+				old, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !existing {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				}
+				runner.calls = nil
+				out.Reset()
+				if err := h.PrepareEnv(a.Name); err != nil {
+					t.Fatal(err)
+				}
+				cmd, err := h.EnvEditor(a.Name)
+				if err != nil || cmd != nil {
+					t.Fatalf("missing example opened an editor: %v", err)
+				}
+				got, err := os.ReadFile(path)
+				if existing && (err != nil || !bytes.Equal(got, old)) || !existing && !os.IsNotExist(err) {
+					t.Fatal("missing example created or changed .env")
+				}
+				if len(runner.calls) != 0 || !strings.Contains(out.String(), "Skipped .env preparation") || strings.Contains(out.String(), "Set managed MySQL") {
+					t.Fatal("skipped environment performed or claimed work")
+				}
+			})
+		}
 	}
 }

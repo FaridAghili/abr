@@ -9,11 +9,12 @@ import (
 )
 
 func TestServerUpdateOrderAndFailureReporting(t *testing.T) {
-	for _, failure := range []string{"", "update", "full-upgrade", "autoremove", "autoclean", "self-update", "--jsonUpgraded"} {
+	for _, failure := range []string{"", "update", "full-upgrade", "autoremove", "autoclean", "self-update", "--jsonUpgraded", "omz", "autosuggestions", "highlighting"} {
 		t.Run("failure="+failure, func(t *testing.T) {
 			h, runner, out, _ := fixture(t)
 			runner.users["_apt"] = "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"
-			h.Runner = nodeToolsRunner{fakeRunner: runner}
+			h.Runner = shellRunner{nodeToolsRunner{fakeRunner: runner}}
+			prepareShellFixture(t, h)
 			if err := h.installNPM(true); err != nil {
 				t.Fatal(err)
 			}
@@ -21,7 +22,8 @@ func TestServerUpdateOrderAndFailureReporting(t *testing.T) {
 				t.Fatal(err)
 			}
 			runner.calls, runner.fail = nil, func(c Command) error {
-				if failure != "" && slices.Contains(c.Args, failure) {
+				shellFailure := failure == "omz" && c.Name == "zsh" || failure == "autosuggestions" && c.Name == "git" && slices.Contains(c.Args, "pull") && strings.HasSuffix(c.Args[1], "zsh-autosuggestions") || failure == "highlighting" && c.Name == "git" && slices.Contains(c.Args, "pull") && strings.HasSuffix(c.Args[1], "zsh-syntax-highlighting")
+				if failure != "" && (slices.Contains(c.Args, failure) || shellFailure) {
 					return testExit(1)
 				}
 				return nil
@@ -36,6 +38,19 @@ func TestServerUpdateOrderAndFailureReporting(t *testing.T) {
 			}
 			var operations []string
 			for _, c := range runner.calls {
+				if c.Name == "zsh" {
+					operations = append(operations, "omz")
+				}
+				if c.Name == "git" && slices.Contains(c.Args, "pull") {
+					if !slices.Contains(c.Args, "--ff-only") {
+						t.Fatal("plugin update can overwrite local changes")
+					}
+					if strings.HasSuffix(c.Args[1], "zsh-autosuggestions") {
+						operations = append(operations, "autosuggestions")
+					} else {
+						operations = append(operations, "highlighting")
+					}
+				}
 				for _, name := range []string{"update", "full-upgrade", "autoremove", "autoclean", "self-update", "--jsonUpgraded"} {
 					if slices.Contains(c.Args, name) {
 						operations = append(operations, name)
@@ -48,7 +63,7 @@ func TestServerUpdateOrderAndFailureReporting(t *testing.T) {
 					t.Fatal("Composer self-update reused app configuration or scripts")
 				}
 			}
-			want := []string{"update", "full-upgrade", "autoremove", "autoclean", "self-update", "--jsonUpgraded"}
+			want := []string{"update", "full-upgrade", "autoremove", "autoclean", "self-update", "--jsonUpgraded", "omz", "autosuggestions", "highlighting"}
 			if failure != "" {
 				want = want[:slices.Index(want, failure)+1]
 			}
@@ -68,7 +83,22 @@ func TestServerUpdatePreviewDoesNotRunCommandsOrCreateFiles(t *testing.T) {
 	if len(runner.calls) != 0 || strings.Contains(out.String(), "Server update complete") || !strings.Contains(out.String(), "ncu -g") {
 		t.Fatal("preview executed commands or reported real updates")
 	}
+	for _, component := range []string{"Oh My Zsh", "zsh-autosuggestions", "zsh-syntax-highlighting"} {
+		if !strings.Contains(out.String(), component) {
+			t.Fatalf("preview omitted shell update: %s", component)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(h.Manager.StateDir, "composer-update")); !os.IsNotExist(err) {
 		t.Fatal("preview created Composer state")
+	}
+}
+
+func TestServerUpdateRequiresShellBeforeChangingPackages(t *testing.T) {
+	h, runner, out, _ := fixture(t)
+	if err := h.Update(); err == nil || !strings.Contains(err.Error(), "run abr setup") {
+		t.Fatalf("missing shell did not require setup: %v", err)
+	}
+	if len(runner.calls) != 0 || strings.Contains(out.String(), "Server update complete") {
+		t.Fatal("changed host or reported completion with missing shell")
 	}
 }

@@ -617,7 +617,7 @@ func TestCaddyReplacesOnlyPackagedWelcomeAndRestoresInvalidReplacement(t *testin
 		t.Fatal(err)
 	}
 	data, _ := h.read(path)
-	if strings.Contains(string(data), "/usr/share/caddy") || !strings.Contains(string(data), "header -Server") || !strings.Contains(string(data), "respond 404") {
+	if strings.Contains(string(data), "/usr/share/caddy") || !hasDirective(data, "-Server") || !hasDirective(data, "-Via") || !strings.Contains(string(data), "respond 404") {
 		t.Fatal(string(data))
 	}
 	if err := h.configureCaddyImport(); err != nil {

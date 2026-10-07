@@ -67,7 +67,13 @@ GitHub title use this name; renaming the VPS preserves the existing key.
 Only the binary is needed on the VPS; templates and the generic example config are
 embedded. Setup installs PHP 8.5/extensions (including Imagick SVG support and
 Excimer), Node 24, latest compatible npm, npm-check-updates, Caddy, Composer,
-shared RoadRunner, MySQL 8.4, Redis and image optimization tools. It configures
+shared RoadRunner, MySQL 8.4, Redis and image optimization tools. It also installs
+Zsh as root's default login shell, Oh My Zsh under `/root/.oh-my-zsh`, and enables
+`git`, `zsh-autosuggestions` and `zsh-syntax-highlighting` (loaded last). This
+configures root even when invoked through sudo; `--admin-user` only selects the
+SSH administrator. Existing `.zshrc` settings are preserved, with an initial
+backup at `/root/.zshrc.pre-abr`. The managed shell block uses the editable
+`zshrc.tmpl` template. Reconnect after setup to use the new shell. Setup configures
 key-only SSH, local databases, UFW, Fail2ban and
 security updates. Root key login remains allowed. Use `--admin-user USER` when the
 SSH account differs from the sudo user; `--ssh-port PORT` preserves an additional
@@ -94,8 +100,11 @@ suggested upgrades for the shared global tools, usually npm and SVGO. Globals
 without an ncu suggestion retain their exact versions. Other global prefixes
 and app dependencies are left alone. Package downloads and installs
 still run as `_apt` with scripts disabled. Project dependency lockfiles and app
-code are handled by Deploy. Updates stop on failure; completed apt changes are
-not rolled back, and the server is not rebooted.
+code are handled by Deploy. APT upgrades Zsh; update also runs Oh My Zsh's
+unattended updater and fast-forward pulls for both shell plugins. Plugin
+conflicts stop the update without resetting local edits. Run setup first.
+Updates stop on failure; completed apt changes are not rolled back, and the
+server is not rebooted.
 
 ## Deploy apps
 
@@ -115,10 +124,14 @@ root `artisan` / `nuxt.config.*` files, with Composer and npm dependencies as a
 fallback; unknown or ambiguous projects ask for the framework. Enter the domain
 (**Prefer www** is the TUI default), then choose Laravel's web server, queue
 workers and MySQL. Scheduler, other components and extra domains are optional
-advanced settings. After registration, Abr copies `.env.example` to `.env` if
-absent, fills managed database values, and offers to open it in nano as the app
+advanced settings. Nuxt registration skips MySQL and every Laravel service
+(PHP-FPM, Octane, queue workers, scheduler, Nightwatch and Inertia SSR).
+After registration, if `.env.example` exists, Abr copies it to `.env` if
+absent, fills managed Laravel database values, and offers to open it in nano as the app
 user. Save with Ctrl+O, Enter, and exit with Ctrl+X; deployment then starts
 automatically using the cloned checkout. You can also skip the editor and deploy.
+Without `.env.example`, environment preparation and editing are skipped and
+deployment starts directly; any existing `.env` is left untouched.
 The workflow stops on errors; preview mode does not advance into steps that need
 newly created files. Config-only registration saves settings without deployment.
 Destructive imports and full app deletion require confirmation.
@@ -141,7 +154,9 @@ sudo abr status api
 `abr env APP` preserves existing `.env` settings and updates managed MySQL values
 without printing secrets. For a new Laravel `.env`, it also sets production mode,
 disables debug and uses the registered HTTPS domain as `APP_URL`. Existing keys
-and app settings are kept; Nuxt projects without an example get an empty `.env`.
+and app settings are kept. Projects without `.env.example` skip this command
+without creating or changing `.env`. Nuxt deployments use only npm, the Node
+service and Caddy; they do not create databases or run Laravel services.
 Set your app secrets before deploying.
 Managed MySQL uses `DB_HOST=127.0.0.1` and port 3306. `DB_DATABASE` is the app
 name with hyphens replaced by underscores. `DB_USERNAME` uses the same name up
@@ -377,7 +392,7 @@ The templates set `X-Frame-Options: SAMEORIGIN` and
 They also set `Referrer-Policy: strict-origin-when-cross-origin` on HTTPS responses.
 These headers are applied when responses are written, overriding upstream values.
 
-Caddy strips Server/X-Powered-By headers, compresses dynamic responses with
+Caddy strips Server/Via/X-Powered-By headers, compresses dynamic responses with
 [zstd/gzip](https://caddyserver.com/docs/caddyfile/directives/encode), and serves
 [precompressed Brotli](https://caddyserver.com/docs/caddyfile/directives/file_server)
 for built assets generated during deploy. Versioned Vite/Nuxt assets get immutable

@@ -206,7 +206,7 @@ func (m *model) serverMenu() tea.Cmd {
 		case "setup":
 			return m.setupForm()
 		case "update":
-			return m.review(action{title: "Update server", args: []string{"update"}, note: "Upgrade apt packages, remove unused packages, clean the apt cache, self-update Composer and upgrade global npm tools. This updates the whole VPS."})
+			return m.review(action{title: "Update server", args: []string{"update"}, note: "Upgrade apt packages, remove unused packages, clean the apt cache, self-update Composer and upgrade global npm tools, Zsh, Oh My Zsh and both shell plugins. This updates the whole VPS."})
 		case "git":
 			return m.gitSetupForm()
 		case "composer":
@@ -383,7 +383,7 @@ func (m *model) serviceForm(app config.App, command string) tea.Cmd {
 			return m.start(a)
 		}
 		return m.review(a)
-	}, huh.NewGroup(huh.NewSelect[string]().Title("Which services?").Description("Choose one service, or all services for this app.\nExample: queue workers for background jobs.").Options(choices...).Value(&selected)))
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Which services?").Description("Choose one service, or all services for this app.\nExample: the web service serving visitors.").Options(choices...).Value(&selected)))
 }
 func (m *model) deployForm(name string) tea.Cmd {
 	var noPull bool
@@ -401,7 +401,16 @@ func (m *model) deployForm(name string) tea.Cmd {
 		if noPull {
 			args = append(args, "--no-pull")
 		}
-		return m.review(action{title: title, args: args, note: "The app has downtime while dependencies, assets and database migrations run. Failures are reported; code and database changes are not automatically rolled back."})
+		note := "The app has downtime while dependencies are installed, assets are built and services restart. Failures are reported; completed changes are not automatically rolled back."
+		if c, err := config.Load(m.options.ConfigPath); err == nil {
+			for _, app := range c.Apps {
+				if app.Type == "laravel" && (name == "" || app.Name == name) {
+					note += " Laravel deployments also run database migrations."
+					break
+				}
+			}
+		}
+		return m.review(action{title: title, args: args, note: note})
 	}, huh.NewGroup(huh.NewSelect[bool]().Title("Source code").Description("Pull your latest committed code, or deploy the current files.\nExample: current checkout for a first deployment after cloning.").Options(huh.NewOption("Pull latest code", false), huh.NewOption("Use current checkout", true)).Value(&noPull)))
 }
 func (m *model) review(a action) tea.Cmd {

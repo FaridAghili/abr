@@ -46,14 +46,14 @@ Commands:
                    --domain HOST --queue-workers N --scheduler=true|false, etc.
   ports            Show reservations (--allocate reconciles config edits)
   doctor           Portable config/registry/port checks
-  update           Upgrade apt packages, clean up, self-update Composer and global npm tools
-  setup            Install shared VPS packages, Caddy, Node 24 and RoadRunner
+  update           Upgrade apt packages, Composer, global npm tools, Oh My Zsh and shell plugins
+  setup            Install shared VPS packages, Caddy, Node 24, RoadRunner and root's Zsh
                    Prompts for VPS name; --hostname NAME is scriptable
   git setup        Create/reuse one VPS GitHub SSH key (--key imports an existing key)
   composer auth    Save shared private-package credentials; prompts for email/token
                    --host HOST --username USER --password-stdin is scriptable
   clone URL NAME   Clone a GitHub SSH repository into /srv/apps/NAME
-  env APP          Prepare .env from its example and fill managed MySQL values
+  env APP          Prepare .env when its example exists; fill managed Laravel MySQL values
   database APP     Create/verify MySQL database (--show prints credentials)
   database --admin TablePlus root connection details (--show prints password)
   database backup APP... | --all --output-dir DIR

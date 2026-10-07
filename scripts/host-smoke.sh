@@ -52,7 +52,7 @@ fixture_security_headers() {
   tr -d '\r' < "$1" | grep -Fix 'X-Frame-Options: SAMEORIGIN' > /dev/null
   tr -d '\r' < "$1" | grep -Fix 'X-Content-Type-Options: nosniff' > /dev/null
   tr -d '\r' < "$1" | grep -Fix 'Referrer-Policy: strict-origin-when-cross-origin' > /dev/null
-  if grep -Ei '^(server|x-powered-by):' "$1"; then echo 'Identifying response header leaked' >&2; exit 1; fi
+  if grep -Ei '^(server|via|x-powered-by):' "$1"; then echo 'Identifying response header leaked' >&2; exit 1; fi
 }
 fixture_missing_assets() {
   # Verify the reserved namespace directly, also with the upstream stopped.
@@ -87,7 +87,7 @@ fixture_redirect() {
     tr -d '\r' < "$fixture_source/redirect-headers" | grep -Fix "location: https://$2/preserved/path?x=1&y=2"
     if [[ $scheme == https ]]; then
       fixture_security_headers "$fixture_source/redirect-headers"
-    elif grep -Ei '^(strict-transport-security|server|x-powered-by):' "$fixture_source/redirect-headers"; then
+    elif grep -Ei '^(strict-transport-security|server|via|x-powered-by):' "$fixture_source/redirect-headers"; then
       echo 'Unexpected HTTP redirect header' >&2; exit 1
     fi
   done
@@ -118,7 +118,19 @@ sudo apt-get install -y redis-server
 sudo systemctl start redis-server
 sudo redis-cli SET abr-fixture-persist survives-setup >/dev/null
 sudo redis-cli SAVE >/dev/null
+# Exercise preservation of an existing shell configuration on this disposable host.
+printf '%s\n' 'plugins=(git)' "alias abr_shell_fixture='printf preserved'" | sudo tee /root/.zshrc >/dev/null
+sudo chmod 600 /root/.zshrc
+sudo cp /root/.zshrc "$abr_binary_directory/zshrc-before"
+fixture_shell() {
+  test "$(getent passwd root | cut -d: -f7)" = /usr/bin/zsh
+  sudo env -i HOME=/root USER=root LOGNAME=root PATH=/usr/local/bin:/usr/bin:/bin TERM=xterm \
+    zsh -i -c '[[ $plugins[-1] == zsh-syntax-highlighting && ${plugins[(Ie)git]} -gt 0 && ${plugins[(Ie)zsh-autosuggestions]} -gt 0 && ${+functions[_zsh_autosuggest_start]} == 1 && ${+functions[_zsh_highlight]} == 1 ]] && [[ $(abr_shell_fixture) == preserved ]]'
+  test "$(sudo grep -Fc '# Begin abr shell' /root/.zshrc)" = 1
+}
 abr_ci setup --hostname abr-ci-vps --no-firewall --ssh-port 22 --admin-user root
+fixture_shell
+sudo cmp /root/.zshrc.pre-abr "$abr_binary_directory/zshrc-before"
 test "$(hostname)" = abr-ci-vps
 test "$(hostnamectl --static hostname)" = abr-ci-vps
 grep -Fx $'127.0.1.1\tabr-ci-vps' /etc/hosts
@@ -144,7 +156,7 @@ fixture_default_headers=$(mktemp)
 fixture_default_body=$(mktemp)
 curl --silent --show-error http://127.0.0.1/ -D "$fixture_default_headers" -o "$fixture_default_body"
 grep -E '^HTTP/[[:digit:].]+ 404' "$fixture_default_headers"
-if grep -Ei '^server:' "$fixture_default_headers"; then echo 'Default HTTP header leaked' >&2; exit 1; fi
+if grep -Ei '^(server|via|x-powered-by):' "$fixture_default_headers"; then echo 'Default HTTP header leaked' >&2; exit 1; fi
 rm -f "$fixture_default_headers" "$fixture_default_body"
 # Caddy administration is restricted to root and Caddy, not application users.
 sudo test -S /var/lib/caddy/abr-admin.sock
@@ -172,7 +184,21 @@ package = json.loads(path.read_text())
 package['version'] = '0.0.0'
 path.write_text(json.dumps(package))
 PYUPDATE
+# Rewind each newly cloned repository so update must make real progress.
+shell_repositories=(/root/.oh-my-zsh /root/.oh-my-zsh/custom/plugins/zsh-autosuggestions /root/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting)
+for shell_repository in "${shell_repositories[@]}"; do
+  sudo git -C "$shell_repository" fetch --deepen=1 origin master
+  sudo git -C "$shell_repository" rev-parse HEAD | sudo tee "$abr_binary_directory/$(basename "$shell_repository").head" >/dev/null
+  sudo git -C "$shell_repository" reset --hard HEAD~1
+done
+sudo cp /root/.zshrc "$abr_binary_directory/zshrc-before-update"
 abr_ci update
+fixture_shell
+sudo cmp /root/.zshrc "$abr_binary_directory/zshrc-before-update"
+for shell_repository in "${shell_repositories[@]}"; do
+  shell_expected=$(sudo cat "$abr_binary_directory/$(basename "$shell_repository").head")
+  sudo git -C "$shell_repository" merge-base --is-ancestor "$shell_expected" HEAD
+done
 sudo cmp /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin-before-update.json"
 sudo redis-cli GET abr-fixture-persist | grep -Fx survives-setup
 /usr/local/bin/composer --no-plugins --no-scripts --version
@@ -483,6 +509,12 @@ abr_ci enable fixture-php
 fixture_https fixture-php.localhost --dump-header "$fixture_source/headers" >/dev/null
 fixture_security_headers "$fixture_source/headers"
 fixture_missing_assets fixture-php.localhost /build/assets
+# PHP-FPM also adds Via on application error responses; strip it there too.
+php_missing_status=$(curl --silent --show-error --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
+  -D "$fixture_source/php-missing-headers" -o /dev/null --write-out '%{http_code}' \
+  https://fixture-php.localhost/abr-fixture-missing-page)
+test "$php_missing_status" = 404
+fixture_security_headers "$fixture_source/php-missing-headers"
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"opcache":"1"'
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"unprivileged":true,"no_new_privs":true'
 # A generated hashed asset is served with Brotli and immutable caching.
@@ -526,7 +558,7 @@ for encoding in zstd gzip; do
   grep -Ei "^content-encoding: $encoding" "$fixture_source/$encoding-headers"
 done
 curl --silent --resolve fixture-php.localhost:80:127.0.0.1 -D "$fixture_source/http-headers" http://fixture-php.localhost/ -o /dev/null
-if grep -Ei '^server:' "$fixture_source/http-headers"; then echo 'HTTP redirect header leaked' >&2; exit 1; fi
+if grep -Ei '^(server|via|x-powered-by):' "$fixture_source/http-headers"; then echo 'HTTP redirect header leaked' >&2; exit 1; fi
 abr_ci restart fixture-php web
 abr_ci disable fixture-php
 abr_ci enable fixture-php
@@ -593,8 +625,15 @@ for rendering in true false; do
   fixture_git "$dir"
   abr_ci register --name "$app" --type nuxt --domain "$app_domain"
   abr_ci env "$app"
-  sudo test "$(sudo stat -c '%U:%a' "$dir/.env")" = "abr-$app:600"
+  sudo test ! -e "$dir/.env"
+  sudo test ! -e "/var/lib/abr-ci/databases/$app.json"
+  sudo test ! -e "/var/lib/abr-ci/credentials/$app.env"
   abr_ci deploy "$app" --no-pull
+  sudo test ! -e "$dir/.env"
+  sudo test ! -e "/etc/php/8.5/fpm/pool.d/abr-$app.conf"
+  for component in octane queue@1 scheduler nightwatch inertia-ssr; do
+    sudo test ! -e "/etc/systemd/system/abr-$app-$component.service"
+  done
   fixture_caddy_format "/etc/caddy/abr.d/abr-$app.caddy"
   test "$(sudo systemctl show "abr-$app-nuxt.service" --property=NoNewPrivileges --value)" = yes
   nuxt_pid=$(sudo systemctl show "abr-$app-nuxt.service" --property=MainPID --value)
@@ -695,6 +734,8 @@ abr_ci doctor
 # Repeated setup must allow its recorded loopback account, retain its password,
 # and leave other apps' retained databases intact.
 abr_ci setup --hostname abr-ci-vps --no-firewall --ssh-port 22 --admin-user root
+fixture_shell
+sudo cmp /root/.zshrc.pre-abr "$abr_binary_directory/zshrc-before"
 sudo cmp /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin-before.json"
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \
   -e "SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME='fixture_octane';" | grep -Fx 1

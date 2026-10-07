@@ -49,10 +49,24 @@ func (m *model) clonedRegistration(name string) tea.Cmd {
 }
 
 func (m *model) prepareEnvironment(name string) tea.Cmd {
+	exists, err := project.HasEnvExample(filepath.Join(m.options.AppsDir, name))
+	if err != nil {
+		return m.workflowError("Check .env.example: "+name, err)
+	}
+	if !exists {
+		return m.skipEnvironment(name)
+	}
 	return m.start(action{title: "Prepare .env: " + name, args: []string{"env", name}, continueWith: func() tea.Cmd { return m.environmentChoice(name) }})
 }
 
 func (m *model) environmentChoice(name string) tea.Cmd {
+	exists, err := project.HasEnvExample(filepath.Join(m.options.AppsDir, name))
+	if err != nil {
+		return m.workflowError("Check .env.example: "+name, err)
+	}
+	if !exists {
+		return m.skipEnvironment(name)
+	}
 	edit := true
 	return m.setForm("form", name+" / Environment", func() tea.Cmd {
 		if edit {
@@ -63,12 +77,21 @@ func (m *model) environmentChoice(name string) tea.Cmd {
 			if err != nil {
 				return m.workflowError("Edit .env: "+name, err)
 			}
+			if command == nil {
+				return m.skipEnvironment(name)
+			}
 			m.page, m.title, m.form, m.busy = "output", "Edit .env: "+name, nil, true
 			m.next, m.current = nil, action{}
 			return tea.ExecProcess(command, func(err error) tea.Msg { return editorFinished{name: name, err: err} })
 		}
 		return m.firstDeploy(name)
 	}, huh.NewGroup(huh.NewSelect[bool]().Title("Edit .env before deployment?").Description("Review app secrets in nano. Save with Ctrl+O, Enter; close with Ctrl+X to deploy automatically.\nExample: add mail or API credentials.").Options(huh.NewOption("Open .env in editor", true), huh.NewOption("Deploy with prepared .env", false)).Value(&edit)))
+}
+
+func (m *model) skipEnvironment(name string) tea.Cmd {
+	cmd := m.firstDeploy(name)
+	m.appendOutput("No .env.example; skipped environment preparation and editor.\n")
+	return cmd
 }
 
 type editorFinished struct {

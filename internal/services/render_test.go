@@ -1,15 +1,105 @@
 package services
 
 import (
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"abr/internal/config"
 	"abr/internal/ports"
 )
+
+// Exercise the actual header middleware with Caddy's own Via header and headers
+// supplied by an upstream. All listeners and files belong to disposable fixtures.
+func TestCaddyProxyHeaders(t *testing.T) {
+	caddy, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("Caddy is not installed")
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "fixture-server")
+		w.Header().Set("Via", "1.1 fixture-proxy")
+		w.Header().Set("X-Powered-By", "fixture-runtime")
+		w.Header().Set("Cache-Control", "no-cache, private")
+		if r.URL.Path != "/" {
+			w.WriteHeader(http.StatusNotFound)
+		}
+		_, _ = io.WriteString(w, "fixture response")
+	}))
+	defer upstream.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+	upstreamPort, _ := strconv.Atoi(port)
+	dir := t.TempDir()
+	a := config.App{Name: "app", User: "abr-app", Directory: dir, Type: "nuxt", Domain: "app.test"}
+	r := ports.Registry{Version: 1, Assignments: []ports.Assignment{{App: "app", Purpose: "nuxt-http", Port: upstreamPort}}}
+	plan, err := Render(a, r, "../../templates", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	var site string
+	for _, file := range plan.Files {
+		if strings.HasSuffix(file.Path, ".caddy") {
+			// Test the managed serving block over loopback HTTP, without issuing
+			// certificates or binding the production HTTP/HTTPS ports.
+			site, _, _ = strings.Cut(string(file.Data), "# Explicit HTTP routes")
+			site = strings.Replace(site, "app.test {", "http://"+address+" {", 1)
+		}
+	}
+	path := filepath.Join(dir, "Caddyfile")
+	if err := os.WriteFile(path, []byte("{\n admin off\n auto_https off\n}\n"+site), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(caddy, "run", "--config", path, "--adapter", "caddyfile")
+	cmd.Env = append(os.Environ(), "HOME="+dir, "XDG_DATA_HOME="+dir, "XDG_CONFIG_HOME="+dir)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	client := &http.Client{Timeout: time.Second}
+	for _, test := range []struct {
+		path string
+		code int
+	}{{"/", 200}, {"/missing-page", 404}, {"/_nuxt/missing-AbCd1234.css", 404}} {
+		deadline := time.Now().Add(5 * time.Second)
+		var response *http.Response
+		for {
+			response, err = client.Get("http://" + address + test.path)
+			if err == nil || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != test.code {
+			t.Fatalf("%s: status %d; want %d", test.path, response.StatusCode, test.code)
+		}
+		for _, name := range []string{"Server", "Via", "X-Powered-By"} {
+			if values := response.Header.Values(name); len(values) > 0 {
+				t.Errorf("%s: leaked %s: %v", test.path, name, values)
+			}
+		}
+		if test.path == "/" && response.Header.Get("Cache-Control") != "no-cache, private" {
+			t.Fatal("changed the application's cache policy")
+		}
+	}
+}
 
 func TestRenderAllComponents(t *testing.T) {
 	a := config.App{Name: "app", User: "abr-app", Directory: "/srv/apps/my app%", Type: "laravel", Domain: "app.test", Aliases: []string{"old.test"}, Domains: []string{"extra.test"}, Web: config.Web{Driver: "octane"}, Queue: config.Queue{Workers: 2}, Scheduler: config.Component{Enabled: true}, Nightwatch: config.Component{Enabled: true}, InertiaSSR: config.Component{Enabled: true}}
