@@ -132,7 +132,7 @@ func TestComposerFailureIdentifiesCommandAndSuggestsAuthentication(t *testing.T)
 		t.Fatal(err)
 	}
 	h.Runner = transferRunner{func(cmd Command) ([]byte, error) {
-		if cmd.Name == "runuser" && slices.Contains(cmd.Args, "composer") {
+		if cmd.Name == "runuser" && slices.Contains(cmd.Args, "composer") && slices.Contains(cmd.Args, "install") && !slices.Contains(cmd.Args, "--download-only") {
 			return []byte("SQL and passwords must remain private: fixture-token"), fmt.Errorf("runuser failed: %w", testExit(100))
 		}
 		return runner.Run(cmd)

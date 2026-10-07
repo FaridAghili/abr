@@ -127,9 +127,12 @@ func (h Host) checkPurgeTree(path string) error {
 func (h Host) purgeData(a config.App, p purgePlan) error {
 	if p.database != nil {
 		if h.DryRun {
-			h.say("Would delete the recorded MySQL database and localhost account for %s", a.Name)
+			h.say("Would delete the recorded MySQL database and local accounts for %s", a.Name)
 		} else {
 			sql := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;\nDROP USER IF EXISTS '%s'@'localhost';\n", p.database.Database, p.database.User)
+			if p.database.TCPManaged {
+				sql += fmt.Sprintf("DROP USER IF EXISTS '%s'@'127.0.0.1';\n", p.database.User)
+			}
 			if _, err := h.mysql([]byte(sql)); err != nil {
 				return err
 			}

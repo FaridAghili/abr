@@ -184,6 +184,9 @@ func (h Host) ImportDatabase(name, path string, yes bool) error {
 		if err != nil {
 			return err
 		}
+		if !c.TCPManaged || !c.TCPReady {
+			return fmt.Errorf("managed TCP account is not ready; run abr database %s first", name)
+		}
 		f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			return err
@@ -203,7 +206,7 @@ func (h Host) ImportDatabase(name, path string, yes bool) error {
 		}
 		defer os.Remove(defaults.Name())
 		defer defaults.Close()
-		text := fmt.Sprintf("[client]\nuser=%s\npassword=%s\nprotocol=socket\n", c.User, c.Password)
+		text := fmt.Sprintf("[client]\nuser=%s\npassword=%s\nprotocol=TCP\nhost=127.0.0.1\nport=3306\n", c.User, c.Password)
 		if _, err := io.WriteString(defaults, text); err != nil {
 			return err
 		}

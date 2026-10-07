@@ -116,20 +116,7 @@ func (h Host) verifyMySQLAdminPrivileges() error {
 }
 
 func (h Host) verifyMySQLAdmin(c mysqlAdminCredentials) error {
-	file, err := os.CreateTemp(h.path(h.Manager.StateDir), ".mysql-admin-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	defer file.Close()
-	text := fmt.Sprintf("[client]\nuser=root\npassword=%s\nprotocol=TCP\nhost=127.0.0.1\nport=3306\n", c.Password)
-	if _, err := io.WriteString(file, text); err != nil {
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	out, err := h.run("Verify MySQL admin login over loopback TCP", Command{Name: "mysql", Args: []string{"--defaults-file=" + file.Name(), "--no-login-paths", "--batch", "--skip-column-names", "--connect-timeout=5"}, Input: []byte("SELECT CURRENT_USER();\n"), Private: true})
+	out, err := h.mysqlTCP(c.User, c.Password, "", []byte("SELECT CURRENT_USER();\n"))
 	if err != nil {
 		return fmt.Errorf("MySQL admin login failed; saved password preserved: %w", err)
 	}
@@ -137,6 +124,28 @@ func (h Host) verifyMySQLAdmin(c mysqlAdminCredentials) error {
 		return fmt.Errorf("MySQL admin login matched an unexpected account")
 	}
 	return nil
+}
+
+// Authentication data is passed through a private file, never arguments or logs.
+func (h Host) mysqlTCP(user, password, database string, sql []byte) ([]byte, error) {
+	file, err := os.CreateTemp(h.path(h.Manager.StateDir), ".mysql-admin-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	text := fmt.Sprintf("[client]\nuser=%s\npassword=%s\nprotocol=TCP\nhost=127.0.0.1\nport=3306\n", user, password)
+	if _, err := io.WriteString(file, text); err != nil {
+		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		return nil, err
+	}
+	args := []string{"--defaults-file=" + file.Name(), "--no-login-paths", "--batch", "--skip-column-names", "--connect-timeout=5"}
+	if database != "" {
+		args = append(args, "--database="+database)
+	}
+	return h.run("Verify MySQL access over loopback TCP", Command{Name: "mysql", Args: args, Input: sql, Private: true})
 }
 
 // MySQLAdmin only reads the server account saved by setup. Password display is explicit.

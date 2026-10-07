@@ -14,11 +14,13 @@ import (
 )
 
 type credentials struct {
-	App      string `json:"app"`
-	Database string `json:"database"`
-	User     string `json:"user"`
-	Password string `json:"password"`
-	Ready    bool   `json:"ready"`
+	App        string `json:"app"`
+	Database   string `json:"database"`
+	User       string `json:"user"`
+	Password   string `json:"password"`
+	Ready      bool   `json:"ready"`
+	TCPManaged bool   `json:"tcp_managed"`
+	TCPReady   bool   `json:"tcp_ready"`
 }
 
 func databaseName(name string) string {
@@ -47,7 +49,7 @@ func (h Host) database(a config.App, show bool) error {
 		return fmt.Errorf("%s: managed database is disabled", a.Name)
 	}
 	if h.DryRun {
-		h.say("Would create/verify a dedicated MySQL database and localhost user for %s; save credentials privately", a.Name)
+		h.say("Would create/verify a dedicated MySQL database and local socket/127.0.0.1 accounts for %s; save credentials privately", a.Name)
 		return nil
 	}
 	path := h.credentialsPath(a.Name)
@@ -88,7 +90,7 @@ func (h Host) database(a config.App, show bool) error {
 		if _, err := h.mysql([]byte(sql)); err != nil {
 			return err
 		}
-		if err := h.databaseGrants(c); err != nil {
+		if err := h.databaseGrants(c, "localhost"); err != nil {
 			return err
 		}
 		c.Ready = true
@@ -106,7 +108,50 @@ func (h Host) database(a config.App, show bool) error {
 			return fmt.Errorf("recorded MySQL database/account is missing; restore it before deploying %s", a.Name)
 		}
 	}
-	env := fmt.Sprintf("DB_CONNECTION=mysql\nDB_HOST=localhost\nDB_PORT=3306\nDB_DATABASE=%s\nDB_USERNAME=%s\nDB_PASSWORD=%s\n", c.Database, c.User, c.Password)
+	// Socket and TCP identities are separate when skip_name_resolve is enabled.
+	// Record ownership before creation and never adopt an unrecorded TCP account.
+	if !c.TCPManaged {
+		out, err := h.mysql([]byte(fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1';\n", c.User)))
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(string(out)) != "0" {
+			return fmt.Errorf("unrecorded MySQL account %s@127.0.0.1 already exists; no password changed", c.User)
+		}
+		c.TCPManaged = true
+		data, _ := json.MarshalIndent(c, "", "  ")
+		if err := h.write(path, data, 0600); err != nil {
+			return err
+		}
+	}
+	if !c.TCPReady {
+		if _, err := h.mysql([]byte(fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'127.0.0.1' IDENTIFIED BY '%s';\n", c.User, c.Password))); err != nil {
+			return err
+		}
+	}
+	out, err := h.mysqlTCP(c.User, c.Password, "", []byte("SELECT CURRENT_USER();\n"))
+	if err != nil {
+		return fmt.Errorf("managed MySQL loopback login failed: %w", err)
+	}
+	if strings.TrimSpace(string(out)) != c.User+"@127.0.0.1" {
+		return fmt.Errorf("managed MySQL loopback login matched an unexpected account")
+	}
+	if !c.TCPReady {
+		if err := h.databaseGrants(c, "127.0.0.1"); err != nil {
+			return err
+		}
+	}
+	if _, err := h.mysqlTCP(c.User, c.Password, c.Database, []byte("SELECT 1;\n")); err != nil {
+		return fmt.Errorf("managed MySQL database access failed: %w", err)
+	}
+	if !c.TCPReady {
+		c.TCPReady = true
+		data, _ := json.MarshalIndent(c, "", "  ")
+		if err := h.write(path, data, 0600); err != nil {
+			return err
+		}
+	}
+	env := fmt.Sprintf("DB_CONNECTION=mysql\nDB_HOST=127.0.0.1\nDB_PORT=3306\nDB_DATABASE=%s\nDB_USERNAME=%s\nDB_PASSWORD=%s\n", c.Database, c.User, c.Password)
 	if err := h.write(h.credentialsEnvPath(a.Name), []byte(env), 0600); err != nil {
 		return err
 	}
@@ -120,7 +165,7 @@ func (h Host) database(a config.App, show bool) error {
 
 // Scope newly provisioned accounts to one literal database. MySQL interprets
 // underscores as wildcards unless partial_revokes is enabled.
-func (h Host) databaseGrants(c credentials) error {
+func (h Host) databaseGrants(c credentials, host string) error {
 	out, err := h.mysql([]byte("SELECT @@partial_revokes;\n"))
 	if err != nil {
 		return err
@@ -133,7 +178,7 @@ func (h Host) databaseGrants(c credentials) error {
 	default:
 		return fmt.Errorf("unexpected MySQL partial_revokes setting")
 	}
-	sql := fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'localhost';\n", database, c.User)
+	sql := fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'%s';\n", database, c.User, host)
 	_, err = h.mysql([]byte(sql))
 	return err
 }

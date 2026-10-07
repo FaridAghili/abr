@@ -274,6 +274,7 @@ func (m *model) moreAppMenu(app config.App) tea.Cmd {
 		}
 		return m.appAction(app, selected)
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Manage application").Options(
+		huh.NewOption("Edit settings", "edit"),
 		huh.NewOption("Enable services", "enable"),
 		huh.NewOption("Disable services", "disable"),
 		huh.NewOption("Remove application", "remove"),
@@ -283,6 +284,8 @@ func (m *model) moreAppMenu(app config.App) tea.Cmd {
 func (m *model) appAction(app config.App, selected string) tea.Cmd {
 	args := []string{selected, app.Name}
 	switch selected {
+	case "edit":
+		return m.editMenu(app)
 	case "back":
 		return m.home()
 	case "database-menu":
@@ -615,6 +618,8 @@ func nextStep(args []string) string {
 		return ""
 	}
 	switch args[0] {
+	case "edit":
+		return "Choose Deploy to apply saved settings. Database credentials and data are retained when a component is disabled."
 	case "setup":
 		return "Open Server & credentials to set up the GitHub key, then clone your project. MySQL admin shows your TablePlus login."
 	case "git":

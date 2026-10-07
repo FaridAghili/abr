@@ -162,21 +162,8 @@ func (h Host) enable(a config.App, r ports.Registry) error {
 		return err
 	}
 	if !h.DryRun {
-		if a.Web.Driver == "octane" {
-			info, err := os.Stat(h.path("/usr/local/bin/rr"))
-			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
-				return fmt.Errorf("shared RoadRunner is missing or not executable; run abr setup before enabling Octane")
-			}
-			local := h.path(filepath.Join(a.Directory, "rr"))
-			if _, err := os.Lstat(local); err == nil {
-				resolved, err := filepath.EvalSymlinks(local)
-				shared, sharedErr := filepath.EvalSymlinks(h.path("/usr/local/bin/rr"))
-				if err != nil || sharedErr != nil || resolved != shared {
-					return fmt.Errorf("%s: app-local rr overrides shared RoadRunner; remove that copy before enabling", a.Name)
-				}
-			} else if !os.IsNotExist(err) {
-				return err
-			}
+		if err := h.checkRoadRunner(a); err != nil {
+			return err
 		}
 		required := []string{".output/server/index.mjs"}
 		if a.Type == "laravel" {

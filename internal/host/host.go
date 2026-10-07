@@ -33,7 +33,8 @@ type Runner interface{ Run(Command) ([]byte, error) }
 
 type ExecRunner struct{ Output io.Writer }
 
-const maxCommandOutput = 1 << 20
+// Bound captured metadata, including larger npm and Composer lock files.
+const maxCommandOutput = 16 << 20
 const hostPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 type commandOutput struct {

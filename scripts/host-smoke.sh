@@ -9,7 +9,7 @@ abr_binary_source=$(realpath "${1:-bin/abr}")
 abr_binary_directory=$(mktemp -d)
 fixture_source=''
 fixture_git_shim=0
-trap 'if [[ -S "$abr_binary_directory/admin-tunnel" ]]; then sudo ssh -S "$abr_binary_directory/admin-tunnel" -O exit root@127.0.0.1; fi; sudo rm -rf "$abr_binary_directory"; if [[ -n $fixture_source ]]; then rm -rf "$fixture_source"; fi; if [[ $fixture_git_shim == 1 ]]; then sudo rm -f /usr/local/bin/git; fi' EXIT
+trap 'if [[ -S "$abr_binary_directory/admin-tunnel" ]]; then sudo ssh -S "$abr_binary_directory/admin-tunnel" -O exit root@127.0.0.1; fi; sudo rm -rf "$abr_binary_directory"; if [[ -n $fixture_source ]]; then sudo rm -rf "$fixture_source"; fi; if [[ $fixture_git_shim == 1 ]]; then sudo rm -f /usr/local/bin/git; fi' EXIT
 install -m 755 "$abr_binary_source" "$abr_binary_directory/abr"
 abr_test_binary="$abr_binary_directory/abr"
 abr_ci() {
@@ -325,6 +325,7 @@ fixture_caddy_format /etc/caddy/abr.d/abr-fixture-php.caddy
 fixture_denied abr-fixture-php sh -c 'printf overwritten >> /var/lib/abr-ci/composer/auth.json'
 fixture_denied nobody cat /var/lib/abr-ci/composer/auth.json
 sudo grep -Fx 'DB_DATABASE=fixture_php' /var/lib/abr-ci/credentials/fixture-php.env
+sudo grep -Fx 'DB_HOST=127.0.0.1' /var/lib/abr-ci/credentials/fixture-php.env
 if sudo grep -R -F 'fixture-private-token' /var/lib/abr-ci/deployments; then
   echo 'Composer token leaked to deployment history' >&2; exit 1
 fi
@@ -339,6 +340,58 @@ fixture_denied abr-fixture-php head -c 1 /var/lib/abr-ci/credentials/fixture-php
 fixture_denied abr-fixture-php cat /var/lib/abr-ci/mysql-admin.json
 fixture_denied nobody head -c 1 /var/lib/abr-ci/git/id_ed25519
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+
+# Failed preflight must leave the live app and its Git checkout untouched.
+sudo mv /srv/apps/fixture-php/.env /srv/apps/fixture-php/.env.preflight
+fixture_refused 'app services were not stopped' deploy fixture-php --no-pull
+sudo mv /srv/apps/fixture-php/.env.preflight /srv/apps/fixture-php/.env
+fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+
+# Fetch an invalid incoming commit from a disposable local remote; no external
+# repository is contacted, and the deployed checkout must remain on its old SHA.
+sudo git -c safe.directory=/srv/apps/fixture-php clone --bare --no-hardlinks /srv/apps/fixture-php "$fixture_source/deploy-origin.git"
+sudo git clone "$fixture_source/deploy-origin.git" "$fixture_source/deploy-edit"
+sudo git -C "$fixture_source/deploy-edit" config user.name 'Abr fixture'
+sudo git -C "$fixture_source/deploy-edit" config user.email 'fixture@example.invalid'
+sudo git -C "$fixture_source/deploy-edit" rm composer.lock
+sudo git -C "$fixture_source/deploy-edit" commit --no-gpg-sign -m 'Missing deployment lock'
+sudo git -c safe.directory="$fixture_source/deploy-origin.git" -C "$fixture_source/deploy-edit" push origin main
+# The app user needs to traverse the fixture and write its own remote repository.
+sudo chmod 755 "$fixture_source"
+sudo chown -R abr-fixture-php:abr-fixture-php "$fixture_source/deploy-origin.git"
+sudo runuser -u abr-fixture-php -- git -C /srv/apps/fixture-php remote add origin "$fixture_source/deploy-origin.git"
+sudo runuser -u abr-fixture-php -- git -C /srv/apps/fixture-php config branch.main.remote origin
+sudo runuser -u abr-fixture-php -- git -C /srv/apps/fixture-php config branch.main.merge refs/heads/main
+preflight_head=$(sudo runuser -u abr-fixture-php -- git -C /srv/apps/fixture-php rev-parse HEAD)
+fixture_refused 'commit composer.lock before deployment' deploy fixture-php
+test "$preflight_head" = "$(sudo runuser -u abr-fixture-php -- git -C /srv/apps/fixture-php rev-parse HEAD)"
+fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+sudo git -C "$fixture_source/deploy-edit" restore --source=HEAD~1 composer.lock
+sudo git -C "$fixture_source/deploy-edit" add composer.lock
+sudo git -C "$fixture_source/deploy-edit" commit --no-gpg-sign -m 'Restore deployment lock'
+sudo git -c safe.directory="$fixture_source/deploy-origin.git" -C "$fixture_source/deploy-edit" push origin main
+abr_ci deploy fixture-php
+test "$preflight_head" != "$(sudo runuser -u abr-fixture-php -- git -C /srv/apps/fixture-php rev-parse HEAD)"
+fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+
+# Saving settings keeps old services live. Deployment applies new routing and
+# reconciles worker units and optional components, retaining port reservations.
+sudo cp /var/lib/abr-ci/ports.json "$fixture_source/edit-ports-before.json"
+abr_ci edit fixture-php --domain edited.fixture-php.localhost --alias '' --serving-domain '' --queue-workers 2 --scheduler=false
+fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+abr_ci deploy fixture-php --no-pull
+fixture_https edited.fixture-php.localhost | grep -F 'Laravel fixture database=1'
+sudo systemctl is-active abr-fixture-php-queue@1.service abr-fixture-php-queue@2.service
+if sudo systemctl is-active --quiet abr-fixture-php-scheduler.timer; then
+  echo 'Edited scheduler remained active' >&2; exit 1
+fi
+sudo cmp "$fixture_source/edit-ports-before.json" /var/lib/abr-ci/ports.json
+abr_ci edit fixture-php --domain fixture-php.localhost --serving-domain extra.fixture-php.localhost --canonical-host non-www --queue-workers 0 --scheduler=true
+abr_ci deploy fixture-php --no-pull
+fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+if sudo systemctl is-active --quiet abr-fixture-php-queue@2.service; then
+  echo 'Disabled queue worker remained active' >&2; exit 1
+fi
 for private_uri in /.env /.env.production /.git/config; do
   sudo mkdir -p "/srv/apps/fixture-php/public$(dirname "$private_uri")"
   printf 'private fixture data' | sudo tee "/srv/apps/fixture-php/public$private_uri" >/dev/null
@@ -546,7 +599,7 @@ if abr_ci ports | grep -F fixture-php; then
   echo 'Fully removed app retained port reservations' >&2; exit 1
 fi
 sudo mysql --protocol=socket --user=root --batch --skip-column-names <<'SQL' | grep -Fx 0
-SELECT (SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME='fixture_php') + (SELECT COUNT(*) FROM mysql.user WHERE User='abr-fixture-php' AND Host='localhost');
+SELECT (SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME='fixture_php') + (SELECT COUNT(*) FROM mysql.user WHERE User='abr-fixture-php' AND Host IN ('localhost','127.0.0.1'));
 SQL
 # Ordinary removals and foreign databases must still retain their data.
 sudo test -f /srv/apps/fixture-octane/.env

@@ -84,6 +84,8 @@ func (h Host) asUser(a config.App, environment map[string]string, private bool, 
 		}
 	}
 	if name == "git" {
+		environment = copyEnvironment(environment)
+		environment["GIT_TERMINAL_PROMPT"] = "0"
 		configured, err := h.sharedGit()
 		if err != nil {
 			return nil, err
@@ -92,9 +94,7 @@ func (h Host) asUser(a config.App, environment map[string]string, private bool, 
 			if err := h.gitAccess(a, false); err != nil {
 				return nil, err
 			}
-			environment = copyEnvironment(environment)
 			environment["GIT_SSH_COMMAND"] = h.gitSSH()
-			environment["GIT_TERMINAL_PROMPT"] = "0"
 		}
 	}
 	return h.unprivileged(a.User, "/var/lib/abr-users/"+a.User, a.Directory, environment, private, name, args...)
@@ -179,37 +179,24 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if len(strings.TrimSpace(string(dirty))) > 0 {
 		return fmt.Errorf("working tree is dirty; commit/stash changes before deployment")
 	}
-	// Disable before pulling/changing code. In-place deployment deliberately has downtime.
+	commit, err = h.deploymentTarget(a, plan.Environment, o.NoPull)
+	if err != nil {
+		return err
+	}
+	if err := h.preflight(a, plan.Environment, commit, o.NoPull); err != nil {
+		return fmt.Errorf("preflight failed; app services were not stopped: %w", err)
+	}
+	// In-place deployment deliberately has downtime after preflight succeeds.
 	if err := h.disable(a); err != nil {
 		return err
 	}
 	if !o.NoPull {
-		if _, err := h.asUser(a, plan.Environment, false, "git", "pull", "--ff-only"); err != nil {
+		if _, err := h.asUser(a, plan.Environment, true, "git", "merge", "--ff-only", commit); err != nil {
 			return err
 		}
 	}
-	sha, err := h.asUser(a, plan.Environment, true, "git", "rev-parse", "HEAD")
-	if err != nil {
-		return err
-	}
-	commit = strings.TrimSpace(string(sha))
 	if err := h.permissions(a); err != nil {
 		return err
-	}
-	if a.Database.Enabled {
-		if err := h.database(a, false); err != nil {
-			return err
-		}
-	}
-	if !h.DryRun {
-		if a.Type == "laravel" {
-			if err := h.laravelEnv(a); err != nil {
-				return err
-			}
-			if _, err := os.Stat(h.path(filepath.Join(a.Directory, "composer.lock"))); err != nil {
-				return fmt.Errorf("commit composer.lock before deployment: %w", err)
-			}
-		}
 	}
 	php := "/usr/bin/php" + services.PHPVersion
 	run := func(name string, args ...string) error {
@@ -219,11 +206,7 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		if err == nil {
 			return nil
 		}
-		var exit interface{ ExitCode() int }
-		if name == "composer" && errors.As(err, &exit) && exit.ExitCode() == 100 {
-			err = fmt.Errorf("package download failed; for private repositories save credentials with abr composer auth --host HOST: %w", err)
-		}
-		return fmt.Errorf("%s as %s: %w", strings.Join(append([]string{name}, args...), " "), a.User, err)
+		return deploymentCommandError(a.User, name, args, err)
 	}
 	// Build frontend assets before installing PHP dependencies or running Artisan.
 	_, packageErr := os.Stat(h.path(filepath.Join(a.Directory, "package.json")))
@@ -350,10 +333,18 @@ func (h Host) laravelEnv(a config.App) error {
 	if err := json.Unmarshal(saved, &c); err != nil {
 		return err
 	}
-	for key, want := range map[string]string{"DB_CONNECTION": "mysql", "DB_HOST": "localhost", "DB_PORT": "3306", "DB_DATABASE": c.Database, "DB_USERNAME": c.User, "DB_PASSWORD": c.Password} {
+	for key, want := range map[string]string{"DB_CONNECTION": "mysql", "DB_HOST": "127.0.0.1", "DB_PORT": "3306", "DB_DATABASE": c.Database, "DB_USERNAME": c.User, "DB_PASSWORD": c.Password} {
 		if dotenvValue(data, key) != want {
 			return fmt.Errorf("%s: .env %s does not match the managed database; copy values from %s", a.Name, key, h.credentialsEnvPath(a.Name))
 		}
 	}
 	return nil
+}
+
+func deploymentCommandError(user, name string, args []string, err error) error {
+	var exit interface{ ExitCode() int }
+	if name == "composer" && errors.As(err, &exit) && exit.ExitCode() == 100 {
+		err = fmt.Errorf("package download failed; for private repositories save credentials with abr composer auth --host HOST: %w", err)
+	}
+	return fmt.Errorf("%s as %s: %w", strings.Join(append([]string{name}, args...), " "), user, err)
 }

@@ -42,6 +42,8 @@ Commands:
   list             List applications
   register         Register /srv/apps/NAME, create its Ubuntu user and Laravel database
                    --canonical-host as-entered|www|non-www selects this app's host pair
+  edit APP         Save app settings; deploy afterward to apply them
+                   --domain HOST --queue-workers N --scheduler=true|false, etc.
   ports            Show reservations (--allocate reconciles config edits)
   doctor           Portable config/registry/port checks
   setup            Install shared VPS packages, Caddy, Node 24 and RoadRunner
@@ -114,7 +116,7 @@ func run(args []string, out, stderr io.Writer) error {
 		command, args = "database "+args[0], args[1:]
 	}
 	switch command {
-	case "tui", "version", "config validate", "config example", "list", "register", "ports", "doctor", "setup", "git setup", "composer auth", "clone", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
+	case "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "git setup", "composer auth", "clone", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -132,7 +134,22 @@ func run(args []string, out, stderr io.Writer) error {
 	var backupAll, importYes, purge, removeYes bool
 	var composerHost, composerUsername string
 	var passwordStdin bool
+	var changes config.AppChanges
 	switch command {
+	case "edit":
+		fs.StringVar(&app.Domain, "domain", "", "primary domain")
+		fs.StringVar(&canonicalHost, "canonical-host", "", "as-entered, www or non-www")
+		fs.Var((*stringsFlag)(&app.Aliases), "alias", "replace redirect domains (repeatable; empty clears)")
+		fs.Var((*stringsFlag)(&app.Domains), "serving-domain", "replace additional serving domains (repeatable; empty clears)")
+		fs.StringVar(&app.HealthCheck, "health-check", "", "deployment health-check URL (empty clears)")
+		fs.StringVar(&app.Web.Driver, "web-driver", "", "Laravel: fpm or octane")
+		fs.IntVar(&app.Web.Workers, "octane-workers", 0, "Octane worker count")
+		fs.IntVar(&app.Queue.Workers, "queue-workers", 0, "queue worker count (0 disables)")
+		fs.BoolVar(&app.Scheduler.Enabled, "scheduler", false, "enable/disable scheduler")
+		fs.BoolVar(&app.Nightwatch.Enabled, "nightwatch", false, "enable/disable Nightwatch")
+		fs.BoolVar(&app.InertiaSSR.Enabled, "inertia-ssr", false, "enable/disable Inertia SSR")
+		fs.BoolVar(&app.Database.Enabled, "database", false, "enable/disable managed database; existing data retained")
+		fs.BoolVar(&configOnly, "config-only", false, "save portable config/ports without host operations")
 	case "remove":
 		fs.BoolVar(&purge, "purge", false, "permanently delete project, uploads, managed database/account, home, credentials and history")
 		fs.BoolVar(&removeYes, "yes", false, "confirm full removal with --purge")
@@ -189,6 +206,25 @@ func run(args []string, out, stderr io.Writer) error {
 		return helpError(err)
 	}
 	positional := fs.Args()
+	if command == "edit" {
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "domain", "canonical-host", "alias", "serving-domain", "health-check", "web-driver", "octane-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "database":
+				changes.Fields = append(changes.Fields, f.Name)
+			}
+		})
+		// An explicit empty list flag clears the corresponding setting.
+		if len(app.Aliases) == 1 && app.Aliases[0] == "" {
+			app.Aliases = nil
+		}
+		if len(app.Domains) == 1 && app.Domains[0] == "" {
+			app.Domains = nil
+		}
+		changes.Values, changes.CanonicalHost = app, canonicalHost
+		if len(changes.Fields) == 0 {
+			return fmt.Errorf("use abr edit APP with settings, for example --queue-workers 2 --scheduler=false")
+		}
+	}
 	switch command {
 	case "database backup":
 		if backupAll == (len(positional) > 0) || backupDirectory == "" {
@@ -206,7 +242,7 @@ func run(args []string, out, stderr io.Writer) error {
 		if (databaseAdmin && len(positional) != 0) || (!databaseAdmin && len(positional) != 1) {
 			return fmt.Errorf("use abr database APP [--show] or abr database --admin [--show]")
 		}
-	case "enable", "disable", "remove":
+	case "enable", "disable", "remove", "edit":
 		if len(positional) != 1 {
 			return fmt.Errorf("use abr %s APP", command)
 		}
@@ -236,6 +272,19 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	h.Manager = m
 	switch command {
+	case "edit":
+		if configOnly {
+			if err := m.Edit(positional[0], changes, !h.DryRun); err != nil {
+				return err
+			}
+			if h.DryRun {
+				fmt.Fprintln(out, "Settings preview validated; no files changed")
+			} else {
+				fmt.Fprintln(out, "Settings saved; deploy on the VPS to apply them")
+			}
+			return nil
+		}
+		return h.Edit(positional[0], changes)
 	case "composer auth":
 		if !h.DryRun {
 			if err := host.Require(); err != nil {

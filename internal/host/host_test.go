@@ -31,6 +31,7 @@ type fakeRunner struct {
 	users            map[string]string
 	groups           map[string]string
 	database         bool
+	tcp              bool
 	unitState        string
 	fail             func(Command) error
 	dirty, processes bool
@@ -84,6 +85,27 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 		}
 		return nil, testExit(1)
 	case "mysql":
+		if strings.Contains(string(c.Input), "SELECT CURRENT_USER()") {
+			for _, arg := range c.Args {
+				if strings.HasPrefix(arg, "--defaults-file=") {
+					data, err := os.ReadFile(strings.TrimPrefix(arg, "--defaults-file="))
+					if err != nil {
+						return nil, err
+					}
+					return []byte(dotenvValue(data, "user") + "@127.0.0.1\n"), nil
+				}
+			}
+		}
+		if strings.Contains(string(c.Input), "CREATE USER IF NOT EXISTS") && strings.Contains(string(c.Input), "@'127.0.0.1'") {
+			r.tcp = true
+			return nil, nil
+		}
+		if strings.Contains(string(c.Input), "SELECT COUNT(*) FROM mysql.user") && strings.Contains(string(c.Input), "Host='127.0.0.1'") {
+			if r.tcp {
+				return []byte("1\n"), nil
+			}
+			return []byte("0\n"), nil
+		}
 		if strings.HasPrefix(string(c.Input), "DROP DATABASE") {
 			r.database = false
 			return nil, nil
@@ -118,7 +140,16 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 		if strings.Contains(text, "git status") && r.dirty {
 			return []byte(" M tracked-file\n"), nil
 		}
-		if strings.Contains(text, "git rev-parse HEAD") {
+		if slices.Contains(c.Args, "show") && slices.Contains(c.Args, "git") {
+			_, name, _ := strings.Cut(c.Args[len(c.Args)-1], ":")
+			return os.ReadFile(filepath.Join(c.Dir, name))
+		}
+		if slices.Contains(c.Args, "cat-file") {
+			_, name, _ := strings.Cut(c.Args[len(c.Args)-1], ":")
+			_, err := os.Stat(filepath.Join(c.Dir, name))
+			return nil, err
+		}
+		if strings.Contains(text, "git rev-parse") {
 			return []byte(strings.Repeat("a", 40) + "\n"), nil
 		}
 	}
@@ -146,7 +177,7 @@ func fixture(t *testing.T) (Host, *fakeRunner, *bytes.Buffer, config.App) {
 			t.Fatal(err)
 		}
 	}
-	for _, file := range []string{"artisan", "vendor/autoload.php", "public/index.php", "composer.lock", "package.json", "package-lock.json"} {
+	for _, file := range []string{"artisan", "vendor/autoload.php", "public/index.php", "composer.json", "composer.lock", "package.json", "package-lock.json"} {
 		if err := os.WriteFile(filepath.Join(a.Directory, file), []byte("{}\n"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -439,7 +470,7 @@ func TestLaravelFrontendFailureStopsBeforeComposer(t *testing.T) {
 			}
 			for _, c := range r.calls {
 				args := strings.Join(c.Args, " ")
-				if c.Name == "runuser" && (strings.Contains(args, "composer ") || strings.Contains(args, "artisan ")) {
+				if c.Name == "runuser" && (strings.Contains(args, "composer install") || strings.Contains(args, "artisan ")) {
 					t.Fatalf("PHP deployment continued after frontend failure: %s", args)
 				}
 			}

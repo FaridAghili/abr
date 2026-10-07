@@ -103,7 +103,9 @@ sudo abr status api
 ```
 
 Copy the displayed database credentials into `.env` and set your app secrets.
-Later, `sudo abr deploy api` pulls with `git pull --ff-only`. Apps share the GitHub
+Managed MySQL uses `DB_HOST=127.0.0.1` and port 3306. `DB_DATABASE` is the app
+name with hyphens replaced by underscores; Abr adds no database-name prefix.
+Later, `sudo abr deploy api` fetches and fast-forwards to the checked upstream commit. Apps share the GitHub
 key's permissions; private Composer/npm dependencies may need separate credentials.
 Use `git setup --key /absolute/private-key` to import an existing unencrypted key.
 Imported keys must be regular files without symlinks and no larger than 64 KiB.
@@ -130,13 +132,37 @@ access and preserves the saved credentials. Project-local `auth.json` can overri
 shared credentials; keep it out of source control. Without saved shared credentials,
 Composer uses the app user's own configuration.
 
-Laravel deployment runs **npm ci → npm run build → Composer install → migrations →
+Before stopping an app, deployment checks Git access and fast-forward eligibility,
+Laravel `.env` and managed database access, incoming manifests and lock files,
+PHP/Composer platform requirements, and npm lock consistency/runtime requirements.
+Composer and npm checks run without scripts/plugins in a private temporary directory;
+Composer downloads packages into the app’s cache before downtime, checking private
+repository access when an archive is needed. Project scripts, builds and migrations
+can still fail during deployment.
+
+Laravel deployment then runs **npm ci → npm run build → Composer install → migrations →
 optimization → services**. It generates a missing APP_KEY and storage link. FPM is
 the default driver. Optional flags: `--scheduler`, `--queue-workers N`, `--nightwatch`,
 `--inertia-ssr`, `--octane-workers N`, `--health-check URL`; `--no-database` keeps DB
 management external. Install the corresponding Laravel packages in your project;
 Inertia's server bundle must honor `SSR_PORT`. Octane uses the shared RoadRunner;
 remove any app-local `rr` binary. Deployments have downtime and no automatic rollback.
+
+Use **App → More actions → Edit settings** to change domains, workers, components
+or the deployment health check. Forms start with current values. Saving settings
+reserves any new ports and keeps existing services running; deploy to apply them.
+Disabling the database retains its data and credentials.
+
+```sh
+sudo abr edit api --queue-workers 3 --scheduler=false
+sudo abr edit api --domain api.example.com --canonical-host non-www
+sudo abr edit api --health-check https://api.example.com/up
+sudo abr deploy api
+```
+
+Only supplied flags change settings. `--alias` and `--serving-domain` replace their
+lists (repeat the flag for multiple entries; pass an empty value to clear).
+`--health-check ''` clears the check. `--config-only` saves portable settings locally.
 
 The `sudo abr` entry point is needed for users, permissions, databases and system
 services. Composer, npm, Artisan, Git updates and asset compression run as the
@@ -179,7 +205,7 @@ sudo abr remove api --purge --yes
 
 Full removal deletes the registered project directory (including uploads and
 `.env`), the app's home and private Ubuntu account/group, recorded managed MySQL
-database and localhost user, credentials, deployment history, service configs,
+database and recorded local MySQL accounts, credentials, deployment history, service configs,
 configuration entry and port reservations. Shared runtimes, shared Composer/Git
 credentials, self-managed databases and separately exported backups are kept.
 Back up anything you need first; full removal cannot be undone.
