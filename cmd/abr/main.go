@@ -40,7 +40,7 @@ Commands:
   config validate  Validate TOML configuration
   config example   Print the bundled example configuration
   list             List applications
-  register         Register a clone, create its Ubuntu user and Laravel database
+  register         Register /srv/apps/NAME, create its Ubuntu user and Laravel database
                    --canonical-host as-entered|www|non-www selects this app's host pair
   ports            Show reservations (--allocate reconciles config edits)
   doctor           Portable config/registry/port checks
@@ -48,7 +48,7 @@ Commands:
   git setup        Create/reuse one VPS GitHub SSH key (--key imports an existing key)
   composer auth    Save shared private-package credentials; prompts for email/token
                    --host HOST --username USER --password-stdin is scriptable
-  clone URL DIR    Clone a GitHub SSH repository into a new directory under apps-dir
+  clone URL NAME   Clone a GitHub SSH repository into /srv/apps/NAME
   database APP     Create/verify MySQL database (--show prints credentials)
   database backup APP... | --all --output-dir DIR
                    Export selected/all managed databases as private SQL files
@@ -57,6 +57,7 @@ Commands:
   enable APP       Render, validate and start services
   disable APP      Stop services; retain users, databases and ports
   remove APP       Remove managed services/user; retain projects and databases
+                   --purge --yes permanently deletes this app and its data
   status [APP]     Show actual service status
   restart APP [SERVICE]  Restart managed services (web, queue, queue@1, etc.)
   logs APP [SERVICE]     Show journal (--follow streams it)
@@ -126,10 +127,13 @@ func run(args []string, out, stderr io.Writer) error {
 	var deploy host.DeployOptions
 	var gitKey, backupDirectory string
 	var canonicalHost string
-	var backupAll, importYes bool
+	var backupAll, importYes, purge, removeYes bool
 	var composerHost, composerUsername string
 	var passwordStdin bool
 	switch command {
+	case "remove":
+		fs.BoolVar(&purge, "purge", false, "permanently delete project, uploads, managed database/account, home, credentials and history")
+		fs.BoolVar(&removeYes, "yes", false, "confirm full removal with --purge")
 	case "composer auth":
 		fs.StringVar(&composerHost, "host", "nova.laravel.com", "private Composer repository hostname")
 		fs.StringVar(&composerUsername, "username", "", "repository username/email (default: prompt)")
@@ -140,7 +144,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&allocate, "allocate", false, "reserve missing endpoints; retain assignments")
 	case "register":
 		fs.StringVar(&app.Name, "name", "", "unique application name (required)")
-		fs.StringVar(&app.Directory, "dir", "", "absolute cloned project directory (required)")
+		fs.StringVar(&app.Directory, "dir", "", "project directory override (default: apps-dir/NAME)")
 		fs.StringVar(&app.User, "user", "", "dedicated runtime user (default: abr-NAME)")
 		fs.StringVar(&app.Type, "type", "", "laravel or nuxt (required)")
 		fs.StringVar(&app.Domain, "domain", "", "main domain (required)")
@@ -192,7 +196,7 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 	case "clone":
 		if len(positional) != 2 {
-			return fmt.Errorf("use abr clone git@github.com:OWNER/REPO.git /srv/apps/APP")
+			return fmt.Errorf("use abr clone git@github.com:OWNER/REPO.git APP")
 		}
 	case "enable", "disable", "remove", "database":
 		if len(positional) != 1 {
@@ -238,7 +242,10 @@ func run(args []string, out, stderr io.Writer) error {
 	case "git setup":
 		return h.GitSetup(gitKey)
 	case "clone":
-		return h.Clone(positional[0], positional[1])
+		if !config.ValidName(positional[1]) {
+			return fmt.Errorf("use an application name: lowercase letters, digits and hyphens; start with a letter (max 63)")
+		}
+		return h.Clone(positional[0], filepath.Join(h.AppsDir, positional[1]))
 	case "tui":
 		if !terminalAvailable(out) {
 			return fmt.Errorf("tui requires terminal input and output; use abr help for scriptable commands")
@@ -290,6 +297,9 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		return w.Flush()
 	case "register":
+		if app.Directory == "" {
+			app.Directory = filepath.Join(h.AppsDir, app.Name)
+		}
 		app, err = app.WithCanonicalHost(canonicalHost)
 		if err != nil {
 			return err
@@ -365,6 +375,12 @@ func run(args []string, out, stderr io.Writer) error {
 	case "disable":
 		return h.Disable(positional[0])
 	case "remove":
+		if purge {
+			return h.Purge(positional[0], removeYes)
+		}
+		if removeYes {
+			return fmt.Errorf("--yes is only used with remove --purge")
+		}
 		return h.Remove(positional[0])
 	case "deploy":
 		return h.Deploy(positional, deploy)

@@ -29,6 +29,7 @@ func (e testExit) ExitCode() int { return int(e) }
 type fakeRunner struct {
 	calls            []Command
 	users            map[string]string
+	groups           map[string]string
 	database         bool
 	fail             func(Command) error
 	dirty, processes bool
@@ -43,6 +44,19 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 	}
 	switch c.Name {
 	case "getent":
+		if c.Args[0] == "group" {
+			if entry, ok := r.groups[c.Args[len(c.Args)-1]]; ok {
+				return []byte(entry), nil
+			}
+			return nil, testExit(2)
+		}
+		if len(c.Args) == 1 {
+			var entries []string
+			for _, entry := range r.users {
+				entries = append(entries, entry)
+			}
+			return []byte(strings.Join(entries, "\n")), nil
+		}
 		if entry, ok := r.users[c.Args[len(c.Args)-1]]; ok {
 			return []byte(entry), nil
 		}
@@ -61,12 +75,18 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 		r.users[user] = fmt.Sprintf("%s:x:991:991:%s:%s:/usr/sbin/nologin", user, comment, home)
 	case "userdel":
 		delete(r.users, c.Args[0])
+	case "groupdel":
+		delete(r.groups, c.Args[0])
 	case "pgrep":
 		if r.processes {
 			return []byte("999\n"), nil
 		}
 		return nil, testExit(1)
 	case "mysql":
+		if strings.HasPrefix(string(c.Input), "DROP DATABASE") {
+			r.database = false
+			return nil, nil
+		}
 		if string(c.Input) == "SELECT @@partial_revokes;\n" {
 			return []byte("0\n"), nil
 		}

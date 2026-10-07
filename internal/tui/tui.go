@@ -299,7 +299,7 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 	case "credentials":
 		return m.review(action{title: "Show credentials: " + app.Name, args: []string{"database", app.Name, "--show"}, note: "Shows database passwords on this terminal. Copy them to the project's .env. Output clears when you leave."})
 	case "remove":
-		return m.review(action{title: "Remove " + app.Name, args: args, note: "Stops this app and removes managed services and its user. Projects, secrets, uploads and databases are kept."})
+		return m.removeForm(app)
 	case "disable":
 		return m.review(action{title: "Disable " + app.Name, args: args, note: "Stops services and routing; the app becomes unavailable. Its files, database and ports are kept."})
 	case "enable":
@@ -308,6 +308,21 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 		return m.review(action{title: "Verify database: " + app.Name, args: args, note: "Create or verify the managed database. Existing data and passwords are kept."})
 	}
 	return m.appMenu(app)
+}
+
+func (m *model) removeForm(app config.App) tea.Cmd {
+	var purge bool
+	return m.setForm("form", "Remove "+app.Name, func() tea.Cmd {
+		a := action{title: "Remove " + app.Name, args: []string{"remove", app.Name}, note: "Stops this app and removes its managed services, user, configuration and port reservations. Project files, uploads, home, database and credentials are kept."}
+		if purge {
+			a.title = "Fully delete " + app.Name
+			a.args = append(a.args, "--purge", "--yes")
+			a.note = "Permanently delete " + app.Directory + " (including .env and uploads), the app's home, managed database and DB user, credentials, deployment history, services, configuration and port reservations. This cannot be undone. Shared server tools and shared Composer/Git credentials stay."
+		}
+		return m.review(a)
+	}, huh.NewGroup(huh.NewSelect[bool]().Title("What should be removed?").Description("Keep data for later, or permanently delete this app and its data.\nExample: full deletion for an app you no longer need.").Options(
+		huh.NewOption("Remove services; keep files and database", false),
+		huh.NewOption("Fully delete app and data", true)).Value(&purge)))
 }
 
 func (m *model) serviceForm(app config.App, command string) tea.Cmd {
@@ -602,7 +617,7 @@ func nextStep(args []string) string {
 	case "git":
 		return "Add the public key to GitHub Settings → SSH and GPG keys, then choose Clone application."
 	case "clone":
-		return "Choose Register application and enter the directory you just cloned."
+		return "Choose Register application and use the same app name. Its project path is automatic."
 	case "register":
 		if slices.Contains(args, "--config-only") {
 			return "Register on the VPS before deploying; this saved local configuration only."

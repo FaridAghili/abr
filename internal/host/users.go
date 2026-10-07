@@ -16,7 +16,7 @@ import (
 	"abr/internal/services"
 )
 
-type userRecord struct{ App, User, UID, Home string }
+type userRecord struct{ App, User, UID, Home, GID string }
 
 func RuntimeUser(name string) string {
 	if len(name) <= 26 {

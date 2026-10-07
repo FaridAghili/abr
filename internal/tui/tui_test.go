@@ -75,6 +75,40 @@ func TestReviewRequiresExplicitApproval(t *testing.T) {
 		t.Fatal("operation not completed")
 	}
 }
+
+func TestFullRemovalChoiceAndConfirmation(t *testing.T) {
+	app := config.App{Name: "example", Directory: "/srv/apps/example", User: "abr-example"}
+	o := testOptions(t)
+	called := make(chan []string, 1)
+	o.RunCommand = func(args []string, w io.Writer) error { called <- args; return nil }
+	m := newModel(o)
+	m.appAction(app, "remove")
+	m.next()
+	if strings.Join(m.current.args, " ") != "remove example" || m.approved || m.page != "confirm" {
+		t.Fatal("ordinary removal did not remain the default")
+	}
+	m.removeForm(app)
+	press(m, tea.KeyDown)
+	m.next()
+	if strings.Join(m.current.args, " ") != "remove example --purge --yes" || !strings.Contains(m.reviewText, app.Directory) || !strings.Contains(m.reviewText, "cannot be undone") || m.approved || m.busy {
+		t.Fatalf("full deletion skipped review: %s %v", m.reviewText, m.current.args)
+	}
+	press(m, tea.KeyEnter)
+	select {
+	case <-called:
+		t.Fatal("default Cancel executed full removal")
+	default:
+	}
+	m.removeForm(app)
+	press(m, tea.KeyDown)
+	m.next()
+	press(m, 'y')
+	press(m, tea.KeyEnter)
+	receive(t, m)
+	if strings.Join(<-called, " ") != "remove example --purge --yes" {
+		t.Fatal("confirmed full removal used the wrong command")
+	}
+}
 func TestRunningOperationCannotBeAbandonedOrDuplicated(t *testing.T) {
 	o := testOptions(t)
 	release := make(chan struct{})
@@ -189,6 +223,33 @@ func TestGuidedDefaults(t *testing.T) {
 	}
 }
 
+func TestCloneAndRegistrationAskForNameWithoutProjectPath(t *testing.T) {
+	m := newModel(testOptions(t))
+	m.cloneForm()
+	m.Update(tea.PasteMsg{Content: "git@github.com:owner/project.git"})
+	m.form.NextGroup()
+	if view := m.View().Content; !strings.Contains(view, "Application name") || strings.Contains(view, "application directory") {
+		t.Fatal("clone still asks for a full path")
+	}
+	m.Update(tea.PasteMsg{Content: "example-api"})
+	m.next()
+	if got := strings.Join(m.current.args, " "); got != "clone git@github.com:owner/project.git example-api" || !strings.Contains(m.reviewText, filepath.Join(m.options.AppsDir, "example-api")) {
+		t.Fatalf("clone review did not resolve the app directory: %s %s", got, m.reviewText)
+	}
+	m.registerForm()
+	m.form.NextGroup() // Application type → name.
+	m.Update(tea.PasteMsg{Content: "example-api"})
+	m.form.NextGroup()
+	if view := m.View().Content; !strings.Contains(view, "Primary domain") || strings.Contains(view, "Project directory") {
+		t.Fatal("registration still asks for a project directory")
+	}
+	m.Update(tea.PasteMsg{Content: "api.example.com"})
+	m.next()
+	if got := strings.Join(m.current.args, " "); strings.Contains(got, "--dir") || !strings.Contains(got, "--name example-api") || !strings.Contains(m.reviewText, filepath.Join(m.options.AppsDir, "example-api")) {
+		t.Fatalf("registration used a different project directory: %s %s", got, m.reviewText)
+	}
+}
+
 func TestComposerTokenIsMaskedAndExcludedFromReviewAndCommandArguments(t *testing.T) {
 	o := testOptions(t)
 	called := false
@@ -264,6 +325,7 @@ func TestGuidedFieldsFitSmallTerminalAndShowExamples(t *testing.T) {
 		"import":   func(m *model) { m.databaseImportForm(app.Name) },
 		"deploy":   func(m *model) { m.deployForm(app.Name) },
 		"service":  func(m *model) { m.serviceForm(app, "restart") },
+		"remove":   func(m *model) { m.removeForm(app) },
 	}
 	for name, open := range forms {
 		t.Run(name, func(t *testing.T) {
@@ -305,7 +367,7 @@ func TestNextStepsFollowSuccessfulWorkOnly(t *testing.T) {
 			o.DryRun = scenario.dryRun
 			o.RunCommand = func([]string, io.Writer) error { return scenario.err }
 			m := newModel(o)
-			m.start(action{title: "Clone", args: []string{"clone", "git@github.com:owner/app.git", "/srv/apps/app"}})
+			m.start(action{title: "Clone", args: []string{"clone", "git@github.com:owner/app.git", "app"}})
 			receive(t, m)
 			if got, want := strings.Contains(m.output, "Next: Choose Register application"), scenario.err == nil && !scenario.dryRun; got != want {
 				t.Fatalf("incorrect completion guidance: %s", m.output)

@@ -533,12 +533,30 @@ func (h Host) stopAndDisable(units []string) error {
 }
 
 func (h Host) Remove(name string) error {
+	return h.remove(name, false)
+}
+
+// Purge permanently deletes the registered app's data as well as its services.
+func (h Host) Purge(name string, confirmed bool) error {
+	if !confirmed && !h.DryRun {
+		return fmt.Errorf("full removal deletes project files, uploads and database data; use --purge --yes to confirm")
+	}
+	return h.remove(name, true)
+}
+
+func (h Host) remove(name string, purge bool) error {
 	return h.locked(func() error {
 		a, r, err := h.application(name)
 		if err != nil {
 			return err
 		}
-		if err := h.project(a); err != nil {
+		var cleanup purgePlan
+		if purge {
+			cleanup, err = h.planPurge(a)
+		} else {
+			err = h.project(a)
+		}
+		if err != nil {
 			return err
 		}
 		m, _, err := h.loadManifest(a)
@@ -547,6 +565,22 @@ func (h Host) Remove(name string) error {
 		}
 		if err := h.disable(a); err != nil {
 			return err
+		}
+		if purge {
+			for _, unit := range stopUnits(m.Units) {
+				if !h.DryRun {
+					output, err := h.run("Check managed unit "+unit, Command{Name: "systemctl", Args: []string{"show", "--property=LoadState", "--value", unit}, Private: true})
+					if err != nil {
+						return err
+					}
+					if strings.TrimSpace(string(output)) == "not-found" {
+						continue
+					}
+				}
+				if err := h.command("systemctl", "reset-failed", unit); err != nil {
+					return err
+				}
+			}
 		}
 		if !h.DryRun {
 			for _, assignment := range r.Assignments {
@@ -568,8 +602,13 @@ func (h Host) Remove(name string) error {
 		if err := h.command("systemctl", "daemon-reload"); err != nil {
 			return err
 		}
-		if err := h.removeUser(a); err != nil {
+		if err := h.removeUser(a, purge); err != nil {
 			return err
+		}
+		if purge {
+			if err := h.purgeData(a, cleanup); err != nil {
+				return err
+			}
 		}
 		if !h.DryRun {
 			if err := h.Manager.Remove(a.Name); err != nil {
@@ -579,8 +618,17 @@ func (h Host) Remove(name string) error {
 		if err := h.removeFile(h.manifestPath(a.Name)); err != nil {
 			return err
 		}
+		if purge {
+			for _, path := range []string{h.credentialsPath(a.Name), h.userPath(a)} {
+				if err := h.removeFile(path); err != nil {
+					return err
+				}
+			}
+		}
 		if h.DryRun {
 			h.say("Would unregister %s and release its ports after verifying services stopped", a.Name)
+		} else if purge {
+			h.say("Fully removed %s: project, uploads, managed database/account, home, credentials, history, services and port reservations deleted", a.Name)
 		} else {
 			h.say("Removed %s; project files, home directory, database and credentials retained", a.Name)
 		}
@@ -588,13 +636,31 @@ func (h Host) Remove(name string) error {
 	})
 }
 
-func (h Host) removeUser(a config.App) error {
+func (h Host) removeUser(a config.App, purge bool) error {
 	if h.DryRun {
-		h.say("Would remove only the recorded managed Ubuntu account %s, preserving its files", a.User)
+		h.say("Would remove the recorded managed Ubuntu account %s", a.User)
 		return nil
 	}
 	data, err := h.read(h.userPath(a))
 	if os.IsNotExist(err) {
+		if purge {
+			// A config-only registration has no account to remove. Never
+			// treat an unrecorded existing account/home/group as managed.
+			if _, exists, lookupErr := h.passwd(a.User); lookupErr != nil {
+				return lookupErr
+			} else if !exists {
+				if _, homeErr := os.Lstat(h.path("/var/lib/abr-users/" + a.User)); os.IsNotExist(homeErr) {
+					_, groupErr := h.run("Check unrecorded Ubuntu group "+a.User, Command{Name: "getent", Args: []string{"group", a.User}, Private: true})
+					var exit interface{ ExitCode() int }
+					if errors.As(groupErr, &exit) && exit.ExitCode() == 2 {
+						return nil
+					}
+					if groupErr != nil {
+						return groupErr
+					}
+				}
+			}
+		}
 		return fmt.Errorf("no ownership record for user %s; account will not be removed", a.User)
 	}
 	if err != nil {
@@ -624,10 +690,27 @@ func (h Host) removeUser(a config.App) error {
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 			return err
 		}
+		if purge {
+			// Keep group identity and ownership records until cleanup completes,
+			// including retries after userdel or filesystem failures.
+			record.GID = parts[3]
+			data, err := json.Marshal(record)
+			if err != nil {
+				return err
+			}
+			if err := h.write(h.userPath(a), data, 0600); err != nil {
+				return err
+			}
+		}
 		// Linux can reuse a deleted UID. Retained secrets must not become
 		// readable by the next application assigned that UID.
-		if err := h.command("chown", "-hR", "root:root", "--", a.Directory, record.Home); err != nil {
-			return err
+		for _, path := range []string{a.Directory, record.Home} {
+			if _, err := os.Lstat(h.path(path)); os.IsNotExist(err) && purge {
+				continue
+			}
+			if err := h.command("chown", "-hR", "root:root", "--", path); err != nil {
+				return err
+			}
 		}
 		if err := h.gitAccess(a, true); err != nil {
 			return err
@@ -638,6 +721,12 @@ func (h Host) removeUser(a config.App) error {
 		if err := h.command("userdel", a.User); err != nil {
 			return err
 		}
+	}
+	if purge {
+		if err := h.removePrivateGroup(a, record); err != nil {
+			return err
+		}
+		return h.forgetAppAccess(record)
 	}
 	return h.removeFile(h.userPath(a))
 }

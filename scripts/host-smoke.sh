@@ -176,7 +176,7 @@ exec /usr/bin/git "$@"
 SH
 sudo install -m 755 "$abr_binary_directory/git-fixture" /usr/local/bin/git
 fixture_git_shim=1
-abr_ci clone git@github.com:fixture/local.git /srv/apps/fixture-clone
+abr_ci clone git@github.com:fixture/local.git fixture-clone
 sudo test -d /srv/apps/fixture-clone/.git
 test "$(stat -c '%u' /srv/apps/fixture-clone/.git)" = 0
 test -z "$(sudo find /srv/apps -maxdepth 1 -name '.abr-clone-*' -print)"
@@ -241,7 +241,7 @@ fixture_git() {
   sudo git -C "$1" commit --no-gpg-sign -m 'Fixture'
 }
 fixture_git /srv/apps/fixture-php
-abr_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --serving-domain extra.fixture-php.localhost --canonical-host non-www --scheduler
+abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost --serving-domain extra.fixture-php.localhost --canonical-host non-www --scheduler
 # Fresh accounts must not access a foreign database whose name would match an
 # unescaped underscore in a database grant.
 sudo mysql --protocol=socket --user=root <<'SQL'
@@ -254,7 +254,7 @@ fi
 # Provision a new account with partial revokes enabled and verify its scope.
 sudo mysql --protocol=socket --user=root -e 'SET GLOBAL partial_revokes=ON;'
 sudo mkdir -p /srv/apps/fixture-literal/public /srv/apps/fixture-literal/storage/app/public
-abr_ci register --name fixture-literal --dir /srv/apps/fixture-literal --type laravel --domain fixture-literal.localhost
+abr_ci register --name fixture-literal --type laravel --domain fixture-literal.localhost
 sudo mysql --protocol=socket --user=root -e 'CREATE DATABASE fixtureXliteral;'
 printf 'USE fixtureXliteral; CREATE TABLE forbidden (id INT);\n' | sudo tee /var/lib/abr-ci/foreign-literal.sql >/dev/null
 if abr_ci database import fixture-literal /var/lib/abr-ci/foreign-literal.sql --yes; then
@@ -360,7 +360,7 @@ sudo cp -R "$fixture_source/laravel" /srv/apps/fixture-octane
 sudo cp /srv/apps/fixture-php/routes/web.php /srv/apps/fixture-octane/routes/web.php
 printf '\n.rr.yaml\n' | sudo tee -a /srv/apps/fixture-octane/.gitignore >/dev/null
 fixture_git /srv/apps/fixture-octane
-abr_ci register --name fixture-octane --dir /srv/apps/fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost --canonical-host www
+abr_ci register --name fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost --canonical-host www
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-octane/.env.example > /srv/apps/fixture-octane/.env; cat /var/lib/abr-ci/credentials/fixture-octane.env >> /srv/apps/fixture-octane/.env; chmod 600 /srv/apps/fixture-octane/.env'
 abr_ci deploy fixture-octane --no-pull
 fixture_https www.fixture-octane.localhost -D "$fixture_source/octane-headers" | grep -F 'Laravel fixture database=1'
@@ -404,7 +404,7 @@ JSON
   npm --prefix "$nuxt_source" install --package-lock-only --ignore-scripts --allow-remote=all
   sudo cp -R "$nuxt_source" "$dir"
   fixture_git "$dir"
-  abr_ci register --name "$app" --dir "$dir" --type nuxt --domain "$app_domain"
+  abr_ci register --name "$app" --type nuxt --domain "$app_domain"
   abr_ci deploy "$app" --no-pull
   test "$(sudo systemctl show "abr-$app-nuxt.service" --property=NoNewPrivileges --value)" = yes
   nuxt_pid=$(sudo systemctl show "abr-$app-nuxt.service" --property=MainPID --value)
@@ -429,7 +429,13 @@ JSON
   abr_ci restart "$app" web
 done
 abr_ci ports
-abr_ci remove fixture-ssr
+abr_ci remove fixture-ssr --purge --yes
+sudo test ! -e /srv/apps/fixture-ssr
+sudo test ! -e /var/lib/abr-users/abr-fixture-ssr
+sudo test ! -e /etc/systemd/system/abr-fixture-ssr-nuxt.service
+if getent passwd abr-fixture-ssr || getent group abr-fixture-ssr; then
+  echo 'Fully removed Nuxt app retained its Ubuntu account/group' >&2; exit 1
+fi
 abr_ci remove fixture-spa
 abr_ci remove fixture-octane
 removed_git_uid=$(id -u abr-fixture-php)
@@ -440,13 +446,64 @@ sudo test -f /var/lib/abr-ci/credentials/fixture-php.env
 sudo test "$(sudo stat -c '%U' /srv/apps/fixture-php/.env)" = root
 if getent passwd abr-fixture-php; then echo 'Managed user was not removed' >&2; exit 1; fi
 # Reuse retained data/credentials and verify a repeated deployment stays clean.
-abr_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --scheduler
+abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost --scheduler
 abr_ci deploy fixture-php --no-pull
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
-abr_ci remove fixture-php
+if abr_ci remove fixture-php --purge; then
+  echo 'Full removal did not require explicit confirmation' >&2; exit 1
+fi
+abr_ci remove fixture-php --purge --dry-run
+sudo test -f /srv/apps/fixture-php/.env
+# Bind mounts must not cause deletion of storage outside the registered project.
+mkdir -p "$fixture_source/mounted-uploads"
+touch "$fixture_source/mounted-uploads/keep"
+sudo mkdir -p /srv/apps/fixture-php/storage/abr-mount-fixture
+sudo mount --bind "$fixture_source/mounted-uploads" /srv/apps/fixture-php/storage/abr-mount-fixture
+if abr_ci remove fixture-php --purge --yes; then
+  echo 'Full removal traversed a mounted directory' >&2; exit 1
+fi
+sudo test -f "$fixture_source/mounted-uploads/keep"
+sudo umount /srv/apps/fixture-php/storage/abr-mount-fixture
+purged_git_uid=$(id -u abr-fixture-php)
+abr_ci remove fixture-php --purge --yes
+for path in /srv/apps/fixture-php /var/lib/abr-users/abr-fixture-php \
+  /var/lib/abr-ci/apps/fixture-php.json /var/lib/abr-ci/users/abr-fixture-php.json \
+  /var/lib/abr-ci/databases/fixture-php.json /var/lib/abr-ci/credentials/fixture-php.env \
+  /var/lib/abr-ci/env/fixture-php.env /var/lib/abr-ci/deployments/fixture-php \
+  /etc/caddy/abr.d/abr-fixture-php.caddy /etc/php/8.5/fpm/pool.d/abr-fixture-php.conf \
+  /etc/systemd/system/abr-fixture-php-scheduler.service /etc/systemd/system/abr-fixture-php-scheduler.timer; do
+  sudo test ! -e "$path"
+done
+if getent passwd abr-fixture-php || getent group abr-fixture-php; then
+  echo 'Fully removed app retained its Ubuntu account/group' >&2; exit 1
+fi
+if abr_ci list | grep -F fixture-php; then
+  echo 'Fully removed app retained its configuration entry' >&2; exit 1
+fi
+if abr_ci ports | grep -F fixture-php; then
+  echo 'Fully removed app retained port reservations' >&2; exit 1
+fi
+sudo mysql --protocol=socket --user=root --batch --skip-column-names <<'SQL' | grep -Fx 0
+SELECT (SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME='fixture_php') + (SELECT COUNT(*) FROM mysql.user WHERE User='abr-fixture-php' AND Host='localhost');
+SQL
+# Ordinary removals and foreign databases must still retain their data.
+sudo test -f /srv/apps/fixture-octane/.env
+sudo test -f /var/lib/abr-ci/git/id_ed25519
+for path in /var/lib/abr-ci /var/lib/abr-ci/git/id_ed25519 /var/lib/abr-ci/composer/auth.json; do
+  if sudo getfacl -cn "$path" | grep -E "^user:$purged_git_uid:"; then
+    echo 'Fully removed app retained a shared credential ACL' >&2; exit 1
+  fi
+done
+sudo mysql --protocol=socket --user=root --batch --skip-column-names <<'SQL' | grep -Fx 2
+SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME IN ('fixture_octane', 'fixtureXphp');
+SQL
 sudo test -f /var/lib/abr-ci/composer/auth.json
 if sudo getfacl -cp /var/lib/abr-ci/composer/auth.json | grep -E '^user:[^:]+:r'; then
   echo 'Removed app retained Composer token access' >&2; exit 1
 fi
+# The same app/database/account names must be available for a fresh registration.
+sudo mkdir -p /srv/apps/fixture-php/public /srv/apps/fixture-php/storage/app/public
+abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost
+abr_ci remove fixture-php --purge --yes
 abr_ci doctor
 echo 'Disposable host smoke test passed.'

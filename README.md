@@ -41,19 +41,16 @@ Version 1 release preparation and publishing are deferred until requested.
 
 4. Download the **abr-linux-amd64** artifact from a successful main-branch run
    under **Actions → Check and package** whose disposable Ubuntu host test passed.
-   Extract GitHub's artifact ZIP and upload `abr-linux-amd64` and
-   `abr-linux-amd64.sha256` using the variables from step 2.
+   Download the binary directly and upload it using the variables from step 2.
 
    ```sh
-   scp -P "$VPS_PORT" abr-linux-amd64 abr-linux-amd64.sha256 \
-     "$VPS_USER@$VPS_HOST:"
+   scp -P "$VPS_PORT" abr-linux-amd64 "$VPS_USER@$VPS_HOST:"
    ```
 
-5. On the VPS, verify and install the binary, then run setup:
+5. On the VPS, install the binary, then run setup:
 
    ```sh
    cd ~
-   sha256sum -c abr-linux-amd64.sha256
    sudo install -m 755 abr-linux-amd64 /usr/local/bin/abr
    abr setup --dry-run --admin-user "$(id -un)"
    sudo abr setup --admin-user "$(id -un)"
@@ -82,15 +79,15 @@ short explanation and example. Use Enter to continue and Shift+Tab to revisit a
 field. Advanced registration settings are optional. **Server & credentials**
 contains VPS setup and shared GitHub/Composer access; **Tools** contains checks
 and bulk operations. Completed setup, clone and registration steps explain what
-to do next. Destructive imports still require confirmation.
+to do next. Destructive imports and full app deletion require confirmation.
 
 For private repositories, use one GitHub account SSH key for the VPS:
 
 ```sh
 sudo abr git setup
 # Add the printed public key to GitHub account Settings → SSH and GPG keys.
-sudo abr clone git@github.com:OWNER/PROJECT.git /srv/apps/api
-sudo abr register --name api --dir /srv/apps/api --type laravel \
+sudo abr clone git@github.com:OWNER/PROJECT.git api
+sudo abr register --name api --type laravel \
   --domain api.example.com --web-driver octane \
   --queue-workers 2 --scheduler
 sudo install -m 600 /srv/apps/api/.env.example /srv/apps/api/.env
@@ -147,8 +144,8 @@ Initial clones use `_apt` and a temporary SSH identity; root publishes the
 checkout before registration assigns it to the dedicated app user.
 
 ```sh
-sudo abr clone git@github.com:OWNER/WEB.git /srv/apps/web
-sudo abr register --name web --dir /srv/apps/web --type nuxt --domain example.com
+sudo abr clone git@github.com:OWNER/WEB.git web
+sudo abr register --name web --type nuxt --domain example.com
 # Prepare .env if needed; commit package-lock.json (and composer.lock for Laravel).
 sudo abr deploy web --no-pull
 sudo abr restart api web
@@ -158,11 +155,29 @@ sudo abr disable api
 sudo abr enable api
 ```
 
+Cloning and registration use `/srv/apps/NAME` automatically. Enter the same app
+name for both; the TUI does not ask for a project path.
+
 `--alias DOMAIN` redirects to the main domain; `--serving-domain DOMAIN` serves the
 same app. Both are repeatable. Independent subdomain apps are supported; wildcards
 are not. Edit `/etc/abr/config.toml` to change settings, then run `abr ports
 --allocate` and `abr enable APP`. `abr remove APP` removes managed services/user
 and reservations while preserving the project, secrets, home and database.
+
+To permanently delete an app and its data, choose **Remove application → Fully
+delete app and data** in the TUI, or run:
+
+```sh
+sudo abr remove api --purge --dry-run
+sudo abr remove api --purge --yes
+```
+
+Full removal deletes the registered project directory (including uploads and
+`.env`), the app's home and private Ubuntu account/group, recorded managed MySQL
+database and localhost user, credentials, deployment history, service configs,
+configuration entry and port reservations. Shared runtimes, shared Composer/Git
+credentials, self-managed databases and separately exported backups are kept.
+Back up anything you need first; full removal cannot be undone.
 
 ### Canonical host per app
 
@@ -170,7 +185,7 @@ The registration menu offers **As entered**, **Prefer www**, and **Prefer non-ww
 The CLI supports the same choice for Laravel and Nuxt:
 
 ```sh
-sudo abr register --name website --dir /srv/apps/website --type laravel \
+sudo abr register --name website --type laravel \
   --domain example.com --canonical-host www
 ```
 
@@ -297,7 +312,7 @@ From the repository root on macOS/Linux, use temporary paths and `--config-only`
 task_dir=$(mktemp -d)
 go run ./cmd/abr register --config "$task_dir/config.toml" \
   --state-dir "$task_dir/state" --config-only --name demo \
-  --dir /srv/apps/demo --type laravel --domain demo.example.com
+  --type laravel --domain demo.example.com
 go run ./cmd/abr list --config "$task_dir/config.toml"
 go run ./cmd/abr --config "$task_dir/config.toml" --state-dir "$task_dir/state" \
   --templates-dir ./templates deploy demo --dry-run
@@ -309,9 +324,11 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/abr-linux-amd64 ./cmd/abr
 [config.example.toml](config.example.toml) documents the configuration;
 `abr config example` prints the embedded copy without changing live settings.
 `abr help` lists commands; `abr doctor` checks portable config/registry/port availability.
-CI checks formatting/vet/race tests on Linux and macOS ARM64, scans reachable Go
-dependency vulnerabilities, builds the standalone binary and checksum, and
-runs actual setup/deployment/backup/restore tests on a disposable Ubuntu host
-from an isolated binary. CI publishes development build artifacts and checksums;
-it does not publish GitHub releases.
+CI uses one Ubuntu runner to check formatting/vet/race tests, scan reachable Go
+dependency vulnerabilities, build the standalone Linux AMD64 binary,
+and run actual setup/deployment/backup/restore tests from an isolated binary.
+It runs on main pushes, pull requests, and manual requests, cancels superseded
+runs, and caches Go dependencies and builds. The binary is uploaded directly,
+without an archive or separate checksum file, only after the host test passes.
+CI does not publish GitHub releases.
 `scripts/host-smoke.sh` changes an entire host: never run it on production.

@@ -49,6 +49,12 @@ func required(s string) error {
 	}
 	return nil
 }
+func applicationName(s string) error {
+	if !config.ValidName(s) {
+		return errors.New("Use lowercase letters, digits and hyphens; start with a letter (max 63)")
+	}
+	return nil
+}
 func workerCount(s string) error {
 	n, err := strconv.Atoi(s)
 	if err != nil || n < 0 || n > 256 {
@@ -75,24 +81,24 @@ func (m *model) gitSetupForm() tea.Cmd {
 
 func (m *model) cloneForm() tea.Cmd {
 	m.context, m.notice = "", ""
-	var repository, directory string
+	var repository, name string
 	return m.setForm("form", "Clone application", func() tea.Cmd {
-		return m.review(action{title: "Clone application", args: []string{"clone", repository, directory}, note: fmt.Sprintf("Repository: %s\nDirectory: %s\n\nClone using the server GitHub key. Register this project afterward.", repository, directory)})
+		return m.review(action{title: "Clone " + name, args: []string{"clone", repository, name}, note: fmt.Sprintf("Repository: %s\nDirectory: %s\n\nClone using the server GitHub key. Register this app by the same name afterward.", repository, filepath.Join(m.options.AppsDir, name))})
 	}, huh.NewGroup(
 		textInput("GitHub repository", "Copy the SSH URL from GitHub. Add the server key to GitHub first.", "git@github.com:owner/project.git", &repository).Validate(required)),
-		huh.NewGroup(textInput("New application directory", "Choose a new directory directly inside the apps folder.", filepath.Join(m.options.AppsDir, "app"), &directory).Validate(required)))
+		huh.NewGroup(textInput("Application name", "A short name for this app. Its folder is created automatically.", "example-api", &name).Validate(applicationName)))
 }
 
 func (m *model) registerForm() tea.Cmd {
 	m.context, m.notice = "", ""
-	var name, dir, domain, kind, driver, aliases, domains, health string
+	var name, domain, kind, driver, aliases, domains, health string
 	var configOnly, extra bool
 	canonicalHost := config.CanonicalAsEntered
 	workers, queue := "2", "0"
 	kind, driver = "laravel", "fpm"
 	components := []string{"database"}
 	return m.setForm("form", "Register application", func() tea.Cmd {
-		args := []string{"register", "--name", name, "--dir", dir, "--type", kind, "--domain", domain}
+		args := []string{"register", "--name", name, "--type", kind, "--domain", domain}
 		args = append(args, "--canonical-host", canonicalHost)
 		if extra && configOnly {
 			args = append(args, "--config-only")
@@ -130,21 +136,10 @@ func (m *model) registerForm() tea.Cmd {
 		if extra && configOnly {
 			note = "Save configuration and reserve ports for local development only."
 		}
-		return m.review(action{title: "Register " + name, args: args, note: fmt.Sprintf("Project: %s\nDomain: %s\n\n%s", dir, domain, note)})
+		return m.review(action{title: "Register " + name, args: args, note: fmt.Sprintf("Project: %s\nDomain: %s\n\n%s", filepath.Join(m.options.AppsDir, name), domain, note)})
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Application type").Description("Choose the framework used by this project.\nExample: Laravel for a PHP application.").Options(huh.NewOption("Laravel", "laravel"), huh.NewOption("Nuxt", "nuxt")).Value(&kind)),
 		huh.NewGroup(
-			textInput("Application name", "A unique short name: lowercase letters, digits and hyphens.", "example-api", &name).Validate(func(s string) error {
-				if !config.ValidName(s) {
-					return errors.New("Use lowercase letters, digits and hyphens; start with a letter (max 63)")
-				}
-				return nil
-			})),
-		huh.NewGroup(textInput("Project directory", "The full path of the project you already cloned.", filepath.Join(m.options.AppsDir, "example-api"), &dir).Validate(func(s string) error {
-			if !filepath.IsAbs(s) || strings.ContainsAny(s, "\x00\r\n") {
-				return errors.New("Use an absolute directory path")
-			}
-			return nil
-		})),
+			textInput("Application name", "Use the name you chose when cloning. The project path is automatic.", "example-api", &name).Validate(applicationName)),
 		huh.NewGroup(textInput("Primary domain", "Enter a hostname without https://. Point its DNS to this VPS.", "example.com", &domain).Validate(func(s string) error {
 			a := config.App{Name: "test", Directory: "/srv/test", User: "abr-test", Type: "nuxt", Domain: s}
 			return a.Validate()

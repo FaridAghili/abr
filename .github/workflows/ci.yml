@@ -2,34 +2,22 @@ name: Check and package
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  macos-checks:
-    name: macOS ARM64 checks
-    runs-on: macos-26
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-      - name: Check development platform
-        run: test "$(go env GOOS)/$(go env GOARCH)" = darwin/arm64
-      - name: Vet and test
-        run: |
-          go vet ./...
-          go test -race ./...
-
   build:
+    name: Ubuntu checks, build and host test
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -37,7 +25,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
-          cache-dependency-path: go.sum
+          # Include the pinned CI tools in the dependency/build cache key.
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            .github/workflows/ci.yml
       - name: Check formatting
         run: |
           files=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
@@ -64,43 +56,12 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath -ldflags '-s -w' -o dist/abr-linux-amd64 ./cmd/abr
-      - name: Checksum
-        run: |
-          cd dist
-          sha256sum abr-linux-amd64 > abr-linux-amd64.sha256
-      - name: Upload distribution
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: abr-linux-amd64
-          path: |
-            dist/abr-linux-amd64
-            dist/abr-linux-amd64.sha256
-          if-no-files-found: error
-
-  host-smoke:
-    name: Disposable Ubuntu host test
-    needs: build
-    runs-on: ubuntu-26.04
-    timeout-minutes: 25
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Download checked development executable
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name abr-linux-amd64 --dir dist
-          cd dist
-          sha256sum -c abr-linux-amd64.sha256
-          chmod 755 abr-linux-amd64
       - name: Setup from a standalone binary and deploy Laravel and Nuxt
+        id: host
+        timeout-minutes: 25
         run: bash scripts/host-smoke.sh dist/abr-linux-amd64
       - name: Host diagnostics on failure
-        if: failure()
+        if: failure() && steps.host.outcome == 'failure'
         run: |
           sudo systemctl --no-pager --full status caddy php8.5-fpm mysql abr-fixture-php-scheduler.service abr-fixture-php-scheduler.timer abr-fixture-octane-octane.service || true
           sudo journalctl --no-pager -b -n 300 || true
@@ -111,3 +72,9 @@ jobs:
           if getent passwd abr-fixture-php >/dev/null; then
             sudo runuser --user abr-fixture-php -- env -i HOME=/var/lib/abr-users/abr-fixture-php PATH=/usr/bin:/bin git -C /srv/apps/fixture-php status --porcelain || true
           fi
+      - name: Upload tested binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          path: dist/abr-linux-amd64
+          archive: false
+          if-no-files-found: error

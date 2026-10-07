@@ -46,6 +46,69 @@ func TestBundledExampleDoesNotReadOrWriteHostConfig(t *testing.T) {
 	}
 }
 
+func TestFullRemovalRequiresExplicitConfirmationBeforeHostWork(t *testing.T) {
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"remove", "example", "--purge"},
+		{"remove", "example", "--yes"},
+	} {
+		paths := []string{"--config", filepath.Join(dir, "missing.toml"), "--state-dir", filepath.Join(dir, "state")}
+		out, err := invoke(t, append(paths, args...)...)
+		if err == nil || out != "" || !strings.Contains(err.Error(), "--yes") {
+			t.Fatalf("removal skipped confirmation: %s %v", out, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "state")); !os.IsNotExist(err) {
+			t.Fatal("unconfirmed command touched host state")
+		}
+	}
+}
+
+func TestCloneAndRegistrationUseAppNameUnderAppsDirectory(t *testing.T) {
+	for _, custom := range []bool{false, true} {
+		t.Run(strconv.FormatBool(custom), func(t *testing.T) {
+			dir := t.TempDir()
+			configPath, state := filepath.Join(dir, "config.toml"), filepath.Join(dir, "state")
+			paths := []string{"--config", configPath, "--state-dir", state}
+			appsDir := "/srv/apps"
+			if custom {
+				appsDir = filepath.Join(dir, "projects")
+				paths = append(paths, "--apps-dir", appsDir)
+			}
+			out, err := invoke(t, append(append([]string{}, paths...), "clone", "git@github.com:owner/project.git", "example-api", "--dry-run")...)
+			if err != nil || !strings.Contains(out, "into "+filepath.Join(appsDir, "example-api")) {
+				t.Fatalf("clone did not resolve its destination: %s %v", out, err)
+			}
+			if _, err := os.Stat(state); !os.IsNotExist(err) {
+				t.Fatal("clone preview wrote state")
+			}
+			_, err = invoke(t, append(append([]string{}, paths...), "register", "--config-only", "--name", "example-api", "--type", "laravel", "--domain", "api.example.com")...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := config.Load(configPath)
+			if err != nil || len(c.Apps) != 1 || c.Apps[0].Directory != filepath.Join(appsDir, "example-api") {
+				t.Fatalf("registration used a different project path: %+v %v", c.Apps, err)
+			}
+		})
+	}
+}
+
+func TestCloneRefusesPathsAndInvalidAppNames(t *testing.T) {
+	for _, name := range []string{"../escape", "nested/app", "/srv/apps/api", ".", "..", "Uppercase", "app\nname", ""} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			state := filepath.Join(dir, "state")
+			out, err := invoke(t, "--state-dir", state, "clone", "git@github.com:owner/project.git", name, "--dry-run")
+			if err == nil || out != "" || !strings.Contains(err.Error(), "application name") {
+				t.Fatalf("unsafe app name accepted: %q: %s %v", name, out, err)
+			}
+			if _, err := os.Stat(state); !os.IsNotExist(err) {
+				t.Fatal("invalid clone name created state")
+			}
+		})
+	}
+}
+
 func TestCommands(t *testing.T) {
 	dir := t.TempDir()
 	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state")}
@@ -178,7 +241,7 @@ func TestSharedGitCommandsAndPortablePreviews(t *testing.T) {
 	state := filepath.Join(dir, "state")
 	apps := filepath.Join(dir, "apps")
 	paths := []string{"--state-dir", state, "--apps-dir", apps, "--dry-run"}
-	for _, command := range [][]string{{"git", "setup"}, {"git", "setup", "--key", "/nonexistent/key"}, {"clone", "git@github.com:owner/repo.git", filepath.Join(apps, "repo")}} {
+	for _, command := range [][]string{{"git", "setup"}, {"git", "setup", "--key", "/nonexistent/key"}, {"clone", "git@github.com:owner/repo.git", "repo"}} {
 		args := append(append([]string{}, paths...), command...)
 		out, err := invoke(t, args...)
 		if err != nil || !strings.Contains(out, "Would") {
