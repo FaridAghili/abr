@@ -45,11 +45,13 @@ Commands:
   ports            Show reservations (--allocate reconciles config edits)
   doctor           Portable config/registry/port checks
   setup            Install shared VPS packages, Caddy, Node 24 and RoadRunner
+                   Prompts for VPS name; --hostname NAME is scriptable
   git setup        Create/reuse one VPS GitHub SSH key (--key imports an existing key)
   composer auth    Save shared private-package credentials; prompts for email/token
                    --host HOST --username USER --password-stdin is scriptable
   clone URL NAME   Clone a GitHub SSH repository into /srv/apps/NAME
   database APP     Create/verify MySQL database (--show prints credentials)
+  database --admin TablePlus root connection details (--show prints password)
   database backup APP... | --all --output-dir DIR
                    Export selected/all managed databases as private SQL files
   database import APP FILE.sql --yes
@@ -120,7 +122,7 @@ func run(args []string, out, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	pathFlags(fs, &m, m.ConfigPath, m.StateDir)
 	hostFlags(fs, &h, h.TemplatesDir, h.AppsDir, h.DryRun)
-	var allocate, configOnly, noDatabase, show, follow bool
+	var allocate, configOnly, noDatabase, show, follow, databaseAdmin bool
 	var app config.App
 	var imports portFlags
 	var setup host.SetupOptions
@@ -162,6 +164,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&noDatabase, "no-database", false, "Laravel: use an existing/self-managed database")
 		fs.Var(&imports, "port", "import free ENDPOINT=PORT (repeatable)")
 	case "setup":
+		fs.StringVar(&setup.Hostname, "hostname", "", "VPS name: Ubuntu hostname and GitHub key label (default: prompt)")
 		fs.StringVar(&setup.RoadRunnerVersion, "roadrunner-version", host.DefaultRoadRunnerVersion, "shared RoadRunner release (default: latest stable)")
 		fs.StringVar(&setup.AdminUser, "admin-user", "", "existing SSH administrator (default: sudo user or root); must already have authorized keys")
 		fs.IntVar(&setup.SSHPort, "ssh-port", 0, "SSH port to preserve (default: discover effective sshd ports)")
@@ -174,6 +177,7 @@ func run(args []string, out, stderr io.Writer) error {
 	case "database import":
 		fs.BoolVar(&importYes, "yes", false, "confirm SQL import may overwrite data")
 	case "database":
+		fs.BoolVar(&databaseAdmin, "admin", false, "show server admin connection details instead of an app database")
 		fs.BoolVar(&show, "show", false, "print existing/generated credentials explicitly")
 	case "logs":
 		fs.BoolVar(&follow, "follow", false, "stream the journal")
@@ -198,7 +202,11 @@ func run(args []string, out, stderr io.Writer) error {
 		if len(positional) != 2 {
 			return fmt.Errorf("use abr clone git@github.com:OWNER/REPO.git APP")
 		}
-	case "enable", "disable", "remove", "database":
+	case "database":
+		if (databaseAdmin && len(positional) != 0) || (!databaseAdmin && len(positional) != 1) {
+			return fmt.Errorf("use abr database APP [--show] or abr database --admin [--show]")
+		}
+	case "enable", "disable", "remove":
 		if len(positional) != 1 {
 			return fmt.Errorf("use abr %s APP", command)
 		}
@@ -363,12 +371,20 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		fmt.Fprintln(out, "Portable checks passed: config, registry, required reservations, and TCP availability")
 	case "setup":
+		name, err := setupHostname(os.Stdin, stderr, setup.Hostname, terminalAvailable(out))
+		if err != nil {
+			return err
+		}
+		setup.Hostname = name
 		return h.Setup(setup)
 	case "database backup":
 		return h.BackupDatabases(positional, backupAll, backupDirectory)
 	case "database import":
 		return h.ImportDatabase(positional[0], positional[1], importYes)
 	case "database":
+		if databaseAdmin {
+			return h.MySQLAdmin(show)
+		}
 		return h.Database(positional[0], show)
 	case "enable":
 		return h.Enable(positional[0])
@@ -415,6 +431,31 @@ func run(args []string, out, stderr io.Writer) error {
 		return errors.Join(failures...)
 	}
 	return nil
+}
+
+func setupHostname(input io.Reader, output io.Writer, name string, interactive bool) (string, error) {
+	if name != "" {
+		return name, config.ValidateHostname(name)
+	}
+	if !interactive {
+		return "", fmt.Errorf("use abr setup --hostname NAME outside a terminal (example: my-vps)")
+	}
+	fmt.Fprintln(output, "VPS name · sets Ubuntu's hostname and labels the GitHub SSH key.")
+	fmt.Fprintln(output, "Use lowercase letters, digits and hyphens. Example: my-vps")
+	reader := bufio.NewReader(io.LimitReader(input, 4097))
+	for {
+		fmt.Fprint(output, "VPS name: ")
+		line, err := reader.ReadString('\n')
+		if err != nil || len(line) > 4096 {
+			return "", fmt.Errorf("cannot read VPS name; use --hostname NAME")
+		}
+		name = strings.TrimSpace(line)
+		if err := config.ValidateHostname(name); err != nil {
+			fmt.Fprintln(output, err)
+			continue
+		}
+		return name, nil
+	}
 }
 
 func composerLogin(input io.Reader, output io.Writer, username string, passwordStdin, dryRun bool) (string, string, error) {

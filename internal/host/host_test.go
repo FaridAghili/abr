@@ -135,6 +135,9 @@ func fixture(t *testing.T) (Host, *fakeRunner, *bytes.Buffer, config.App) {
 	var out bytes.Buffer
 	h := Host{Manager: manager.Manager{ConfigPath: filepath.Join(root, "state/config.toml"), StateDir: filepath.Join(root, "state"), Probe: func(int) error { return nil }}, TemplatesDir: "../../templates", AppsDir: filepath.Join(root, "apps"), Output: &out, Runner: runner, root: root, check: func() error { return nil }}
 	a := config.App{Name: "app", User: "abr-app", Directory: filepath.Join(h.AppsDir, "app"), Type: "laravel", Domain: "app.localhost", Web: config.Web{Driver: "fpm"}}
+	if err := h.write("/etc/hostname", []byte("my-vps\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(h.path("/var/lib/abr-users/"+a.User), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +557,7 @@ func TestDryRunNeverExecutesOrWrites(t *testing.T) {
 	if _, err := os.Stat(h.Manager.ConfigPath); !os.IsNotExist(err) {
 		t.Fatal("dry-run saved config")
 	}
-	if err := h.Setup(SetupOptions{RoadRunnerVersion: DefaultRoadRunnerVersion}); err != nil {
+	if err := h.Setup(SetupOptions{Hostname: "my-vps", RoadRunnerVersion: DefaultRoadRunnerVersion}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "Redis") && !strings.Contains(out.String(), "redis-server") {

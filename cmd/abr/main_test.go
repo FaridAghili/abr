@@ -20,6 +20,41 @@ func invoke(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
+func TestSetupHostnamePromptAndScriptableFlag(t *testing.T) {
+	var prompt bytes.Buffer
+	name, err := setupHostname(strings.NewReader("Invalid name\nmy-vps\n"), &prompt, "", true)
+	if err != nil || name != "my-vps" || !strings.Contains(prompt.String(), "Example: my-vps") || !strings.Contains(prompt.String(), "GitHub SSH key") {
+		t.Fatalf("hostname guidance: %q %v", prompt.String(), err)
+	}
+	if _, err := setupHostname(strings.NewReader(""), &prompt, "", false); err == nil {
+		t.Fatal("noninteractive setup did not require hostname")
+	}
+	for _, bad := range []string{"Upper", "vps-", "vps\nnext"} {
+		if _, err := setupHostname(nil, &prompt, bad, false); err == nil {
+			t.Fatalf("accepted invalid flag: %q", bad)
+		}
+	}
+	dir := t.TempDir()
+	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state"), "--dry-run"}
+	out, err := invoke(t, append(paths, "setup", "--hostname", "my-vps")...)
+	if err != nil || !strings.Contains(out, "hostnamectl hostname my-vps") || !strings.Contains(out, "TablePlus") {
+		t.Fatalf("setup flag preview: %q %v", out, err)
+	}
+	if _, err := invoke(t, append(paths, "setup")...); err == nil {
+		t.Fatal("scripted setup silently chose a hostname")
+	}
+	out, err = invoke(t, append(paths, "database", "--admin", "--show")...)
+	if err != nil || !strings.Contains(out, "no password displayed") {
+		t.Fatalf("admin preview: %q %v", out, err)
+	}
+	if _, err := invoke(t, append(paths, "database", "an-app", "--admin")...); err == nil {
+		t.Fatal("admin option accepted an application")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "state")); !os.IsNotExist(err) {
+		t.Fatal("preview created state")
+	}
+}
+
 func TestBundledExampleDoesNotReadOrWriteHostConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

@@ -1,7 +1,6 @@
 package host
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +28,10 @@ func (h Host) GitSetup(source string) error {
 			h.say("Would create/reuse a shared VPS SSH key in %s; no keys generated or imported", dir)
 			return nil
 		}
+		name, err := h.serverHostname()
+		if err != nil {
+			return err
+		}
 		if err := h.gitFile(h.Manager.StateDir, true); err != nil {
 			return err
 		}
@@ -46,7 +49,7 @@ func (h Host) GitSetup(source string) error {
 			defer os.RemoveAll(tmp)
 			candidate := filepath.Join(tmp, "identity")
 			if source == "" {
-				if _, err := h.run("Generate shared VPS SSH key", Command{Name: "ssh-keygen", Args: []string{"-t", "ed25519", "-N", "", "-C", "abr VPS", "-f", candidate}, Private: true}); err != nil {
+				if _, err := h.run("Generate shared VPS SSH key", Command{Name: "ssh-keygen", Args: []string{"-t", "ed25519", "-N", "", "-C", name, "-f", candidate}, Private: true}); err != nil {
 					return err
 				}
 			} else {
@@ -83,17 +86,24 @@ func (h Host) GitSetup(source string) error {
 			if err != nil {
 				return err
 			}
-			if !bytes.Equal(bytes.TrimSpace(public), bytes.TrimSpace(provided)) {
+			identity := strings.Fields(string(public))
+			imported := strings.Fields(string(provided))
+			if len(identity) < 2 || len(imported) < 2 || strings.Join(identity[:2], " ") != strings.Join(imported[:2], " ") {
 				return fmt.Errorf("a different shared SSH key already exists; existing key preserved")
 			}
 		}
+		fields := strings.Fields(string(public))
+		if len(fields) < 2 {
+			return fmt.Errorf("invalid SSH public key")
+		}
+		public = []byte(strings.Join(fields[:2], " ") + " " + name + "\n")
 		if err := h.write(filepath.Join(dir, "known_hosts"), []byte(githubHostKey), 0600); err != nil {
 			return err
 		}
 		if err := h.write(filepath.Join(dir, "id_ed25519.pub"), public, 0600); err != nil {
 			return err
 		}
-		h.say("Add this public key once in GitHub account Settings → SSH and GPG keys → New SSH key (Authentication):\n%s", strings.TrimSpace(string(public)))
+		h.say("Add this public key once in GitHub account Settings → SSH and GPG keys → New SSH key (Authentication).\nTitle: %s\nKey:\n%s", name, strings.TrimSpace(string(public)))
 		return nil
 	})
 }

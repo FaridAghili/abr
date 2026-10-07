@@ -236,12 +236,29 @@ func (h Host) hardenMySQL() error {
 		return fmt.Errorf("MySQL 8.4 is required; refusing to change an unsupported server")
 	}
 	// Do not delete an existing database or unrelated account during setup.
-	out, err = h.mysql([]byte("SELECT (SELECT COUNT(*) FROM mysql.user WHERE User='' OR (User='root' AND Host<>'localhost')) + (SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME='test');\n"))
+	rootHosts := "'localhost'"
+	if !h.DryRun {
+		if _, err := h.readMySQLAdmin(); err == nil {
+			rootHosts += ", '127.0.0.1'"
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	out, err = h.mysql([]byte("SELECT (SELECT COUNT(*) FROM mysql.user WHERE User='' OR (User='root' AND Host NOT IN (" + rootHosts + "))) + (SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME='test');\n"))
 	if err != nil {
 		return err
 	}
 	if !h.DryRun && strings.TrimSpace(string(out)) != "0" {
 		return fmt.Errorf("existing MySQL anonymous/remote-root accounts or test database require manual review; no accounts/databases deleted")
+	}
+	// Hostname-based grants stop matching with skip_name_resolve. Refuse rather
+	// than silently breaking accounts owned by the administrator.
+	out, err = h.mysql([]byte("SELECT COUNT(*) FROM mysql.user WHERE Host<>'localhost' AND Host REGEXP '[a-zA-Z]' AND INET6_ATON(SUBSTRING_INDEX(SUBSTRING_INDEX(Host,'/',1),'%',1)) IS NULL;\n"))
+	if err != nil {
+		return err
+	}
+	if !h.DryRun && strings.TrimSpace(string(out)) != "0" {
+		return fmt.Errorf("existing MySQL hostname-based accounts require manual review before enabling skip_name_resolve; no accounts changed")
 	}
 	if _, err := h.mysql([]byte("ALTER USER 'root'@'localhost' IDENTIFIED WITH auth_socket;\n")); err != nil {
 		return err
@@ -254,7 +271,7 @@ func (h Host) hardenMySQL() error {
 	}); err != nil {
 		return errors.Join(err, h.command("systemctl", "restart", "mysql"))
 	}
-	out, err = h.mysql([]byte("SELECT (@@bind_address='127.0.0.1' AND @@local_infile=0 AND (SELECT COUNT(*) FROM mysql.user WHERE User='root' AND Host='localhost' AND plugin='auth_socket')=1);\n"))
+	out, err = h.mysql([]byte("SELECT (@@bind_address='127.0.0.1' AND @@local_infile=0 AND @@skip_name_resolve=1 AND (SELECT COUNT(*) FROM mysql.user WHERE User='root' AND Host='localhost' AND plugin='auth_socket')=1);\n"))
 	if err != nil {
 		return err
 	}

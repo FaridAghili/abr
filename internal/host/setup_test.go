@@ -20,7 +20,7 @@ const testSSHSettings = "authorizedkeysfile .ssh/authorized_keys\nport 2222\npub
 
 type setupRunner struct {
 	*fakeRunner
-	ssh, version, insecure, redis string
+	ssh, version, insecure, redis, hostnameAccounts string
 }
 
 func (r *setupRunner) Run(c Command) ([]byte, error) {
@@ -56,6 +56,8 @@ func (r *setupRunner) Run(c Command) ([]byte, error) {
 			return []byte(r.version), nil
 		case strings.Contains(sql, "WHERE User='' OR"):
 			return []byte(r.insecure), nil
+		case strings.Contains(sql, "Host REGEXP"):
+			return []byte(r.hostnameAccounts), nil
 		case strings.Contains(sql, "SELECT (@@bind_address"):
 			return []byte("1\n"), nil
 		case strings.Contains(sql, "mysql.component"):
@@ -68,7 +70,7 @@ func (r *setupRunner) Run(c Command) ([]byte, error) {
 func setupFixture(t *testing.T) (Host, *setupRunner) {
 	t.Helper()
 	h, r, _, _ := fixture(t)
-	wr := &setupRunner{fakeRunner: r, ssh: testSSHSettings, version: "8.4.11\n", insecure: "0\n", redis: "bind\n127.0.0.1 -::1\nprotected-mode\nyes\n"}
+	wr := &setupRunner{fakeRunner: r, ssh: testSSHSettings, version: "8.4.11\n", insecure: "0\n", hostnameAccounts: "0\n", redis: "bind\n127.0.0.1 -::1\nprotected-mode\nyes\n"}
 	h.Runner = wr
 	wr.users["ubuntu"] = fmt.Sprintf("ubuntu:x:%d:%d:admin:/home/ubuntu:/bin/bash", os.Getuid(), os.Getgid())
 	if err := os.MkdirAll(h.path("/home/ubuntu/.ssh"), 0700); err != nil {
@@ -133,7 +135,7 @@ func TestSSHKeyPreflightBeforePackagesAndRejectsWritableKeys(t *testing.T) {
 	if err := h.removeFile("/home/ubuntu/.ssh/authorized_keys"); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Setup(SetupOptions{RoadRunnerVersion: DefaultRoadRunnerVersion, AdminUser: "ubuntu"}); err == nil {
+	if err := h.Setup(SetupOptions{Hostname: "my-vps", RoadRunnerVersion: DefaultRoadRunnerVersion, AdminUser: "ubuntu"}); err == nil {
 		t.Fatal("setup without administrator keys succeeded")
 	}
 	for _, c := range r.calls {
@@ -197,11 +199,13 @@ func TestSSHSocketAndConnectionPortsArePreserved(t *testing.T) {
 }
 
 func TestMySQLSecurityRefusesUnsafeExistingStateAndSetsLocalPolicy(t *testing.T) {
-	for _, bad := range []string{"version", "existing accounts"} {
+	for _, bad := range []string{"version", "existing accounts", "hostname accounts"} {
 		t.Run(bad, func(t *testing.T) {
 			h, r := setupFixture(t)
 			if bad == "version" {
 				r.version = "9.7.0\n"
+			} else if bad == "hostname accounts" {
+				r.hostnameAccounts = "1\n"
 			} else {
 				r.insecure = "1\n"
 			}
@@ -225,6 +229,22 @@ func TestMySQLSecurityRefusesUnsafeExistingStateAndSetsLocalPolicy(t *testing.T)
 	}
 	if !strings.Contains(sql, "IDENTIFIED WITH auth_socket") || !strings.Contains(sql, "validate_password.policy=2") || !strings.Contains(sql, "validate_password.length=14") || strings.Contains(sql, "DROP ") {
 		t.Fatal("missing or destructive MySQL policy")
+	}
+	if strings.Contains(sql, "Host NOT IN ('localhost', '127.0.0.1')") {
+		t.Fatal("unrecorded TCP root was exempt from preflight")
+	}
+	h2, r2 := setupFixture(t)
+	data := fmt.Sprintf(`{"user":"root","host":"127.0.0.1","password":"%sAa1!","ready":false}`, strings.Repeat("a", 64))
+	if err := h2.write(h2.mysqlAdminPath(), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h2.hardenMySQL(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(r2.calls, func(c Command) bool {
+		return strings.Contains(string(c.Input), "Host NOT IN ('localhost', '127.0.0.1')")
+	}) {
+		t.Fatal("recorded partial admin setup cannot be retried")
 	}
 }
 

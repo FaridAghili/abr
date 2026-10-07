@@ -3,6 +3,8 @@
 bind-address = 127.0.0.1
 mysqlx-bind-address = 127.0.0.1
 local-infile = 0
+# Keep password-based loopback root separate from root's auth_socket account.
+skip-name-resolve = ON
 # Modest shared-host defaults; size for measured workload and available RAM.
 innodb_buffer_pool_size = 256M
 max_connections = 100

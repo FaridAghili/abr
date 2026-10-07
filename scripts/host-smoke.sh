@@ -9,7 +9,7 @@ abr_binary_source=$(realpath "${1:-bin/abr}")
 abr_binary_directory=$(mktemp -d)
 fixture_source=''
 fixture_git_shim=0
-trap 'rm -rf "$abr_binary_directory"; if [[ -n $fixture_source ]]; then rm -rf "$fixture_source"; fi; if [[ $fixture_git_shim == 1 ]]; then sudo rm -f /usr/local/bin/git; fi' EXIT
+trap 'if [[ -S "$abr_binary_directory/admin-tunnel" ]]; then sudo ssh -S "$abr_binary_directory/admin-tunnel" -O exit root@127.0.0.1; fi; sudo rm -rf "$abr_binary_directory"; if [[ -n $fixture_source ]]; then rm -rf "$fixture_source"; fi; if [[ $fixture_git_shim == 1 ]]; then sudo rm -f /usr/local/bin/git; fi' EXIT
 install -m 755 "$abr_binary_source" "$abr_binary_directory/abr"
 abr_test_binary="$abr_binary_directory/abr"
 abr_ci() {
@@ -114,7 +114,13 @@ sudo apt-get install -y redis-server
 sudo systemctl start redis-server
 sudo redis-cli SET abr-fixture-persist survives-setup >/dev/null
 sudo redis-cli SAVE >/dev/null
-abr_ci setup --no-firewall --ssh-port 22 --admin-user root
+abr_ci setup --hostname abr-ci-vps --no-firewall --ssh-port 22 --admin-user root
+test "$(hostname)" = abr-ci-vps
+test "$(hostnamectl --static hostname)" = abr-ci-vps
+grep -Fx $'127.0.1.1\tabr-ci-vps' /etc/hosts
+getent hosts abr-ci-vps >/dev/null
+grep -Fx 'preserve_hostname: true' /etc/cloud/cloud.cfg.d/99-abr-hostname.cfg
+grep -Fx 'manage_etc_hosts: false' /etc/cloud/cloud.cfg.d/99-abr-hostname.cfg
 fixture_caddy_format /etc/caddy/Caddyfile
 for repository in caddy node; do
   repository_key="/etc/apt/keyrings/abr/$repository.gpg"
@@ -154,6 +160,33 @@ sudo sh -c 'printf "127.0.0.1 "; cat /etc/ssh/ssh_host_ed25519_key.pub' > "$abr_
 sudo ssh -F /dev/null -i /root/.ssh/abr-fixture-ssh -o IdentitiesOnly=yes \
   -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$abr_binary_directory/known_hosts" \
   -o ConnectTimeout=10 root@127.0.0.1 true
+# Verify the TablePlus connection through an actual SSH forward, keeping its
+# password in a root-only options file, never in logs or command arguments.
+abr_ci database --admin
+sudo test "$(sudo stat -c '%U:%a' /var/lib/abr-ci/mysql-admin.json)" = root:600
+fixture_denied nobody cat /var/lib/abr-ci/mysql-admin.json
+sudo cp /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin-before.json"
+sudo python3 - /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin.cnf" <<'PY'
+import json, os, sys
+with open(sys.argv[1]) as record:
+    credentials = json.load(record)
+with os.fdopen(os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as options:
+    options.write('[client]\nuser=root\npassword=' + credentials['password'] + '\nprotocol=TCP\nhost=127.0.0.1\nport=13306\n')
+PY
+sudo ssh -F /dev/null -i /root/.ssh/abr-fixture-ssh -o IdentitiesOnly=yes \
+  -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$abr_binary_directory/known_hosts" \
+  -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -M -S "$abr_binary_directory/admin-tunnel" \
+  -fN -L 127.0.0.1:13306:127.0.0.1:3306 root@127.0.0.1
+sudo mysql --defaults-file="$abr_binary_directory/admin.cnf" --no-login-paths --batch --skip-column-names \
+  -e 'SELECT CURRENT_USER();' | grep -Fx root@127.0.0.1
+sudo mysql --defaults-file="$abr_binary_directory/admin.cnf" --no-login-paths <<'SQL'
+CREATE DATABASE abr_admin_fixture;
+CREATE TABLE abr_admin_fixture.test (id INT);
+INSERT INTO abr_admin_fixture.test VALUES (1);
+SELECT * FROM mysql.user LIMIT 0;
+DROP DATABASE abr_admin_fixture;
+SQL
+sudo ssh -S "$abr_binary_directory/admin-tunnel" -O exit root@127.0.0.1
 sudo /usr/sbin/sshd -T | grep -Fx 'passwordauthentication no'
 sudo /usr/sbin/sshd -T | grep -Fx 'authenticationmethods publickey'
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \
@@ -175,6 +208,7 @@ sudo mysql --protocol=socket --user=root --batch --skip-column-names \
 # Shared identity tests remain offline: no GitHub account or private repository.
 abr_ci git setup
 abr_ci git setup
+sudo tail -c 11 /var/lib/abr-ci/git/id_ed25519.pub | grep -Fx abr-ci-vps
 
 # Exercise initial clone on the real host without any external repository or
 # SSH account. A disposable-only shim rewrites just this fixture URL to a local
@@ -298,6 +332,7 @@ fixture_denied abr-fixture-php curl --fail --silent --max-time 2 \
 sudo runuser -u abr-fixture-php -- ssh-keygen -y -P '' -f /var/lib/abr-ci/git/id_ed25519 >/dev/null
 abr_ci git setup
 fixture_denied abr-fixture-php head -c 1 /var/lib/abr-ci/credentials/fixture-php.env
+fixture_denied abr-fixture-php cat /var/lib/abr-ci/mysql-admin.json
 fixture_denied nobody head -c 1 /var/lib/abr-ci/git/id_ed25519
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 for private_uri in /.env /.env.production /.git/config; do
@@ -529,4 +564,11 @@ sudo mkdir -p /srv/apps/fixture-php/public /srv/apps/fixture-php/storage/app/pub
 abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost
 abr_ci remove fixture-php --purge --yes
 abr_ci doctor
+# Repeated setup must allow its recorded loopback account, retain its password,
+# and leave other apps' retained databases intact.
+abr_ci setup --hostname abr-ci-vps --no-firewall --ssh-port 22 --admin-user root
+sudo cmp /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin-before.json"
+sudo mysql --protocol=socket --user=root --batch --skip-column-names \
+  -e "SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME='fixture_octane';" | grep -Fx 1
+sudo rm "$abr_binary_directory/admin.cnf" "$abr_binary_directory/admin-before.json"
 echo 'Disposable host smoke test passed.'

@@ -57,6 +57,11 @@ Version 1 release preparation and publishing are deferred until requested.
    sudo abr
    ```
 
+Setup asks for a VPS name, such as `my-vps`. It sets Ubuntu's persistent hostname,
+updates its local `/etc/hosts` mapping, and preserves the name across cloud-init
+boots. For scripts, pass `--hostname my-vps`. The GitHub key comment and suggested
+GitHub title use this name; renaming the VPS preserves the existing key.
+
 Only the binary is needed on the VPS; templates and the generic example config are
 embedded. Setup installs PHP 8.5/extensions (including Imagick SVG support and
 Excimer), Node 24, latest compatible npm, npm-check-updates, Caddy, Composer,
@@ -77,7 +82,7 @@ when none of its public tool links still use it.
 Run `sudo abr` for the interactive menu. Forms show one field at a time, with a
 short explanation and example. Use Enter to continue and Shift+Tab to revisit a
 field. Advanced registration settings are optional. **Server & credentials**
-contains VPS setup and shared GitHub/Composer access; **Tools** contains checks
+contains VPS setup, shared GitHub/Composer access and the TablePlus admin login; **Tools** contains checks
 and bulk operations. Completed setup, clone and registration steps explain what
 to do next. Destructive imports and full app deletion require confirmation.
 
@@ -203,6 +208,39 @@ canonical HTTPS URL. Redirects use **308**, preserving method, path and query.
 
 For an existing app, edit its `domain` and `aliases` in `/etc/abr/config.toml`, then
 run `sudo abr config validate` and `sudo abr enable APP`.
+
+## TablePlus admin access
+
+Setup creates a password-protected `root` account for loopback TCP connections,
+with access to all databases and permission to administer accounts. Apps use
+their own database users. Ubuntu's `root@localhost` socket login remains available
+to Abr and `sudo mysql`; MySQL listens on `127.0.0.1` only.
+
+Open **Server & credentials → MySQL admin · TablePlus**, or run:
+
+```sh
+sudo abr database --admin --show
+```
+
+In TablePlus, create a **MySQL** connection and enable **SSH**:
+
+| Field | Value |
+| --- | --- |
+| Database host | `127.0.0.1` |
+| Database port | `3306` |
+| Database user | `root` |
+| Database password | The password shown by the command |
+| Database | Leave blank to browse all databases |
+| SSH host | Your VPS IP address or SSH hostname |
+| SSH port | Your existing SSH port, usually `22` |
+| SSH user and key | Your existing administrator SSH login |
+
+The generated password is saved in root-only `/var/lib/abr/mysql-admin.json`.
+Repeated setup reuses it; app removal, including full removal, retains this
+server account. Passwords are displayed only when explicitly requested. Setup
+enables MySQL `skip_name_resolve` to distinguish this TCP account from socket
+root; existing hostname-based grants or an unrecorded loopback root account
+require manual review before setup changes accounts.
 
 ## Database backups and imports
 

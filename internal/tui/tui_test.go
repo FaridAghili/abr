@@ -203,7 +203,11 @@ func TestOpeningDoesNotCreateState(t *testing.T) {
 func TestGuidedDefaults(t *testing.T) {
 	m := newModel(testOptions(t))
 	m.setupForm()
+	m.Update(tea.PasteMsg{Content: "my-vps"})
 	m.next()
+	if !strings.Contains(strings.Join(m.current.args, " "), "--hostname my-vps") {
+		t.Fatal("setup omitted VPS name")
+	}
 	for _, arg := range m.current.args {
 		if strings.HasPrefix(arg, "--no-") {
 			t.Fatalf("setup default disabled a requested component: %v", m.current.args)

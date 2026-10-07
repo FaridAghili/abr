@@ -193,12 +193,15 @@ func (m *model) serverMenu() tea.Cmd {
 			return m.gitSetupForm()
 		case "composer":
 			return m.composerAuthForm()
+		case "mysql-admin":
+			return m.start(action{title: "MySQL admin · TablePlus", args: []string{"database", "--admin", "--show"}})
 		}
 		return m.home()
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Server actions").Description("For a new VPS: set up the server, then its GitHub key.").Options(
 		huh.NewOption("Set up VPS", "setup"),
 		huh.NewOption("GitHub key", "git"),
 		huh.NewOption("Composer credentials", "composer"),
+		huh.NewOption("MySQL admin · TablePlus", "mysql-admin"),
 		huh.NewOption("Back", "back")).Value(&selected)))
 }
 
@@ -613,7 +616,7 @@ func nextStep(args []string) string {
 	}
 	switch args[0] {
 	case "setup":
-		return "Open Server & credentials to set up the GitHub key, then clone your project."
+		return "Open Server & credentials to set up the GitHub key, then clone your project. MySQL admin shows your TablePlus login."
 	case "git":
 		return "Add the public key to GitHub Settings → SSH and GPG keys, then choose Clone application."
 	case "clone":
@@ -630,6 +633,9 @@ func nextStep(args []string) string {
 	case "composer":
 		return "Choose Deploy for your app. Saved credentials are reused automatically."
 	case "database":
+		if slices.Contains(args, "--admin") {
+			return "In TablePlus choose MySQL with SSH, use the database values above and your existing VPS SSH login."
+		}
 		if len(args) > 1 && args[1] == "backup" {
 			return "Copy the SQL backups to storage outside this VPS."
 		}

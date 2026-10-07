@@ -163,10 +163,11 @@ func (m *model) setupForm() tea.Cmd {
 	m.context, m.notice = "", ""
 	ssh := "0"
 	var admin string
+	var hostname string
 	rr := m.options.RoadRunnerVersion
 	features := []string{"redis", "images", "firewall"}
 	return m.setForm("form", "Set up VPS", func() tea.Cmd {
-		args := []string{"setup", "--ssh-port", ssh, "--roadrunner-version", rr}
+		args := []string{"setup", "--hostname", hostname, "--ssh-port", ssh, "--roadrunner-version", rr}
 		if admin != "" {
 			args = append(args, "--admin-user", admin)
 		}
@@ -179,8 +180,8 @@ func (m *model) setupForm() tea.Cmd {
 				args = append(args, "--no-"+f)
 			}
 		}
-		return m.review(action{title: "Set up VPS", args: args, note: "Install server packages and selected tools. Enable security updates and key-only SSH. Test your key login in a second session before continuing."})
-	}, huh.NewGroup(textInput("SSH administrator (optional)", "Existing account with a tested SSH key. Blank uses the sudo user or root.", "deploy", &admin)), huh.NewGroup(textInput("SSH port", "Use 0 to detect current SSH ports, or enter the port you use.", "22", &ssh).Validate(func(s string) error {
+		return m.review(action{title: "Set up VPS", args: args, note: "Set Ubuntu's hostname, install server tools and prepare the TablePlus admin login. Enable security updates and key-only SSH. Test your key login in a second session before continuing."})
+	}, huh.NewGroup(textInput("VPS name", "Sets Ubuntu's hostname and labels the GitHub key. Use lowercase letters, digits and hyphens.", "my-vps", &hostname).Validate(config.ValidateHostname)), huh.NewGroup(textInput("SSH administrator (optional)", "Existing account with a tested SSH key. Blank uses the sudo user or root.", "deploy", &admin)), huh.NewGroup(textInput("SSH port", "Use 0 to detect current SSH ports, or enter the port you use.", "22", &ssh).Validate(func(s string) error {
 		n, e := strconv.Atoi(s)
 		if e != nil || n < 0 || n > 65535 {
 			return errors.New("Enter 0 or a port from 1 to 65535")

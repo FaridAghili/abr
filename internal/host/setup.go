@@ -25,6 +25,7 @@ import (
 const DefaultRoadRunnerVersion = "latest"
 
 type SetupOptions struct {
+	Hostname                      string
 	RoadRunnerVersion             string
 	SSHPort                       int // Zero discovers ports from the effective sshd configuration.
 	AdminUser                     string
@@ -32,6 +33,9 @@ type SetupOptions struct {
 }
 
 func (h Host) Setup(o SetupOptions) error {
+	if err := config.ValidateHostname(o.Hostname); err != nil {
+		return fmt.Errorf("VPS name: %w", err)
+	}
 	if o.RoadRunnerVersion != "latest" && !regexp.MustCompile(`^\d{4}\.\d+\.\d+$`).MatchString(o.RoadRunnerVersion) {
 		return fmt.Errorf("invalid RoadRunner version")
 	}
@@ -119,6 +123,9 @@ func (h Host) Setup(o SetupOptions) error {
 		if err := h.installTemplates(templates); err != nil {
 			return err
 		}
+		if err := h.configureHostname(o.Hostname); err != nil {
+			return err
+		}
 		if _, err := h.read(h.Manager.ConfigPath); os.IsNotExist(err) || h.DryRun {
 			data, err := config.Encode(config.Default())
 			if err != nil {
@@ -143,6 +150,9 @@ func (h Host) Setup(o SetupOptions) error {
 			return err
 		}
 		if err := h.hardenMySQL(); err != nil {
+			return err
+		}
+		if err := h.configureMySQLAdmin(); err != nil {
 			return err
 		}
 		if !o.NoRedis {

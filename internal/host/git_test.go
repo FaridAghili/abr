@@ -47,6 +47,23 @@ func TestSharedGitKeyIsPrivateStableAndImportDoesNotReplace(t *testing.T) {
 	if err := h.GitSetup(h.path(key)); err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(out.String(), "Title: my-vps") {
+		t.Fatal("GitHub key instructions missing VPS name")
+	}
+	if err := h.write("/etc/hostname", []byte("renamed-vps\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.GitSetup(""); err != nil {
+		t.Fatal(err)
+	}
+	pub, _ := h.read(key + ".pub")
+	if !strings.HasSuffix(string(pub), " renamed-vps\n") {
+		t.Fatal("public key comment did not follow VPS rename")
+	}
+	unchanged, _ := h.read(key)
+	if !bytes.Equal(data, unchanged) {
+		t.Fatal("VPS rename rotated SSH identity")
+	}
 	// The ACL mask exposes a group read mode bit even though only named app
 	// users can read the root-owned key. Root validation must still work.
 	if err := os.Chmod(key, 0640); err != nil {

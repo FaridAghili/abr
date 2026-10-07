@@ -57,8 +57,17 @@ type Database struct {
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 var userPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+var hostnamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 func ValidName(name string) bool { return namePattern.MatchString(name) }
+
+// A VPS name is one DNS label, also suitable for an SSH key comment.
+func ValidateHostname(name string) error {
+	if !hostnamePattern.MatchString(name) || name == "localhost" {
+		return fmt.Errorf("use 1–63 lowercase letters, digits or hyphens; start and end with a letter or digit (example: my-vps)")
+	}
+	return nil
+}
 
 func Default() Config { return Config{Ports: Range{First: 10000, Last: 19999}, Apps: []App{}} }
 
