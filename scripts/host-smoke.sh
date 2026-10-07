@@ -9,6 +9,11 @@ sites_test_binary=$(realpath "${1:-bin/sites}")
 sites_ci() {
   sudo "$sites_test_binary" --config /etc/sites-ci/config.toml --state-dir /var/lib/sites-ci "$@"
 }
+fixture_denied() {
+  if sudo runuser -u "$1" -- "${@:2}" >/dev/null 2>&1; then
+    echo "Expected access refusal for $1" >&2; exit 1
+  fi
+}
 fixture_https() {
   # Local Caddy certificates can finish issuance shortly after configuration reload.
   curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 1 \
@@ -81,11 +86,13 @@ fixture_git /srv/apps/fixture-php
 sites_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --scheduler
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/sites-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 sites_ci deploy fixture-php --no-pull
-sudo runuser -u sites-fixture-php -- test ! -w /var/lib/caddy/sites-admin.sock
+fixture_denied sites-fixture-php curl --fail --silent --max-time 2 \
+  --unix-socket /var/lib/caddy/sites-admin.sock http://localhost/config/
+# Load the identity instead of test -r: Ubuntu's Rust test can ignore ACLs.
 sudo runuser -u sites-fixture-php -- ssh-keygen -y -P '' -f /var/lib/sites-ci/git/id_ed25519 >/dev/null
 sites_ci git setup
-sudo runuser -u sites-fixture-php -- test ! -r /var/lib/sites-ci/credentials/fixture-php.env
-sudo runuser -u nobody -- test ! -r /var/lib/sites-ci/git/id_ed25519
+fixture_denied sites-fixture-php head -c 1 /var/lib/sites-ci/credentials/fixture-php.env
+fixture_denied nobody head -c 1 /var/lib/sites-ci/git/id_ed25519
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 sudo test -S /run/php/sites-fixture-php.sock
 sudo test "$(sudo stat -c '%a' /srv/apps/fixture-php/.env)" = 600
