@@ -31,6 +31,7 @@ type fakeRunner struct {
 	users            map[string]string
 	groups           map[string]string
 	database         bool
+	unitState        string
 	fail             func(Command) error
 	dirty, processes bool
 }
@@ -100,6 +101,9 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 	case "systemctl":
 		if len(c.Args) > 0 && c.Args[0] == "show" {
 			if slices.Contains(c.Args, "--property=ActiveState") {
+				if r.unitState != "" {
+					return []byte(r.unitState + "\n"), nil
+				}
 				return []byte("active\n"), nil
 			}
 			return []byte("loaded\n"), nil

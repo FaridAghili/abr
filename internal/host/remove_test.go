@@ -13,6 +13,63 @@ import (
 	"abr/internal/services"
 )
 
+func TestPurgeResetsOnlyFailedUnits(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		state     string
+		resetFail bool
+	}{
+		{name: "inactive-unloaded", state: "inactive", resetFail: true},
+		{name: "failed", state: "failed"},
+		{name: "reset-error", state: "failed", resetFail: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			h, r, _, a := fixture(t)
+			if _, err := h.Register(a, nil); err != nil {
+				t.Fatal(err)
+			}
+			unit := "abr-app-queue@1.service"
+			path := "/etc/systemd/system/abr-app-queue@.service"
+			if err := h.write(path, []byte(services.Marker+"\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.saveManifest(manifest{Version: 1, App: a.Name, User: a.User, Files: []string{path}, Units: []string{unit}, Enabled: true}); err != nil {
+				t.Fatal(err)
+			}
+			r.unitState = scenario.state
+			resets := 0
+			r.fail = func(c Command) error {
+				if c.Name == "systemctl" && slices.Contains(c.Args, "reset-failed") {
+					resets++
+					if !slices.Contains(c.Args, unit) {
+						t.Fatal("reset was not scoped to the app unit")
+					}
+					if scenario.resetFail {
+						return testExit(1)
+					}
+				}
+				return nil
+			}
+			err := h.Purge(a.Name, true)
+			if scenario.state == "inactive" {
+				if err != nil || resets != 0 {
+					t.Fatalf("healthy unloaded unit blocked purge: resets=%d, err=%v", resets, err)
+				}
+			} else if resets != 1 || (err != nil) != scenario.resetFail {
+				t.Fatalf("failed unit reset: resets=%d, err=%v", resets, err)
+			}
+			if scenario.state == "failed" && scenario.resetFail {
+				if _, err := os.Stat(a.Directory); err != nil {
+					t.Fatal("failed reset deleted project data")
+				}
+				if _, exists := r.users[a.User]; !exists {
+					t.Fatal("failed reset deleted the app account")
+				}
+			}
+		})
+	}
+}
+
 func TestPurgeDeletesOnlySelectedAppAndRecordedDatabase(t *testing.T) {
 	h, r, out, a := fixture(t)
 	a.Database.Enabled = true

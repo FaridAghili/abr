@@ -569,11 +569,13 @@ func (h Host) remove(name string, purge bool) error {
 		if purge {
 			for _, unit := range stopUnits(m.Units) {
 				if !h.DryRun {
-					output, err := h.run("Check managed unit "+unit, Command{Name: "systemctl", Args: []string{"show", "--property=LoadState", "--value", unit}, Private: true})
+					output, err := h.run("Check managed unit activity "+unit, Command{Name: "systemctl", Args: []string{"show", "--property=ActiveState", "--value", unit}, Private: true})
 					if err != nil {
 						return err
 					}
-					if strings.TrimSpace(string(output)) == "not-found" {
+					// Healthy inactive units can be unloaded between show and
+					// reset-failed. Only failed units need their retained state cleared.
+					if strings.TrimSpace(string(output)) != "failed" {
 						continue
 					}
 				}
