@@ -29,6 +29,11 @@ sudo install -d -m 755 /run/sshd
 sudo ssh-keygen -t ed25519 -N '' -f /root/.ssh/sites-fixture-ssh >/dev/null
 sudo bash -c 'cat /root/.ssh/sites-fixture-ssh.pub >> /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys'
 sites_ci setup --no-firewall --ssh-port 22 --admin-user root
+# Caddy administration is restricted to root and Caddy, not application users.
+sudo test -S /var/lib/caddy/sites-admin.sock
+if curl --silent --max-time 2 http://127.0.0.1:2019/config/ >/dev/null; then
+  echo 'Caddy administration is exposed on the default TCP port' >&2; exit 1
+fi
 /usr/local/bin/svgo --version
 /usr/local/bin/ncu --version
 /usr/local/bin/composer --no-plugins --no-scripts --version
@@ -74,6 +79,7 @@ fixture_git /srv/apps/fixture-php
 sites_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --scheduler
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/sites-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 sites_ci deploy fixture-php --no-pull
+sudo runuser -u sites-fixture-php -- test ! -w /var/lib/caddy/sites-admin.sock
 sudo runuser -u sites-fixture-php -- test -r /var/lib/sites-ci/git/id_ed25519
 sudo runuser -u sites-fixture-php -- ssh-keygen -y -P '' -f /var/lib/sites-ci/git/id_ed25519 >/dev/null
 sites_ci git setup

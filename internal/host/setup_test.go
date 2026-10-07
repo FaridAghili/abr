@@ -32,6 +32,9 @@ func (r *setupRunner) Run(c Command) ([]byte, error) {
 	if c.Name == "systemctl" && slices.Contains(c.Args, "--property=Listen") {
 		return []byte("[::]:2200 (Stream)"), nil
 	}
+	if c.Name == "caddy" && c.Args[0] == "adapt" {
+		return []byte(`{}`), nil
+	}
 	if c.Name == "redis-cli" {
 		return []byte(r.redis), nil
 	}
@@ -253,5 +256,30 @@ func TestRedisCommentedIncludeDoesNotSkipHardening(t *testing.T) {
 	data, _ := h.read("/etc/redis/redis.conf")
 	if !hasDirective(data, "include /etc/redis/sites.conf") {
 		t.Fatal("comment prevented Redis hardening")
+	}
+}
+
+func TestCaddyAdminUsesPrivateSocketAndRejectsFailedConfiguration(t *testing.T) {
+	h, r := setupFixture(t)
+	if err := h.configureCaddyAdmin(); err != nil {
+		t.Fatal(err)
+	}
+	const path = "/etc/systemd/system/caddy.service.d/sites-admin.conf"
+	data, err := h.read(path)
+	if err != nil || !bytes.Contains(data, []byte("unix//var/lib/caddy/sites-admin.sock")) {
+		t.Fatal("private Caddy administration socket missing")
+	}
+	r.fail = func(c Command) error {
+		if c.Name == "systemctl" {
+			return testExit(1)
+		}
+		return nil
+	}
+	if err := h.configureCaddyAdmin(); err == nil {
+		t.Fatal("failed Caddy restart reported success")
+	}
+	after, _ := h.read(path)
+	if !bytes.Equal(data, after) {
+		t.Fatal("Caddy service config not restored")
 	}
 }

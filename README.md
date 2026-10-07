@@ -43,7 +43,8 @@ Setup installs and verifies:
   librsvg, with an actual SVG-to-PNG test that preserves packaged security limits.
 - Node 24 from its signed NodeSource repository, latest compatible npm,
   npm-check-updates, and SVGO. Global npm installations disable lifecycle scripts.
-- Latest stable Caddy from its signed official repository, latest stable Composer
+- Latest stable Caddy from its signed official repository, with administration
+  restricted to a private Unix socket; latest stable Composer
   with official SHA256 verification, and latest stable RoadRunner with GitHub's
   asset SHA256 verification. RoadRunner is shared under `/opt/roadrunner/VERSION/`.
 - Ubuntu MySQL 8.4: loopback binding, local-infile disabled, root socket

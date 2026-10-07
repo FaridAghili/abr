@@ -165,7 +165,7 @@ func (h Host) configurePHP() error {
 }
 
 func requireSetupTemplates(source string) error {
-	for _, name := range []string{"caddy-site.caddy.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "automatic-updates.conf.tmpl"} {
+	for _, name := range []string{"caddy-site.caddy.tmpl", "caddy-admin.service.conf.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "automatic-updates.conf.tmpl"} {
 		if info, err := os.Stat(filepath.Join(source, name)); err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("missing distribution template %s; keep templates/ beside the executable", name)
 		}
@@ -205,4 +205,38 @@ func (h Host) configureCaddyImport() error {
 		return err
 	}
 	return nil
+}
+
+// App users must not be able to reconfigure every site through the default
+// unauthenticated loopback API. The packaged service can use a private socket.
+func (h Host) configureCaddyAdmin() error {
+	const address = "unix//var/lib/caddy/sites-admin.sock"
+	out, err := h.run("Check Caddy administration endpoint", Command{Name: "caddy", Args: []string{"adapt", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}, Env: []string{"CADDY_ADMIN=" + address}, Private: true})
+	if err != nil {
+		return err
+	}
+	if !h.DryRun {
+		var settings struct {
+			Admin *struct {
+				Listen   string
+				Disabled bool
+			}
+		}
+		if err := json.Unmarshal(out, &settings); err != nil {
+			return err
+		}
+		if settings.Admin != nil && (settings.Admin.Disabled || (settings.Admin.Listen != "" && settings.Admin.Listen != address)) {
+			return fmt.Errorf("Caddyfile overrides the private admin socket; remove its admin option before setup")
+		}
+	}
+	err = h.setupConfig("caddy-admin.service.conf.tmpl", "/etc/systemd/system/caddy.service.d/sites-admin.conf", func() error {
+		if err := h.command("systemctl", "daemon-reload"); err != nil {
+			return err
+		}
+		return h.command("systemctl", "restart", "caddy")
+	})
+	if err != nil && !h.DryRun {
+		return errors.Join(err, h.command("systemctl", "daemon-reload"), h.command("systemctl", "restart", "caddy"))
+	}
+	return err
 }

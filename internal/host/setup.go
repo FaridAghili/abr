@@ -135,6 +135,9 @@ func (h Host) Setup(o SetupOptions) error {
 		if err := h.command("systemctl", "enable", "--now", "mysql", "php"+services.PHPVersion+"-fpm", "caddy"); err != nil {
 			return err
 		}
+		if err := h.configureCaddyAdmin(); err != nil {
+			return err
+		}
 		if err := h.configurePHP(); err != nil {
 			return err
 		}
