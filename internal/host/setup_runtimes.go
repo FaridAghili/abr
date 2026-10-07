@@ -93,6 +93,28 @@ func (h Host) installNPM(images bool) error {
 func (h Host) configureRedis() (result error) {
 	const include = "include /etc/redis/abr.conf"
 	path := "/etc/redis/redis.conf"
+	// Ubuntu's packaged directory may belong to redis. Adopt it before writing
+	// root-managed configuration, after checking that /etc cannot be replaced
+	// and the directory itself is not a symlink. Never recurse into its contents.
+	if !h.DryRun {
+		dir := h.path("/etc/redis")
+		if err := h.trustedDirectory(filepath.Dir(dir)); err != nil {
+			return err
+		}
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("Redis configuration directory must be a directory without symlinks: %s", dir)
+		}
+	}
+	if err := h.command("chown", "--no-dereference", "root:redis", "/etc/redis"); err != nil {
+		return err
+	}
+	if err := h.command("chmod", "0750", "/etc/redis"); err != nil {
+		return err
+	}
 	old, err := h.read(path)
 	if err != nil && !h.DryRun {
 		return err
@@ -126,13 +148,6 @@ func (h Host) configureRedis() (result error) {
 			if err := h.command("chown", "root:redis", path); err != nil {
 				return err
 			}
-		}
-		// Prevent the redis service account from replacing root-managed config.
-		if err := h.command("chown", "root:redis", "/etc/redis"); err != nil {
-			return err
-		}
-		if err := h.command("chmod", "0750", "/etc/redis"); err != nil {
-			return err
 		}
 		if err := h.command("systemctl", "enable", "--now", "redis-server"); err != nil {
 			return err

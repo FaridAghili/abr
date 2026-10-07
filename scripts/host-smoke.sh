@@ -103,6 +103,10 @@ sudo /usr/sbin/sshd -T | grep -Fx 'authenticationmethods publickey'
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \
   -e 'SELECT @@bind_address, @@local_infile;' | grep -Fx $'127.0.0.1\t0'
 sudo redis-cli CONFIG GET bind | grep -Fx '127.0.0.1 -::1'
+test "$(stat -c '%u:%a' /etc/redis)" = 0:750
+sudo runuser -u redis -- test -r /etc/redis/redis.conf
+sudo runuser -u redis -- test -r /etc/redis/abr.conf
+fixture_denied redis test -w /etc/redis
 sudo redis-cli CONFIG GET appendonly | grep -Fx yes
 sudo redis-cli CONFIG GET maxmemory-policy | grep -Fx noeviction
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \

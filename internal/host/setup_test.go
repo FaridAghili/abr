@@ -247,6 +247,65 @@ func TestRedisValidationFailureRestoresOriginalConfigs(t *testing.T) {
 	}
 }
 
+func TestRedisSecuresPackagedDirectoryBeforeManagedWrites(t *testing.T) {
+	h, r := setupFixture(t)
+	if err := h.write("/etc/redis/redis.conf", []byte("bind 127.0.0.1\n"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	dir := h.path("/etc/redis")
+	if err := os.Chmod(dir, 0777); err != nil {
+		t.Fatal(err)
+	}
+	adopted := false
+	r.fail = func(c Command) error {
+		if c.Name == "chown" && slices.Equal(c.Args, []string{"--no-dereference", "root:redis", "/etc/redis"}) {
+			if _, err := h.read("/etc/redis/abr.conf"); !os.IsNotExist(err) {
+				t.Fatal("wrote managed configuration before securing directory")
+			}
+			adopted = true
+		}
+		if c.Name == "chmod" && slices.Equal(c.Args, []string{"0750", "/etc/redis"}) {
+			if !adopted {
+				t.Fatal("changed permissions before adopting the directory")
+			}
+			// The fake runner cannot alter ownership; this fixture already belongs
+			// to the test user. Execute the permission change on its temporary path.
+			return os.Chmod(dir, 0750)
+		}
+		return nil
+	}
+	if err := h.configureRedis(); err != nil {
+		t.Fatal(err)
+	}
+	if !adopted {
+		t.Fatal("did not secure the packaged configuration directory")
+	}
+	data, err := h.read("/etc/redis/redis.conf")
+	if err != nil || !hasDirective(data, "include /etc/redis/abr.conf") {
+		t.Fatal("managed Redis configuration was not enabled")
+	}
+}
+
+func TestRedisRejectsSymlinkBeforeAdoptingDirectory(t *testing.T) {
+	h, r := setupFixture(t)
+	if err := h.write("/outside/redis.conf", []byte("bind 127.0.0.1\n"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(h.path("/etc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(h.path("/outside"), h.path("/etc/redis")); err != nil {
+		t.Fatal(err)
+	}
+	r.calls = nil
+	if err := h.configureRedis(); err == nil {
+		t.Fatal("accepted symlinked Redis configuration directory")
+	}
+	if len(r.calls) != 0 {
+		t.Fatal("changed the host before rejecting a symlinked directory")
+	}
+}
+
 func TestSetupRejectsMissingDefaultsAndDownloadCorruption(t *testing.T) {
 	if err := requireSetupTemplates(fstest.MapFS{}); err == nil {
 		t.Fatal("incomplete defaults accepted")
