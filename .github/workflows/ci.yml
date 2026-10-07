@@ -3,6 +3,7 @@ name: Check and package
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -78,3 +79,50 @@ jobs:
           path: dist/abr-linux-amd64
           archive: false
           if-no-files-found: error
+      - name: Package release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version=$(dist/abr-linux-amd64 version | awk '{print $2}')
+          test "$RELEASE_TAG" = "v$version"
+          mkdir -p dist/bundle dist/release
+          install -m 755 dist/abr-linux-amd64 dist/bundle/abr
+          cp -R templates config.example.toml README.md dist/bundle/
+          cp dist/abr-linux-amd64 dist/release/
+          cp .github/release-notes.md dist/release/release-notes.md
+          tar -czf "dist/release/abr_${version}_linux_amd64.tar.gz" -C dist/bundle .
+          cd dist/release
+          sha256sum abr-linux-amd64 "abr_${version}_linux_amd64.tar.gz" > SHA256SUMS
+      - name: Upload release files
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: abr-release
+          path: dist/release/
+          if-no-files-found: error
+
+  release:
+    name: Publish tested release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Download tested release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: abr-release
+          path: dist/release
+      - name: Verify checksums and publish
+        working-directory: dist/release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          sha256sum --check SHA256SUMS
+          gh release create "$RELEASE_TAG" abr-linux-amd64 ./*.tar.gz SHA256SUMS \
+            --verify-tag --title "Abr $RELEASE_TAG" --notes-file release-notes.md --latest

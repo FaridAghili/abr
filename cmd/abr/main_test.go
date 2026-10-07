@@ -162,7 +162,7 @@ func TestCommands(t *testing.T) {
 	if err != nil || !strings.Contains(string(state), `"assignments": []`) {
 		t.Fatalf("FPM allocated ports: %s %v", state, err)
 	}
-	if out, err := invoke(t, "version"); err != nil || !strings.HasPrefix(out, "abr 0.1.0 (") {
+	if out, err := invoke(t, "version"); err != nil || !strings.HasPrefix(out, "abr "+abr.Version+" (") {
 		t.Fatalf("%s %v", out, err)
 	}
 	if _, err := invoke(t, register...); err == nil {

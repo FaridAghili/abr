@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"abr"
 	"abr/internal/config"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
@@ -24,7 +25,7 @@ func testOptions(t *testing.T) Options {
 	if err := os.WriteFile(path, []byte("[ports]\nfirst = 10000\nlast = 19999\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	return Options{Version: "0.1.0", ConfigPath: path, StateDir: filepath.Join(dir, "state"), TemplatesDir: filepath.Join(dir, "templates"), AppsDir: filepath.Join(dir, "apps"), RoadRunnerVersion: "2025.1.15"}
+	return Options{Version: abr.Version, ConfigPath: path, StateDir: filepath.Join(dir, "state"), TemplatesDir: filepath.Join(dir, "templates"), AppsDir: filepath.Join(dir, "apps"), RoadRunnerVersion: "2025.1.15"}
 }
 func press(m *model, code rune) tea.Cmd {
 	_, cmd := m.Update(tea.KeyPressMsg{Code: code})

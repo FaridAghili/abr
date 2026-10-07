@@ -1,7 +1,7 @@
 # Development rules
 
-- Keep version 0.1.0 until asked to bump it. Use Go from go.mod; develop on macOS ARM64 and ship CGO-free Linux AMD64.
-- Treat this as the initial development release. Do not add backward-compatibility code, legacy migrations or upgrade notes. Prepare version 1 and publish a release only when explicitly asked.
+- Keep version 1.0.0 until asked to bump it. Use Go from go.mod; develop on macOS ARM64 and ship CGO-free Linux AMD64.
+- Treat this as the initial release. Do not add backward-compatibility code, legacy migrations or upgrade notes. Publish releases only when explicitly asked.
 - Keep portable logic separate from Ubuntu host operations. Keep the TUI thin and CLI scriptable; never report unexecuted work as success.
 - Keep the TUI minimal: small menus, one input field per step, and a short description and example for every field. Make advanced settings optional and guide users to the next step after successful work.
 - Clone and register apps by name under /srv/apps/NAME by default; do not ask for the full project path in the TUI.

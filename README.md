@@ -6,8 +6,7 @@
 **Ubuntu 26.04 LTS AMD64** VPS.
 Laravel uses PHP-FPM or shared RoadRunner/Octane; Nuxt uses Node for SSR or SPA.
 Caddy serves direct HTTPS. Users, databases, services and ports are managed per app.
-Initial development version **0.1.0**; development supports macOS ARM64.
-Version 1 release preparation and publishing are deferred until requested.
+Version **1.0.0**; development supports macOS ARM64.
 
 ## Start with a fresh VPS
 
@@ -39,9 +38,12 @@ Version 1 release preparation and publishing are deferred until requested.
    sudo apt-get full-upgrade -y
    ```
 
-4. Download the **abr-linux-amd64** artifact from a successful main-branch run
-   under **Actions → Check and package** whose disposable Ubuntu host test passed.
-   Download the binary directly and upload it using the variables from step 2.
+4. Download **abr-linux-amd64** from the
+   [v1.0.0 release](https://github.com/FaridAghili/abr/releases/tag/v1.0.0).
+   Release assets are published only after the disposable Ubuntu host test passes.
+   The release also includes a bundle with standalone editable templates and the
+   generic example config, plus SHA256 checksums. Upload the binary using the
+   variables from step 2.
 
    ```sh
    scp -P "$VPS_PORT" abr-linux-amd64 "$VPS_USER@$VPS_HOST:"
@@ -362,9 +364,6 @@ when investigating failures. Secret-file reads reject symlinks/special files and
 are limited to 1 MiB. Deployment logs and backups have no automatic retention;
 monitor disk space and archive them deliberately.
 
-The [security review](docs/security-review.md) records the privilege boundaries,
-changes, validation and remaining server-use limitations.
-
 ## Development
 
 Source templates stay in `templates/`; Go embeds them and `config.example.toml`
@@ -391,8 +390,10 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/abr-linux-amd64 ./cmd/abr
 CI uses one Ubuntu runner to check formatting/vet/race tests, scan reachable Go
 dependency vulnerabilities, build the standalone Linux AMD64 binary,
 and run actual setup/deployment/backup/restore tests from an isolated binary.
-It runs on main pushes, pull requests, and manual requests, cancels superseded
-runs, and caches Go dependencies and builds. The binary is uploaded directly,
-without an archive or separate checksum file, only after the host test passes.
-CI does not publish GitHub releases.
+It runs on main pushes, version tag pushes, pull requests, and manual requests,
+cancels superseded runs, and caches Go dependencies and builds. The binary is
+uploaded directly only after the host test passes. Version tags must match the
+binary's version. Tag runs also package the executable, standalone templates and
+generic example config, then publish a GitHub release with SHA256 checksums after
+all checks pass. Main pushes and pull requests do not publish releases.
 `scripts/host-smoke.sh` changes an entire host: never run it on production.
