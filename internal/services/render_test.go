@@ -29,7 +29,7 @@ func TestRenderAllComponents(t *testing.T) {
 			t.Fatalf("unrendered template %s", f.Path)
 		}
 		if strings.HasSuffix(f.Path, ".caddy") {
-			for _, want := range []string{"app.test, extra.test", "redir https://app.test{uri} permanent", "reverse_proxy 127.0.0.1:10000"} {
+			for _, want := range []string{"app.test, extra.test", "redir https://app.test{uri} 308", "reverse_proxy 127.0.0.1:10000"} {
 				if !strings.Contains(text, want) {
 					t.Errorf("missing %s in %s", want, text)
 				}
@@ -105,5 +105,39 @@ func TestTemplatesAreRequiredAndEditable(t *testing.T) {
 	a.Domain = "*.app.test"
 	if _, err := Render(a, r, dir, t.TempDir()); err == nil {
 		t.Fatal("wildcard domain accepted")
+	}
+}
+
+func TestCanonicalRedirectsPreserveURIAndLeaveSubdomainAppsSeparate(t *testing.T) {
+	for _, preference := range []string{config.CanonicalWWW, config.CanonicalNonWWW} {
+		t.Run(preference, func(t *testing.T) {
+			a, err := (config.App{Name: "site", User: "abr-site", Directory: "/srv/apps/site", Type: "laravel", Domain: "example.com", Web: config.Web{Driver: "fpm"}}).WithCanonicalHost(preference)
+			if err != nil {
+				t.Fatal(err)
+			}
+			api := config.App{Name: "api", User: "abr-api", Directory: "/srv/apps/api", Type: "laravel", Domain: "api.example.com", Web: config.Web{Driver: "fpm"}}
+			for _, app := range []config.App{a, api} {
+				plan, err := Render(app, ports.Empty(), "../../templates", t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, file := range plan.Files {
+					if !strings.HasSuffix(file.Path, ".caddy") {
+						continue
+					}
+					text := string(file.Data)
+					if !strings.Contains(text, "redir https://{host}{uri} 308") || strings.Contains(text, "permanent") {
+						t.Fatal("HTTP redirect does not preserve request method")
+					}
+					if app.Name == "site" {
+						if !strings.Contains(text, a.Aliases[0]+", http://"+a.Aliases[0]+" {") || !strings.Contains(text, "redir https://"+a.Domain+"{uri} 308") || strings.Contains(text, api.Domain) {
+							t.Fatalf("invalid canonical routing: %s", text)
+						}
+					} else if !strings.Contains(text, "api.example.com {") || strings.Contains(text, "www.") || strings.Contains(text, "redir https://example.com") {
+						t.Fatalf("subdomain inherited another app's redirects: %s", text)
+					}
+				}
+			}
+		})
 	}
 }

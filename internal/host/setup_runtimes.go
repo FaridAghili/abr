@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -179,10 +180,10 @@ func (h Host) configurePHP() error {
 	})
 }
 
-func requireSetupTemplates(source string) error {
+func requireSetupTemplates(source fs.FS) error {
 	for _, name := range []string{"caddy-default.caddy.tmpl", "caddy-site.caddy.tmpl", "caddy-admin.service.conf.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "automatic-updates.conf.tmpl"} {
-		if info, err := os.Stat(filepath.Join(source, name)); err != nil || !info.Mode().IsRegular() {
-			return fmt.Errorf("missing distribution template %s; keep templates/ beside the executable", name)
+		if info, err := fs.Stat(source, name); err != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("missing embedded template %s", name)
 		}
 	}
 	return nil

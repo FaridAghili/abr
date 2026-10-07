@@ -10,8 +10,7 @@ directory = "/srv/apps/api"
 user = "abr-api"
 type = "laravel"
 domain = "api.example.com"
-aliases = ["www.api.example.com"]
-domains = ["api.api.example.com"]
+# Separate subdomain apps keep their entered hostname without www aliases.
 health_check = "https://api.example.com/up"
 [apps.database]
 enabled = true
@@ -47,4 +46,6 @@ name = "frontend"
 directory = "/srv/apps/frontend"
 user = "abr-frontend"
 type = "nuxt"
-domain = "frontend.example.com"
+domain = "www.example.com"
+# Canonical preference is stored as the domain and its explicit redirect aliases.
+aliases = ["example.com"]

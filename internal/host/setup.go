@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"abr"
 	"abr/internal/config"
 	"abr/internal/services"
 )
@@ -27,7 +29,6 @@ type SetupOptions struct {
 	SSHPort                       int // Zero discovers ports from the effective sshd configuration.
 	AdminUser                     string
 	NoFirewall, NoRedis, NoImages bool
-	DistributionTemplates         string
 }
 
 func (h Host) Setup(o SetupOptions) error {
@@ -38,9 +39,13 @@ func (h Host) Setup(o SetupOptions) error {
 		return fmt.Errorf("invalid SSH port")
 	}
 	return h.locked(func() error {
+		templates, err := abr.TemplateFS()
+		if err != nil {
+			return err
+		}
 		if !h.DryRun {
-			// Discover missing distribution assets before making package changes.
-			if err := requireSetupTemplates(o.DistributionTemplates); err != nil {
+			// Check bundled defaults before making package changes.
+			if err := requireSetupTemplates(templates); err != nil {
 				return err
 			}
 		}
@@ -115,7 +120,7 @@ func (h Host) Setup(o SetupOptions) error {
 				}
 			}
 		}
-		if err := h.installTemplates(o.DistributionTemplates); err != nil {
+		if err := h.installTemplates(templates); err != nil {
 			return err
 		}
 		if _, err := h.read(h.Manager.ConfigPath); os.IsNotExist(err) || h.DryRun {
@@ -367,17 +372,17 @@ func verifiedRoadRunner(archive []byte, digest string) ([]byte, error) {
 	return binary, nil
 }
 
-func (h Host) installTemplates(source string) error {
+func (h Host) installTemplates(source fs.FS) error {
 	if h.DryRun {
-		h.say("Would install standalone templates from %s into %s, preserving edits", source, h.TemplatesDir)
+		h.say("Would install embedded templates into %s, preserving edits", h.TemplatesDir)
 		return nil
 	}
-	entries, err := os.ReadDir(source)
+	entries, err := fs.ReadDir(source, ".")
 	if err != nil {
-		return fmt.Errorf("read distribution templates (keep templates/ beside executable): %w", err)
+		return fmt.Errorf("read embedded templates: %w", err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || (!strings.HasSuffix(entry.Name(), ".tmpl") && entry.Name() != "README.md") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tmpl") {
 			continue
 		}
 		target := filepath.Join(h.TemplatesDir, entry.Name())
@@ -386,7 +391,7 @@ func (h Host) installTemplates(source string) error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		data, err := os.ReadFile(filepath.Join(source, entry.Name()))
+		data, err := fs.ReadFile(source, entry.Name())
 		if err != nil {
 			return err
 		}

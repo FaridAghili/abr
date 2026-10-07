@@ -5,10 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
+
+	"abr"
 )
 
 const testSSHSettings = "authorizedkeysfile .ssh/authorized_keys\nport 2222\npubkeyauthentication yes\nauthenticationmethods publickey\npasswordauthentication no\nkbdinteractiveauthentication no\npermitrootlogin without-password\npermitemptypasswords no\n"
@@ -80,7 +85,7 @@ func TestSSHKeyPreflightBeforePackagesAndRejectsWritableKeys(t *testing.T) {
 	if err := h.removeFile("/home/ubuntu/.ssh/authorized_keys"); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Setup(SetupOptions{RoadRunnerVersion: DefaultRoadRunnerVersion, AdminUser: "ubuntu", DistributionTemplates: "../../templates"}); err == nil {
+	if err := h.Setup(SetupOptions{RoadRunnerVersion: DefaultRoadRunnerVersion, AdminUser: "ubuntu"}); err == nil {
 		t.Fatal("setup without administrator keys succeeded")
 	}
 	for _, c := range r.calls {
@@ -194,11 +199,15 @@ func TestRedisValidationFailureRestoresOriginalConfigs(t *testing.T) {
 	}
 }
 
-func TestSetupRejectsMissingTemplatesAndDownloadCorruption(t *testing.T) {
-	if err := requireSetupTemplates(t.TempDir()); err == nil {
-		t.Fatal("incomplete distribution accepted")
+func TestSetupRejectsMissingDefaultsAndDownloadCorruption(t *testing.T) {
+	if err := requireSetupTemplates(fstest.MapFS{}); err == nil {
+		t.Fatal("incomplete defaults accepted")
 	}
-	if err := requireSetupTemplates("../../templates"); err != nil {
+	templates, err := abr.TemplateFS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireSetupTemplates(templates); err != nil {
 		t.Fatal(err)
 	}
 	data := []byte("verified release")
@@ -211,6 +220,71 @@ func TestSetupRejectsMissingTemplatesAndDownloadCorruption(t *testing.T) {
 	}
 	if _, err := fetch("http://example.invalid/download", 100); err == nil {
 		t.Fatal("unencrypted download accepted")
+	}
+}
+
+func TestInstallEmbeddedTemplatesPreservesEditsAndFillsMissingFiles(t *testing.T) {
+	h, _, _, _ := fixture(t)
+	h.TemplatesDir = filepath.Join(h.root, "installed-templates")
+	templates, err := abr.TemplateFS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom := []byte("# locally edited scheduler\n")
+	customPath := filepath.Join(h.TemplatesDir, "scheduler.service.tmpl")
+	if err := h.write(customPath, custom, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := h.installTemplates(templates); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := fs.ReadDir(templates, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		path := filepath.Join(h.TemplatesDir, entry.Name())
+		want, err := fs.ReadFile(templates, entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		mode := os.FileMode(0644)
+		if path == customPath {
+			want, mode = custom, 0600
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("installed %s: %v", entry.Name(), err)
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != mode {
+			t.Fatalf("permissions for %s: %v", entry.Name(), err)
+		}
+	}
+}
+
+func TestInstallEmbeddedTemplatesDryRunAndDestinationErrors(t *testing.T) {
+	h, _, _, _ := fixture(t)
+	h.TemplatesDir = filepath.Join(h.root, "installed-templates")
+	templates, err := abr.TemplateFS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.DryRun = true
+	if err := h.installTemplates(templates); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(h.TemplatesDir); !os.IsNotExist(err) {
+		t.Fatal("dry run created template files")
+	}
+	h.DryRun = false
+	if err := os.MkdirAll(filepath.Join(h.TemplatesDir, "automatic-updates.conf.tmpl"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.installTemplates(templates); err == nil {
+		t.Fatal("invalid destination reported success")
 	}
 }
 

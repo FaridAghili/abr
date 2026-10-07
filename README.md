@@ -38,34 +38,34 @@ Version remains **0.1.0** during stabilization; development supports macOS ARM64
    sudo apt-get full-upgrade -y
    ```
 
-4. Download the **abr-linux-amd64** artifact from a successful main-branch run
-   under **Actions → Check and package** in this repository. Extract the ZIP on
-   your computer, then upload its contents from that directory using the
-   variables from step 2. The original v0.1.0 release predates host management.
+4. Download `abr-linux-amd64` and `abr-linux-amd64.sha256` from **Releases** once
+   a binary release is available. Alternatively, download the **abr-linux-amd64**
+   artifact from a successful main-branch run under **Actions → Check and package**
+   and extract GitHub's artifact ZIP. Upload the two files from your computer
+   using the variables from step 2. The original v0.1.0 release predates host
+   management.
 
    ```sh
-   scp -P "$VPS_PORT" abr-linux-amd64.tar.gz abr-linux-amd64.tar.gz.sha256 \
+   scp -P "$VPS_PORT" abr-linux-amd64 abr-linux-amd64.sha256 \
      "$VPS_USER@$VPS_HOST:"
    ```
 
-5. On the VPS, verify the archive, run setup and install Abr:
+5. On the VPS, verify and install the binary, then run setup:
 
    ```sh
    cd ~
-   sha256sum -c abr-linux-amd64.tar.gz.sha256
-   mkdir -p abr-distribution
-   tar -xzf abr-linux-amd64.tar.gz -C abr-distribution
-   cd abr-distribution
-   ./abr setup --dry-run --admin-user "$(id -un)"
-   sudo ./abr setup --admin-user "$(id -un)"
-   sudo install -m 755 abr /usr/local/bin/abr
+   sha256sum -c abr-linux-amd64.sha256
+   sudo install -m 755 abr-linux-amd64 /usr/local/bin/abr
+   abr setup --dry-run --admin-user "$(id -un)"
+   sudo abr setup --admin-user "$(id -un)"
    sudo abr
    ```
 
-Keep `templates/` beside the executable during initial setup. Setup installs PHP
-8.5/extensions (including Imagick SVG support and Excimer), Node 24, latest compatible
-npm, npm-check-updates, Caddy, Composer, shared RoadRunner, MySQL 8.4, Redis and image
-optimization tools. It configures key-only SSH, local databases, UFW, Fail2ban and
+Only the binary is needed on the VPS; templates and the generic example config are
+embedded. Setup installs PHP 8.5/extensions (including Imagick SVG support and
+Excimer), Node 24, latest compatible npm, npm-check-updates, Caddy, Composer,
+shared RoadRunner, MySQL 8.4, Redis and image optimization tools. It configures
+key-only SSH, local databases, UFW, Fail2ban and
 security updates. Root key login remains allowed. Use `--admin-user USER` when the
 SSH account differs from the sudo user; `--ssh-port PORT` preserves an additional
 port. `--no-firewall`, `--no-redis`, `--no-images` skip those features. Setup neither
@@ -80,7 +80,7 @@ sudo abr git setup
 # Add the printed public key to GitHub account Settings → SSH and GPG keys.
 sudo abr clone git@github.com:OWNER/PROJECT.git /srv/apps/api
 sudo abr register --name api --dir /srv/apps/api --type laravel \
-  --domain api.example.com --alias www.api.example.com --web-driver octane \
+  --domain api.example.com --web-driver octane \
   --queue-workers 2 --scheduler
 sudo install -m 600 /srv/apps/api/.env.example /srv/apps/api/.env
 sudo abr database api --show
@@ -120,6 +120,34 @@ are not. Edit `/etc/abr/config.toml` to change settings, then run `abr ports
 --allocate` and `abr enable APP`. `abr remove APP` removes managed services/user
 and reservations while preserving the project, secrets, home and database.
 
+### Canonical host per app
+
+The registration menu offers **As entered**, **Prefer www**, and **Prefer non-www**.
+The CLI supports the same choice for Laravel and Nuxt:
+
+```sh
+sudo abr register --name website --dir /srv/apps/website --type laravel \
+  --domain example.com --canonical-host www
+```
+
+`www` serves `www.example.com` and redirects `example.com` to it. `non-www` serves
+`example.com` and redirects `www.example.com` to it. Both accept either spelling
+in `--domain`. The default, `as-entered`, serves exactly the entered hostname and
+adds no www alias. A separate app at `api.example.com` keeps its own hostname;
+choices apply only to the selected app's exact www/non-www pair.
+
+The resulting canonical hostname is saved as `domain` and the other hostname as
+an `aliases` entry. Other redirect aliases and additional serving domains keep
+their existing roles. A conflicting `--serving-domain` for the selected pair is
+rejected. Point both hostnames' DNS at the VPS; set Laravel's `APP_URL` to the
+canonical HTTPS URL. Redirects use **308**, preserving method, path and query.
+
+For an existing app, edit its `domain` and `aliases` in `/etc/abr/config.toml`, then
+run `sudo abr config validate` and `sudo abr enable APP`. Upgrades preserve edited
+templates: on an existing VPS, change both `permanent` redirects in
+`/etc/abr/templates/caddy-site.caddy.tmpl` to `308` before enabling the app if its
+installed template still uses the old status code.
+
 ## Database backups and imports
 
 Database backups and imports are available in the menu and CLI:
@@ -146,8 +174,9 @@ existing tables or restart services. Dumps with foreign DEFINERs may need review
 ## Templates and runtime settings
 
 Runtime templates stay editable under `/etc/abr/templates`; setup copies missing
-files from the distribution and preserves existing templates. Review/copy updated
-distribution templates when upgrading.
+files from the binary and preserves existing templates. Compare your edits with
+the [source templates](templates/) when upgrading; existing files are never
+automatically replaced by new defaults.
 `--templates-dir` selects another installed template directory. Shared settings
 apply on `abr setup`; app templates on `abr enable APP` or `abr deploy APP`.
 Templates are trusted root configuration; validate edits on a disposable Ubuntu
@@ -178,6 +207,9 @@ application bodies must be removed in the application itself.
 
 ## Development
 
+Source templates stay in `templates/`; Go embeds them and `config.example.toml`
+when building the executable. Rebuild to bundle changes to these defaults.
+
 From the repository root on macOS/Linux, use temporary paths and `--config-only`:
 
 ```sh
@@ -193,8 +225,12 @@ go test ./...
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/abr-linux-amd64 ./cmd/abr
 ```
 
-[config.example.toml](config.example.toml) documents the configuration. `abr help`
-lists commands; `abr doctor` checks portable config/registry/port availability.
-CI checks formatting/vet/tests, packages binary/templates/example/checksum, and
-runs actual setup/deployment/backup/restore tests on a disposable Ubuntu host.
+[config.example.toml](config.example.toml) documents the configuration;
+`abr config example` prints the embedded copy without changing live settings.
+`abr help` lists commands; `abr doctor` checks portable config/registry/port availability.
+CI checks formatting/vet/tests, builds the standalone binary and checksum, and
+runs actual setup/deployment/backup/restore tests on a disposable Ubuntu host
+from an isolated binary. Pushing a `v*` tag publishes those two assets to GitHub
+Releases only after both CI jobs pass. GitHub also includes its standard source
+archives.
 `scripts/host-smoke.sh` changes an entire host: never run it on production.

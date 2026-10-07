@@ -5,9 +5,18 @@ if [[ ${GITHUB_ACTIONS:-false} != true && ${ABR_HOST_TEST:-0} != 1 ]]; then
   echo 'Refusing host test: use a disposable Ubuntu machine and ABR_HOST_TEST=1.' >&2
   exit 1
 fi
-abr_test_binary=$(realpath "${1:-bin/abr}")
+abr_binary_source=$(realpath "${1:-bin/abr}")
+abr_binary_directory=$(mktemp -d)
+fixture_source=''
+trap 'rm -rf "$abr_binary_directory"; if [[ -n $fixture_source ]]; then rm -rf "$fixture_source"; fi' EXIT
+install -m 755 "$abr_binary_source" "$abr_binary_directory/abr"
+abr_test_binary="$abr_binary_directory/abr"
 abr_ci() {
-  sudo "$abr_test_binary" --config /etc/abr-ci/config.toml --state-dir /var/lib/abr-ci "$@"
+  (
+    # Setup must work with no repository or template files beside the binary.
+    cd "$abr_binary_directory"
+    sudo "$abr_test_binary" --config /etc/abr-ci/config.toml --state-dir /var/lib/abr-ci "$@"
+  )
 }
 fixture_denied() {
   if sudo runuser -u "$1" -- "${@:2}" >/dev/null 2>&1; then
@@ -18,6 +27,20 @@ fixture_https() {
   # Local Caddy certificates can finish issuance shortly after configuration reload.
   curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 1 \
     --max-time 10 --insecure --resolve "$1:443:127.0.0.1" "https://$1/" "${@:2}"
+}
+fixture_redirect() {
+  # Both HTTP and HTTPS must preserve path/query and return method-preserving 308.
+  local scheme port redirect_status
+  for scheme in http https; do
+    port=80
+    if [[ $scheme == https ]]; then port=443; fi
+    redirect_status=$(curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 1 \
+      --max-time 10 --insecure --resolve "$1:$port:127.0.0.1" \
+      --data 'redirect-fixture' -D "$fixture_source/redirect-headers" -o /dev/null \
+      --write-out '%{http_code}' "$scheme://$1/preserved/path?x=1&y=2")
+    test "$redirect_status" = 308
+    tr -d '\r' < "$fixture_source/redirect-headers" | grep -Fix "location: https://$2/preserved/path?x=1&y=2"
+  done
 }
 
 # GitHub runner images ship MySQL with this documented test password and other
@@ -38,6 +61,12 @@ sudo systemctl start redis-server
 sudo redis-cli SET abr-fixture-persist survives-setup >/dev/null
 sudo redis-cli SAVE >/dev/null
 abr_ci setup --no-firewall --ssh-port 22 --admin-user root
+test ! -d "$abr_binary_directory/templates"
+sudo test -f /etc/abr/templates/caddy-site.caddy.tmpl
+sudo test -f /etc/abr/templates/scheduler.service.tmpl
+sudo test -f /etc/abr/templates/ssh-hardening.conf.tmpl
+abr_ci config example > "$abr_binary_directory/config.example.toml"
+grep -Fx 'user = "abr-api"' "$abr_binary_directory/config.example.toml"
 sudo redis-cli GET abr-fixture-persist | grep -Fx survives-setup
 fixture_default_headers=$(mktemp)
 fixture_default_body=$(mktemp)
@@ -72,7 +101,6 @@ abr_ci git setup
 abr_ci git setup
 
 fixture_source=$(mktemp -d)
-trap 'rm -rf "$fixture_source"' EXIT
 composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel:^13.0' "$fixture_source/laravel"
 (
   cd "$fixture_source/laravel"
@@ -99,7 +127,7 @@ fixture_git() {
   sudo git -C "$1" commit --no-gpg-sign -m 'Fixture'
 }
 fixture_git /srv/apps/fixture-php
-abr_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --scheduler
+abr_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --canonical-host non-www --scheduler
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/abr-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 abr_ci deploy fixture-php --no-pull
 fixture_denied abr-fixture-php curl --fail --silent --max-time 2 \
@@ -110,6 +138,7 @@ abr_ci git setup
 fixture_denied abr-fixture-php head -c 1 /var/lib/abr-ci/credentials/fixture-php.env
 fixture_denied nobody head -c 1 /var/lib/abr-ci/git/id_ed25519
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+fixture_redirect www.fixture-php.localhost fixture-php.localhost
 sudo test -S /run/php/abr-fixture-php.sock
 sudo test "$(sudo stat -c '%a' /srv/apps/fixture-php/.env)" = 600
 sudo test "$(sudo stat -c '%a' /var/lib/abr-ci/credentials/fixture-php.env)" = 600
@@ -160,10 +189,11 @@ sudo cp -R "$fixture_source/laravel" /srv/apps/fixture-octane
 sudo cp /srv/apps/fixture-php/routes/web.php /srv/apps/fixture-octane/routes/web.php
 printf '\n.rr.yaml\n' | sudo tee -a /srv/apps/fixture-octane/.gitignore >/dev/null
 fixture_git /srv/apps/fixture-octane
-abr_ci register --name fixture-octane --dir /srv/apps/fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost
+abr_ci register --name fixture-octane --dir /srv/apps/fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost --canonical-host www
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-octane/.env.example > /srv/apps/fixture-octane/.env; cat /var/lib/abr-ci/credentials/fixture-octane.env >> /srv/apps/fixture-octane/.env; chmod 600 /srv/apps/fixture-octane/.env'
 abr_ci deploy fixture-octane --no-pull
-fixture_https fixture-octane.localhost | grep -F 'Laravel fixture database=1'
+fixture_https www.fixture-octane.localhost | grep -F 'Laravel fixture database=1'
+fixture_redirect fixture-octane.localhost www.fixture-octane.localhost
 sudo test ! -f /srv/apps/fixture-octane/rr
 sudo test -x /usr/local/bin/rr
 abr_ci restart fixture-octane web
@@ -175,6 +205,12 @@ sudo test "$(sudo find /var/lib/abr-ci/all-backups -name '*.sql' | wc -l)" = 2
 for rendering in true false; do
   if [[ $rendering == true ]]; then app=fixture-ssr; else app=fixture-spa; fi
   dir=/srv/apps/$app
+  # These apps are subdomains of the canonical-host fixtures, with no www policy.
+  if [[ $rendering == true ]]; then
+    app_domain=api.fixture-octane.localhost
+  else
+    app_domain=portal.fixture-php.localhost
+  fi
   sudo mkdir -p "$dir/app"
   sudo tee "$dir/package.json" >/dev/null <<'JSON'
 {"name":"abr-nuxt-fixture","private":true,"type":"module","scripts":{"build":"nuxt build","postinstall":"nuxt prepare"},"dependencies":{"nuxt":"4.5.2","vue":"3.5.43","vue-router":"5.3.1"}}
@@ -184,16 +220,16 @@ JSON
   printf 'node_modules\n.output\n.nuxt\n.env\n' | sudo tee "$dir/.gitignore" >/dev/null
   sudo npm --prefix "$dir" install --package-lock-only --ignore-scripts --allow-remote=all
   fixture_git "$dir"
-  abr_ci register --name "$app" --dir "$dir" --type nuxt --domain "$app.localhost"
+  abr_ci register --name "$app" --dir "$dir" --type nuxt --domain "$app_domain"
   abr_ci deploy "$app" --no-pull
-  fixture_https "$app.localhost" -o "$fixture_source/$app.html"
+  fixture_https "$app_domain" -o "$fixture_source/$app.html"
   if [[ $rendering == true ]]; then grep -F 'Abr Nuxt fixture' "$fixture_source/$app.html"; else grep -F '__nuxt' "$fixture_source/$app.html"; fi
   nuxt_asset=$(sudo find "$dir/.output/public/_nuxt" -type f -name '*.js' -size +511c -print -quit)
   sudo test -f "$nuxt_asset.br"
   nuxt_uri=${nuxt_asset#"$dir/.output/public"}
-  curl --fail --silent --insecure --resolve "$app.localhost:443:127.0.0.1" \
+  curl --fail --silent --insecure --resolve "$app_domain:443:127.0.0.1" \
     -H 'Accept-Encoding: br' -D "$fixture_source/nuxt-headers" \
-    "https://$app.localhost$nuxt_uri" -o "$fixture_source/nuxt.br"
+    "https://$app_domain$nuxt_uri" -o "$fixture_source/nuxt.br"
   grep -Ei '^content-encoding: br' "$fixture_source/nuxt-headers"
   grep -Fi 'Cache-Control: public, max-age=31536000, immutable' "$fixture_source/nuxt-headers"
   if grep -Ei '^(server|x-powered-by):' "$fixture_source/nuxt-headers"; then echo 'Nuxt identifying header leaked' >&2; exit 1; fi

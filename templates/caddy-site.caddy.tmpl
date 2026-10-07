@@ -43,7 +43,7 @@
 # Explicit HTTP routes also remove identifying headers from HTTPS redirects.
 {{.HTTPDomains}} {
     header -Server
-    redir https://{host}{uri} permanent
+    redir https://{host}{uri} 308
 }
 {{range .Aliases}}
 {{.}}, http://{{.}} {
@@ -51,6 +51,6 @@
         -Server
         -X-Powered-By
     }
-    redir https://{{$.Domain}}{uri} permanent
+    redir https://{{$.Domain}}{uri} 308
 }
 {{end}}

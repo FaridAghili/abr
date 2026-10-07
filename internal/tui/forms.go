@@ -55,11 +55,13 @@ func (m *model) registerForm() tea.Cmd {
 	m.context, m.notice = "", ""
 	var name, dir, domain, kind, driver, aliases, domains, health string
 	var configOnly bool
+	canonicalHost := config.CanonicalAsEntered
 	workers, queue := "2", "0"
 	kind, driver = "laravel", "fpm"
 	components := []string{"database"}
 	return m.setForm("form", "Register application", func() tea.Cmd {
 		args := []string{"register", "--name", name, "--dir", dir, "--type", kind, "--domain", domain}
+		args = append(args, "--canonical-host", canonicalHost)
 		if configOnly {
 			args = append(args, "--config-only")
 		}
@@ -113,6 +115,11 @@ func (m *model) registerForm() tea.Cmd {
 				a := config.App{Name: "test", Directory: "/srv/test", User: "abr-test", Type: "nuxt", Domain: s}
 				return a.Validate()
 			})),
+		huh.NewGroup(huh.NewSelect[string]().Title("Canonical host").Description("Only this domain and its www counterpart; separate subdomain apps stay independent.").Options(
+			huh.NewOption("As entered · no automatic www alias", config.CanonicalAsEntered),
+			huh.NewOption("Prefer www · redirect non-www", config.CanonicalWWW),
+			huh.NewOption("Prefer non-www · redirect www", config.CanonicalNonWWW),
+		).Value(&canonicalHost)),
 		huh.NewGroup(huh.NewSelect[string]().Title("Laravel web driver").Options(huh.NewOption("PHP-FPM · Unix socket", "fpm"), huh.NewOption("Octane · shared RoadRunner", "octane")).Value(&driver)).WithHideFunc(func() bool { return kind != "laravel" }),
 		huh.NewGroup(huh.NewInput().Title("Octane workers").Value(&workers).Validate(workerCount)).WithHideFunc(func() bool { return kind != "laravel" || driver != "octane" }),
 		huh.NewGroup(huh.NewInput().Title("Queue workers · 0 to disable").Value(&queue).Validate(workerCount)).WithHideFunc(func() bool { return kind != "laravel" }),

@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"abr"
+	"abr/internal/config"
 )
 
 func invoke(t *testing.T, args ...string) (string, error) {
@@ -15,6 +18,32 @@ func invoke(t *testing.T, args ...string) (string, error) {
 	var out, stderr bytes.Buffer
 	err := run(args, &out, &stderr)
 	return out.String(), err
+}
+
+func TestBundledExampleDoesNotReadOrWriteHostConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	path := filepath.Join(dir, "missing", "config.toml")
+	state := filepath.Join(dir, "state")
+	out, err := invoke(t, "config", "example", "--config", path, "--state-dir", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := abr.ExampleConfig()
+	if err != nil || out != string(want) {
+		t.Fatalf("example output: %v", err)
+	}
+	if _, err := config.Parse([]byte(out)); err != nil {
+		t.Fatalf("invalid example: %v", err)
+	}
+	for _, target := range []string{filepath.Dir(path), state} {
+		if _, err := os.Stat(target); !os.IsNotExist(err) {
+			t.Fatalf("example touched %s", target)
+		}
+	}
+	if _, err := invoke(t, "config", "example", "extra"); err == nil {
+		t.Fatal("example accepted unexpected arguments")
+	}
 }
 
 func TestCommands(t *testing.T) {
@@ -61,6 +90,55 @@ func TestCommands(t *testing.T) {
 	}
 	if _, err := invoke(t, "list", "extra"); err == nil {
 		t.Fatal("ignored extra argument")
+	}
+}
+
+func TestCanonicalHostRegistrationAndSubdomainIsolation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	state := filepath.Join(dir, "state")
+	paths := []string{"--config", path, "--state-dir", state}
+	register := func(name, domain string, flags ...string) (string, error) {
+		args := append(append([]string{}, paths...), "register", "--config-only", "--name", name, "--dir", filepath.Join(dir, name), "--type", "laravel", "--domain", domain)
+		return invoke(t, append(args, flags...)...)
+	}
+	if _, err := register("site", "example.com", "--canonical-host", "www", "--alias", "example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := register("api", "api.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Apps[0].Domain != "www.example.com" || len(c.Apps[0].Aliases) != 1 || c.Apps[0].Aliases[0] != "example.com" || c.Apps[1].Domain != "api.example.com" || len(c.Apps[1].Aliases) != 0 {
+		t.Fatalf("unexpected app domains: %+v", c.Apps)
+	}
+	beforeConfig, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforePorts, err := os.ReadFile(filepath.Join(state, "ports.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		domain string
+		flags  []string
+	}{
+		{"example.com", []string{"--canonical-host", "non-www"}},
+		{"other.example.com", []string{"--canonical-host", "invalid"}},
+		{"other.example.com", []string{"--canonical-host", "www", "--serving-domain", "other.example.com"}},
+	} {
+		if out, err := register("other", tt.domain, tt.flags...); err == nil || out != "" {
+			t.Fatalf("conflicting registration succeeded: %s, %v", out, err)
+		}
+		afterConfig, _ := os.ReadFile(path)
+		afterPorts, _ := os.ReadFile(filepath.Join(state, "ports.json"))
+		if !bytes.Equal(beforeConfig, afterConfig) || !bytes.Equal(beforePorts, afterPorts) {
+			t.Fatal("failed domain registration changed saved config or reservations")
+		}
 	}
 }
 

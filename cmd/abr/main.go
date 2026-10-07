@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/term"
 
+	"abr"
 	"abr/internal/config"
 	"abr/internal/host"
 	"abr/internal/manager"
@@ -36,8 +37,10 @@ Commands:
   tui              Interactive application and server menu (default in a terminal)
   version          Print version and platform
   config validate  Validate TOML configuration
+  config example   Print the bundled example configuration
   list             List applications
   register         Register a clone, create its Ubuntu user and Laravel database
+                   --canonical-host as-entered|www|non-www selects this app's host pair
   ports            Show reservations (--allocate reconciles config edits)
   doctor           Portable config/registry/port checks
   setup            Install shared VPS packages, Caddy, Node 24 and RoadRunner
@@ -84,10 +87,10 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	command, args := args[0], args[1:]
 	if command == "config" {
-		if len(args) == 0 || args[0] != "validate" {
-			return fmt.Errorf("use abr config validate")
+		if len(args) == 0 || (args[0] != "validate" && args[0] != "example") {
+			return fmt.Errorf("use abr config validate or abr config example")
 		}
-		command, args = "config validate", args[1:]
+		command, args = "config "+args[0], args[1:]
 	}
 	if command == "git" {
 		if len(args) == 0 || args[0] != "setup" {
@@ -99,7 +102,7 @@ func run(args []string, out, stderr io.Writer) error {
 		command, args = "database "+args[0], args[1:]
 	}
 	switch command {
-	case "tui", "version", "config validate", "list", "register", "ports", "doctor", "setup", "git setup", "clone", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
+	case "tui", "version", "config validate", "config example", "list", "register", "ports", "doctor", "setup", "git setup", "clone", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -113,6 +116,7 @@ func run(args []string, out, stderr io.Writer) error {
 	var setup host.SetupOptions
 	var deploy host.DeployOptions
 	var gitKey, backupDirectory string
+	var canonicalHost string
 	var backupAll, importYes bool
 	switch command {
 	case "git setup":
@@ -125,6 +129,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.StringVar(&app.User, "user", "", "dedicated runtime user (default: abr-NAME)")
 		fs.StringVar(&app.Type, "type", "", "laravel or nuxt (required)")
 		fs.StringVar(&app.Domain, "domain", "", "main domain (required)")
+		fs.StringVar(&canonicalHost, "canonical-host", config.CanonicalAsEntered, "canonical host: as-entered, www or non-www (only this app's www pair)")
 		fs.Var((*stringsFlag)(&app.Aliases), "alias", "redirect domain (repeatable)")
 		fs.Var((*stringsFlag)(&app.Domains), "serving-domain", "additional serving domain (repeatable)")
 		fs.StringVar(&app.HealthCheck, "health-check", "", "optional deployment health-check URL")
@@ -225,6 +230,13 @@ func run(args []string, out, stderr io.Writer) error {
 		})
 	case "version":
 		fmt.Fprintf(out, "abr %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+	case "config example":
+		data, err := abr.ExampleConfig()
+		if err != nil {
+			return err
+		}
+		_, err = out.Write(data)
+		return err
 	case "config validate":
 		c, err := config.Load(m.ConfigPath)
 		if err != nil {
@@ -247,6 +259,10 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		return w.Flush()
 	case "register":
+		app, err = app.WithCanonicalHost(canonicalHost)
+		if err != nil {
+			return err
+		}
 		if app.User == "" && config.ValidName(app.Name) {
 			app.User = host.RuntimeUser(app.Name)
 		}
@@ -306,14 +322,6 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		fmt.Fprintln(out, "Portable checks passed: config, registry, required reservations, and TCP availability")
 	case "setup":
-		executable, err := os.Executable()
-		if err != nil {
-			return err
-		}
-		setup.DistributionTemplates = filepath.Join(filepath.Dir(executable), "templates")
-		if _, err := os.Stat(setup.DistributionTemplates); os.IsNotExist(err) {
-			setup.DistributionTemplates = "templates"
-		}
 		return h.Setup(setup)
 	case "database backup":
 		return h.BackupDatabases(positional, backupAll, backupDirectory)
