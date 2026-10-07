@@ -5,14 +5,16 @@ first = 10000
 last = 19999
 
 [[apps]]
-name = "mango"
-directory = "/srv/apps/mango"
-user = "sites-mango"
+name = "api"
+directory = "/srv/apps/api"
+user = "sites-api"
 type = "laravel"
-domain = "mango.example.com"
-aliases = ["www.mango.example.com"]
-domains = ["api.mango.example.com"]
-health_check = "https://mango.example.com/up"
+domain = "api.example.com"
+aliases = ["www.api.example.com"]
+domains = ["api.api.example.com"]
+health_check = "https://api.example.com/up"
+[apps.database]
+enabled = true
 [apps.web]
 driver = "octane"
 workers = 2
@@ -26,11 +28,13 @@ enabled = true
 enabled = false
 
 [[apps]]
-name = "quiet"
-directory = "/srv/apps/quiet"
-user = "sites-quiet"
+name = "portal"
+directory = "/srv/apps/portal"
+user = "sites-portal"
 type = "laravel"
-domain = "quiet.example.com"
+domain = "portal.example.com"
+[apps.database]
+enabled = true
 [apps.web]
 driver = "fpm"
 [apps.queue]

@@ -158,6 +158,7 @@ func (m *model) home() tea.Cmd {
 		huh.NewOption("Validate configuration", "validate"),
 		huh.NewOption("Doctor / port checks", "doctor"),
 		huh.NewOption("Deploy all applications", "deploy-all"),
+		huh.NewOption("Back up databases", "database-backup"),
 		huh.NewOption("Reconcile port reservations", "allocate"),
 		huh.NewOption("Quit", "quit"))
 	var selected string
@@ -186,6 +187,8 @@ func (m *model) home() tea.Cmd {
 			return m.start(action{title: "Validate configuration", args: []string{"config", "validate"}})
 		case "doctor":
 			return m.start(action{title: "Doctor", args: []string{"doctor"}, note: "Occupied ports can belong to running managed services."})
+		case "database-backup":
+			return m.databaseBackupForm("")
 		case "deploy-all":
 			return m.deployForm("")
 		case "allocate":
@@ -208,7 +211,7 @@ func (m *model) appMenu(app config.App) tea.Cmd {
 		huh.NewOption("View recent logs", "logs"), huh.NewOption("Disable services", "disable"),
 	}
 	if app.Database.Enabled {
-		choices = append(choices, huh.NewOption("Create / verify database", "database"), huh.NewOption("Reveal database credentials", "credentials"))
+		choices = append(choices, huh.NewOption("Create / verify database", "database"), huh.NewOption("Reveal database credentials", "credentials"), huh.NewOption("Back up database", "database-backup"), huh.NewOption("Import SQL into database", "database-import"))
 	}
 	choices = append(choices, huh.NewOption("Remove application", "remove"), huh.NewOption("Back", "back"))
 	var selected string
@@ -223,6 +226,10 @@ func (m *model) appMenu(app config.App) tea.Cmd {
 			return m.serviceForm(app, selected)
 		case "status":
 			return m.start(action{title: app.Name + " / status", args: args})
+		case "database-backup":
+			return m.databaseBackupForm(app.Name)
+		case "database-import":
+			return m.databaseImportForm(app.Name)
 		case "credentials":
 			return m.review(action{title: "Reveal credentials: " + app.Name, args: []string{"database", app.Name, "--show"}, note: "Shows private database credentials on this terminal. The database is created or verified first. Output is discarded when you leave this screen."})
 		case "remove":

@@ -22,7 +22,9 @@ type Command struct {
 	Dir     string
 	Env     []string
 	Input   []byte
-	Private bool // Never display SQL or its error output, which can contain credentials.
+	Stdin   io.Reader // Stream SQL imports without retaining them in memory.
+	Stdout  io.Writer // Stream dumps directly to a private file, never logs.
+	Private bool      // Never display SQL or its error output, which can contain credentials.
 }
 
 type Runner interface{ Run(Command) ([]byte, error) }
@@ -34,12 +36,18 @@ func (r ExecRunner) Run(c Command) ([]byte, error) {
 	cmd.Dir = c.Dir
 	cmd.Env = append(os.Environ(), c.Env...)
 	cmd.Stdin = bytes.NewReader(c.Input)
+	if c.Stdin != nil {
+		cmd.Stdin = c.Stdin
+	}
 	var output bytes.Buffer
 	var w io.Writer = &output
 	if !c.Private && r.Output != nil {
 		w = io.MultiWriter(w, r.Output)
 	}
 	cmd.Stdout = w
+	if c.Stdout != nil {
+		cmd.Stdout = c.Stdout
+	}
 	cmd.Stderr = io.Discard
 	if !c.Private && r.Output != nil {
 		cmd.Stderr = r.Output

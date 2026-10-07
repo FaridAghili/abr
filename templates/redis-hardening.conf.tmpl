@@ -1,3 +1,9 @@
 # Managed by sites; edit the source template instead.
 bind 127.0.0.1 -::1
 protected-mode yes
+# Redis also holds queues/sessions: never evict jobs to make room for cache keys.
+maxmemory 256mb
+maxmemory-policy noeviction
+# Keep queued work across restarts; a crash can lose about one second of writes.
+appendonly yes
+appendfsync everysec

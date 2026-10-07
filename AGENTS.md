@@ -1,13 +1,9 @@
 # Development rules
 
-- Keep implementation small: native packages, Caddy with direct HTTPS, shared runtimes/RoadRunner, managed per-app users, and standard deployment commands.
-- Do not use Nginx, Cloudflare, or project deployment scripts.
-- Preserve projects, secrets, uploads, and databases on removal. Delete only accounts and generated files whose ownership this tool recorded.
-- Keep the CLI version at 0.1.0 during stabilization; bump it only when requested.
-- Use the Go version in go.mod. Develop on macOS ARM64; ship a CGO-free Linux AMD64 binary.
-- Keep the TUI as a thin layer over existing commands. Preserve scriptable CLI behavior, show path/dry-run context, confirm changes, and report actual command errors.
-- Keep portable configuration and registry logic independent of Linux service/package operations.
-- Use temporary config/state paths for development and tests. Never contact production from tests or CI.
-- Keep templates as editable files under templates/ and include them in distributions.
-- Reject unknown configuration, corrupt state, and unsupported commands; never claim an operation succeeded unless it ran.
-- Before finishing, run gofmt, go vet ./..., go test ./..., and the Linux AMD64 cross-build. Test locking, stable allocations, corruption, and listener conflicts when changing registry behavior.
+- Keep version 0.1.0 until asked to bump it. Use Go from go.mod; develop on macOS ARM64 and ship CGO-free Linux AMD64.
+- Keep portable logic separate from Ubuntu host operations. Keep the TUI thin and CLI scriptable; never report unexecuted work as success.
+- Use native packages, direct Caddy HTTPS, shared runtimes, dedicated app users and standard deploy commands. No Nginx, CDN integration or custom deploy scripts.
+- Keep editable templates standalone and package them with the executable and generic example config. Do not include personal data or credentials.
+- Preserve projects, secrets, uploads and databases on removal. Delete only recorded managed resources. Keep SQL/passwords out of logs and process arguments.
+- Tests use temporary paths or disposable hosts; never contact production. Confirm destructive imports in the TUI and require --yes in the CLI.
+- Before finishing: gofmt, go vet ./..., go test ./..., and CGO-free Linux AMD64 build. Test locking/port conflicts when touching the registry and real host behavior in CI when touching provisioning.

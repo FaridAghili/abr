@@ -44,6 +44,10 @@ Commands:
   git setup        Create/reuse one VPS GitHub SSH key (--key imports an existing key)
   clone URL DIR    Clone a GitHub SSH repository into a new directory under apps-dir
   database APP     Create/verify MySQL database (--show prints credentials)
+  database backup APP... | --all --output-dir DIR
+                   Export selected/all managed databases as private SQL files
+  database import APP FILE.sql --yes
+                   Import SQL using the selected database’s scoped account
   enable APP       Render, validate and start services
   disable APP      Stop services; retain users, databases and ports
   remove APP       Remove managed services/user; retain projects and databases
@@ -91,8 +95,11 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		command, args = "git setup", args[1:]
 	}
+	if command == "database" && len(args) > 0 && (args[0] == "backup" || args[0] == "import") {
+		command, args = "database "+args[0], args[1:]
+	}
 	switch command {
-	case "tui", "version", "config validate", "list", "register", "ports", "doctor", "setup", "git setup", "clone", "database", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
+	case "tui", "version", "config validate", "list", "register", "ports", "doctor", "setup", "git setup", "clone", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
 	default:
 		return fmt.Errorf("unknown command %q; use sites help", command)
 	}
@@ -105,7 +112,8 @@ func run(args []string, out, stderr io.Writer) error {
 	var imports portFlags
 	var setup host.SetupOptions
 	var deploy host.DeployOptions
-	var gitKey string
+	var gitKey, backupDirectory string
+	var backupAll, importYes bool
 	switch command {
 	case "git setup":
 		fs.StringVar(&gitKey, "key", "", "import an existing unencrypted SSH private key (default: generate/reuse VPS key)")
@@ -136,6 +144,11 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&setup.NoFirewall, "no-firewall", false, "leave firewall unchanged")
 		fs.BoolVar(&setup.NoRedis, "no-redis", false, "skip Redis server")
 		fs.BoolVar(&setup.NoImages, "no-images", false, "skip image-processing utilities")
+	case "database backup":
+		fs.BoolVar(&backupAll, "all", false, "export all registered managed databases")
+		fs.StringVar(&backupDirectory, "output-dir", "", "private backup directory (required)")
+	case "database import":
+		fs.BoolVar(&importYes, "yes", false, "confirm SQL import may overwrite data")
 	case "database":
 		fs.BoolVar(&show, "show", false, "print existing/generated credentials explicitly")
 	case "logs":
@@ -149,6 +162,14 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	positional := fs.Args()
 	switch command {
+	case "database backup":
+		if backupAll == (len(positional) > 0) || backupDirectory == "" {
+			return fmt.Errorf("use sites database backup APP... --output-dir DIR, or --all --output-dir DIR")
+		}
+	case "database import":
+		if len(positional) != 2 {
+			return fmt.Errorf("use sites database import APP FILE.sql --yes")
+		}
 	case "clone":
 		if len(positional) != 2 {
 			return fmt.Errorf("use sites clone git@github.com:OWNER/REPO.git /srv/apps/APP")
@@ -294,6 +315,10 @@ func run(args []string, out, stderr io.Writer) error {
 			setup.DistributionTemplates = "templates"
 		}
 		return h.Setup(setup)
+	case "database backup":
+		return h.BackupDatabases(positional, backupAll, backupDirectory)
+	case "database import":
+		return h.ImportDatabase(positional[0], positional[1], importYes)
 	case "database":
 		return h.Database(positional[0], show)
 	case "enable":

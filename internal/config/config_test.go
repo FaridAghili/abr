@@ -36,7 +36,7 @@ func TestEndpointSelection(t *testing.T) {
 }
 
 func TestConfigStrictAndRoundTrip(t *testing.T) {
-	data, err := os.ReadFile("../../examples/config.toml")
+	data, err := os.ReadFile("../../config.example.toml")
 	if err != nil {
 		t.Fatal(err)
 	}

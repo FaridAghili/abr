@@ -3,3 +3,10 @@
 bind-address = 127.0.0.1
 mysqlx-bind-address = 127.0.0.1
 local-infile = 0
+# Modest shared-host defaults; size for measured workload and available RAM.
+innodb_buffer_pool_size = 256M
+max_connections = 100
+thread_cache_size = 16
+# Preserve transaction durability.
+innodb_flush_log_at_trx_commit = 1
+sync_binlog = 1

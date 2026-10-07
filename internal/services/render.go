@@ -35,6 +35,7 @@ type data struct {
 	Name, User, Directory, Type, WebDriver                                string
 	SiteDomains, Domain                                                   string
 	Aliases                                                               []string
+	AssetRoot, AssetPath, HTTPDomains                                     string
 	PHPBinary, NodeBinary, ManagedEnvironmentFile, FPMSocket              string
 	OctaneHTTPPort, RoadRunnerRPCPort, NuxtHTTPPort, NightwatchIngestPort int
 	OctaneWorkers, QueueWorkers                                           int
@@ -59,6 +60,15 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 		PHPBinary: "/usr/bin/php" + PHPVersion, NodeBinary: "/usr/bin/node", OctaneWorkers: a.Web.Workers, QueueWorkers: a.Queue.Workers,
 		ManagedEnvironmentFile: filepath.Join(state, "env", a.Name+".env"), FPMSocket: "/run/php/sites-" + a.Name + ".sock",
 	}
+	d.AssetRoot, d.AssetPath = filepath.Join(a.Directory, "public"), "/build/assets"
+	if a.Type == "nuxt" {
+		d.AssetRoot, d.AssetPath = filepath.Join(a.Directory, ".output/public"), "/_nuxt"
+	}
+	httpDomains := []string{}
+	for _, domain := range append([]string{a.Domain}, a.Domains...) {
+		httpDomains = append(httpDomains, "http://"+domain)
+	}
+	d.HTTPDomains = strings.Join(httpDomains, ", ")
 	if d.OctaneWorkers == 0 {
 		d.OctaneWorkers = 2
 	}

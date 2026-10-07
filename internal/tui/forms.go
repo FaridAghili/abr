@@ -48,7 +48,7 @@ func (m *model) cloneForm() tea.Cmd {
 		return m.review(action{title: "Clone application", args: []string{"clone", repository, directory}, note: "Clone with the shared VPS SSH key. Add its public key to GitHub first. The destination must be new and directly under the apps directory. Register the clone afterward to create its managed user and selected database."})
 	}, huh.NewGroup(
 		huh.NewInput().Title("GitHub SSH repository URL").Placeholder("git@github.com:OWNER/PROJECT.git").Value(&repository).Validate(required),
-		huh.NewInput().Title("New application directory").Placeholder(filepath.Join(m.options.AppsDir, "mango")).Value(&directory).Validate(required)))
+		huh.NewInput().Title("New application directory").Placeholder(filepath.Join(m.options.AppsDir, "app")).Value(&directory).Validate(required)))
 }
 
 func (m *model) registerForm() tea.Cmd {
@@ -97,13 +97,13 @@ func (m *model) registerForm() tea.Cmd {
 		return m.review(action{title: "Register " + name, args: args, note: note})
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Application type").Options(huh.NewOption("Laravel", "laravel"), huh.NewOption("Nuxt · SSR or SPA, managed Node service", "nuxt")).Value(&kind)),
 		huh.NewGroup(
-			huh.NewInput().Title("Application name").Placeholder("mango").Value(&name).Validate(func(s string) error {
+			huh.NewInput().Title("Application name").Placeholder("app").Value(&name).Validate(func(s string) error {
 				if !config.ValidName(s) {
 					return errors.New("Use lowercase letters, digits and hyphens; start with a letter (max 63)")
 				}
 				return nil
 			}),
-			huh.NewInput().Title("Existing clone · absolute directory").Placeholder(filepath.Join(m.options.AppsDir, "mango")).Value(&dir).Validate(func(s string) error {
+			huh.NewInput().Title("Existing clone · absolute directory").Placeholder(filepath.Join(m.options.AppsDir, "app")).Value(&dir).Validate(func(s string) error {
 				if !filepath.IsAbs(s) || strings.ContainsAny(s, "\x00\r\n") {
 					return errors.New("Use an absolute directory path")
 				}
@@ -149,4 +149,48 @@ func (m *model) setupForm() tea.Cmd {
 		return nil
 	}), huh.NewInput().Title("Shared RoadRunner version").Value(&rr).Validate(required)),
 		huh.NewGroup(huh.NewMultiSelect[string]().Height(8).Title("Install / configure").Description("Included by default. Space toggles; enter continues.").Options(huh.NewOption("Redis", "redis"), huh.NewOption("Image-processing tools", "images"), huh.NewOption("UFW firewall · preserve SSH, allow HTTP/HTTPS", "firewall")).Value(&features)))
+}
+
+func (m *model) databaseBackupForm(name string) tea.Cmd {
+	c, err := config.Load(m.options.ConfigPath)
+	if err != nil {
+		m.notice = err.Error()
+		return m.home()
+	}
+	choices := []huh.Option[string]{}
+	selected := []string{}
+	for _, app := range c.Apps {
+		if app.Database.Enabled {
+			choices = append(choices, huh.NewOption(clean(app.Name), app.Name))
+			if name == "" || name == app.Name {
+				selected = append(selected, app.Name)
+			}
+		}
+	}
+	if len(choices) == 0 {
+		m.notice = "No managed databases configured"
+		return m.home()
+	}
+	directory := filepath.Join(m.options.StateDir, "backups")
+	return m.setForm("form", "Back up databases", func() tea.Cmd {
+		args := append([]string{"database", "backup", "--output-dir", directory}, selected...)
+		return m.review(action{title: "Back up databases", args: args, note: "Export each selected managed database into a separate private SQL file. No application downtime. Avoid schema changes during export; consistent snapshots require InnoDB tables. Copy backups off the VPS."})
+	}, huh.NewGroup(huh.NewMultiSelect[string]().Title("Databases · space toggles").Options(choices...).Value(&selected).Validate(func(v []string) error {
+		if len(v) == 0 {
+			return errors.New("Select at least one database")
+		}
+		return nil
+	}), huh.NewInput().Title("Private output directory").Value(&directory).Validate(required)))
+}
+
+func (m *model) databaseImportForm(name string) tea.Cmd {
+	var path string
+	return m.setForm("form", "Import database: "+name, func() tea.Cmd {
+		return m.review(action{title: "Import SQL into " + name, args: []string{"database", "import", name, path, "--yes"}, note: "This can overwrite database data and is not transactional. Back up first and disable the app and writers before importing. Uses only this database's scoped account. A failed import can leave partial changes; services are not restarted automatically."})
+	}, huh.NewGroup(huh.NewInput().Title("SQL file · absolute path").Value(&path).Validate(func(s string) error {
+		if !filepath.IsAbs(s) || strings.ToLower(filepath.Ext(s)) != ".sql" || strings.ContainsAny(s, "\x00\r\n") {
+			return errors.New("Use an absolute .sql file path")
+		}
+		return nil
+	})))
 }

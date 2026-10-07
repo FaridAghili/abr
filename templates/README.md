@@ -19,3 +19,9 @@ Laravel reads `.env`; Nuxt reads it using Node's `--env-file-if-exists`.
 Inertia's built bundle must honor `SSR_PORT`; Laravel receives `INERTIA_SSR_URL`.
 Nightwatch receives its ingest endpoint. Octane finds shared RoadRunner through
 PATH; remove app-local RoadRunner binaries to use the shared version.
+
+Shared memory defaults assume a modest VPS; tune MySQL/Redis limits and FPM
+children for measured RAM and workload. Redis uses AOF every second and no eviction
+so queues are not discarded. FPM has OPcache and worker recycling. Caddy strips
+identifying response headers, uses dynamic zstd/gzip and built Brotli sidecars,
+and gives versioned build assets immutable caching without caching app pages.

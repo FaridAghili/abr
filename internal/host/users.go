@@ -226,6 +226,31 @@ func (h Host) permissions(a config.App) error {
 			}
 		}
 	}
+	if a.Type == "nuxt" {
+		for _, suffix := range []string{".output", ".output/public"} {
+			dir := filepath.Join(a.Directory, suffix)
+			if !h.DryRun {
+				resolved, err := filepath.EvalSymlinks(h.path(dir))
+				if os.IsNotExist(err) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				if resolved != filepath.Clean(h.path(dir)) {
+					return fmt.Errorf("Nuxt output directory must not be a symlink: %s", dir)
+				}
+			}
+			acl := "u:caddy:--x"
+			flags := []string{"-m", acl, "--", dir}
+			if suffix == ".output/public" {
+				flags = []string{"-R", "-P", "-m", "u:caddy:rX", "--", dir}
+			}
+			if err := h.command("setfacl", flags...); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

@@ -205,6 +205,9 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		if err := run("npm", "run", "build"); err != nil {
 			return err
 		}
+		if err := h.compressAssets(a, plan.Environment); err != nil {
+			return err
+		}
 	} else if !os.IsNotExist(packageErr) {
 		return packageErr
 	}

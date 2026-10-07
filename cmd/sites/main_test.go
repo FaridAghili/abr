@@ -20,9 +20,9 @@ func invoke(t *testing.T, args ...string) (string, error) {
 func TestCommands(t *testing.T) {
 	dir := t.TempDir()
 	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state")}
-	register := append(append([]string{}, paths...), "register", "--config-only", "--name", "quiet", "--dir", "/srv/quiet", "--user", "quiet", "--type", "laravel", "--domain", "quiet.test", "--queue-workers", "2", "--scheduler")
+	register := append(append([]string{}, paths...), "register", "--config-only", "--name", "demo", "--dir", "/srv/demo", "--user", "demo", "--type", "laravel", "--domain", "demo.test", "--queue-workers", "2", "--scheduler")
 	out, err := invoke(t, register...)
-	if err != nil || !strings.Contains(out, "Registered quiet") {
+	if err != nil || !strings.Contains(out, "Registered demo") {
 		t.Fatalf("%s %v", out, err)
 	}
 	for _, cmd := range [][]string{{"config", "validate"}, {"list"}, {"ports"}, {"doctor"}} {
@@ -43,7 +43,7 @@ func TestCommands(t *testing.T) {
 	}
 	// Path flags may also follow the command.
 	args := append([]string{"list"}, paths...)
-	if out, err := invoke(t, args...); err != nil || !strings.Contains(out, "quiet") {
+	if out, err := invoke(t, args...); err != nil || !strings.Contains(out, "demo") {
 		t.Fatalf("%s %v", out, err)
 	}
 	for _, cmd := range []string{"deploy", "enable", "remove", "unknown"} {
@@ -114,5 +114,36 @@ func TestSharedGitCommandsAndPortablePreviews(t *testing.T) {
 		if _, err := invoke(t, command...); err == nil {
 			t.Fatalf("invalid command succeeded: %v", command)
 		}
+	}
+}
+
+func TestDatabaseTransferCommandValidationAndPreview(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state")}
+	args := append(append([]string{}, paths...), "register", "--config-only", "--name", "demo", "--dir", "/srv/apps/demo", "--type", "laravel", "--domain", "demo.test")
+	if _, err := invoke(t, args...); err != nil {
+		t.Fatal(err)
+	}
+	for _, command := range [][]string{
+		{"database", "backup", "demo", "--output-dir", filepath.Join(dir, "backups"), "--dry-run"},
+		{"database", "backup", "--all", "--output-dir", filepath.Join(dir, "backups"), "--dry-run"},
+		{"database", "import", "demo", "/tmp/backup.sql", "--dry-run"},
+	} {
+		out, err := invoke(t, append(append([]string{}, paths...), command...)...)
+		if err != nil || !strings.Contains(out, "Would") {
+			t.Fatal(out, err)
+		}
+	}
+	for _, command := range [][]string{
+		{"database", "backup"}, {"database", "backup", "demo"},
+		{"database", "backup", "demo", "--all", "--output-dir", "/tmp/backups"},
+		{"database", "import"}, {"database", "import", "demo", "/tmp/backup.sql"},
+	} {
+		if out, err := invoke(t, append(append([]string{}, paths...), command...)...); err == nil || out != "" {
+			t.Fatal("invalid transfer reported success", out, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "backups")); !os.IsNotExist(err) {
+		t.Fatal("preview wrote backup files")
 	}
 }

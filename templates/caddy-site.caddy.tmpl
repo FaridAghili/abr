@@ -1,21 +1,56 @@
 {{.SiteDomains}} {
+    header {
+        -Server
+        -X-Powered-By
+    }
     encode zstd gzip
+    root * {{quote .AssetRoot}}
+    @assets {
+        method GET HEAD
+        path {{.AssetPath}}/*
+        file {path}
+    }
+    handle @assets {
+        # Only content-hashed build assets get immutable caching.
+        @versioned path_regexp versioned ^/(build/assets/.*[-.][A-Za-z0-9_-]{8,}|_nuxt/[A-Za-z0-9_-]{8,})\.(js|css|woff2?|ttf|otf|svg|png|webp|avif|jpe?g|gif|wasm)$
+        header @versioned Cache-Control "public, max-age=31536000, immutable"
+        file_server {
+            precompressed br zstd gzip
+        }
+    }
+    handle {
 {{if eq .Type "laravel"}}
 {{if eq .WebDriver "fpm"}}
-    root * {{quote (printf "%s/public" .Directory)}}
-    php_fastcgi unix/{{.FPMSocket}}
-    file_server {
-        precompressed br gzip
+        php_fastcgi unix/{{.FPMSocket}}
+        file_server {
+            precompressed br zstd gzip
+        }
+{{else}}
+        reverse_proxy 127.0.0.1:{{.OctaneHTTPPort}}
+{{end}}
+{{else}}
+        reverse_proxy 127.0.0.1:{{.NuxtHTTPPort}}
+{{end}}
     }
-{{else}}
-    reverse_proxy 127.0.0.1:{{.OctaneHTTPPort}}
-{{end}}
-{{else}}
-    reverse_proxy 127.0.0.1:{{.NuxtHTTPPort}}
-{{end}}
+    handle_errors {
+        header {
+            -Server
+            -X-Powered-By
+        }
+        respond "{err.status_code}" {err.status_code}
+    }
+}
+# Explicit HTTP routes also remove identifying headers from HTTPS redirects.
+{{.HTTPDomains}} {
+    header -Server
+    redir https://{host}{uri} permanent
 }
 {{range .Aliases}}
-{{.}} {
+{{.}}, http://{{.}} {
+    header {
+        -Server
+        -X-Powered-By
+    }
     redir https://{{$.Domain}}{uri} permanent
 }
 {{end}}

@@ -52,6 +52,10 @@ sudo /usr/sbin/sshd -T | grep -Fx 'authenticationmethods publickey'
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \
   -e 'SELECT @@bind_address, @@local_infile;' | grep -Fx $'127.0.0.1\t0'
 sudo redis-cli CONFIG GET bind | grep -Fx '127.0.0.1 -::1'
+sudo redis-cli CONFIG GET appendonly | grep -Fx yes
+sudo redis-cli CONFIG GET maxmemory-policy | grep -Fx noeviction
+sudo mysql --protocol=socket --user=root --batch --skip-column-names \
+  -e 'SELECT @@innodb_buffer_pool_size, @@max_connections;' | grep -Fx $'268435456\t100'
 # Shared identity tests remain offline: no GitHub account or private repository.
 sites_ci git setup
 sites_ci git setup
@@ -72,7 +76,8 @@ sudo tee /srv/apps/fixture-php/routes/web.php >/dev/null <<'PHP'
 <?php
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
-Route::get('/', fn () => 'Laravel fixture database='.DB::select('SELECT 1 AS ok')[0]->ok);
+Route::get('/', fn () => response('Laravel fixture database='.DB::select('SELECT 1 AS ok')[0]->ok)->header('X-Powered-By', 'fixture-runtime'));
+Route::get('/php-config', fn () => response()->json(['expose_php' => ini_get('expose_php'), 'display_errors' => ini_get('display_errors'), 'opcache' => ini_get('opcache.enable')]));
 PHP
 
 fixture_git() {
@@ -97,6 +102,43 @@ fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 sudo test -S /run/php/sites-fixture-php.sock
 sudo test "$(sudo stat -c '%a' /srv/apps/fixture-php/.env)" = 600
 sudo test "$(sudo stat -c '%a' /var/lib/sites-ci/credentials/fixture-php.env)" = 600
+# Private atomic SQL dump and an actual restore with the scoped database account.
+sudo mysql --protocol=socket --user=root sites_fixture_php -e 'CREATE TABLE sites_backup_check (id INT PRIMARY KEY); INSERT INTO sites_backup_check VALUES (42);'
+sites_ci database backup fixture-php --output-dir /var/lib/sites-ci/backups
+sql_dump=$(sudo find /var/lib/sites-ci/backups -name 'fixture-php-*.sql' -print -quit)
+sudo test "$(sudo stat -c '%a' "$sql_dump")" = 600
+sites_ci disable fixture-php
+sudo mysql --protocol=socket --user=root sites_fixture_php -e 'DROP TABLE sites_backup_check;'
+sites_ci database import fixture-php "$sql_dump" --yes
+sudo mysql --protocol=socket --user=root --batch --skip-column-names sites_fixture_php -e 'SELECT id FROM sites_backup_check;' | grep -Fx 42
+# SQL import cannot escape to another database or execute a root shell command.
+printf 'CREATE DATABASE forbidden_database;\n' | sudo tee /var/lib/sites-ci/forbidden.sql >/dev/null
+if sites_ci database import fixture-php /var/lib/sites-ci/forbidden.sql --yes; then echo 'Unscoped SQL was allowed' >&2; exit 1; fi
+printf '\\! touch /var/lib/sites-ci/import-shell-executed\n' | sudo tee /var/lib/sites-ci/shell.sql >/dev/null
+if sites_ci database import fixture-php /var/lib/sites-ci/shell.sql --yes; then echo 'SQL client shell command was allowed' >&2; exit 1; fi
+sudo test ! -e /var/lib/sites-ci/import-shell-executed
+sites_ci enable fixture-php
+fixture_https fixture-php.localhost --dump-header "$fixture_source/headers" >/dev/null
+if grep -Ei '^(server|x-powered-by):' "$fixture_source/headers"; then echo 'Identifying response header leaked' >&2; exit 1; fi
+curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"opcache":"1"'
+# A generated hashed asset is served with Brotli and immutable caching.
+asset_path=$(sudo find /srv/apps/fixture-php/public/build/assets -name '*.js' -print -quit)
+sudo test -f "$asset_path.br"
+asset_uri=${asset_path#/srv/apps/fixture-php/public}
+curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
+  -H 'Accept-Encoding: br' --dump-header "$fixture_source/asset-headers" \
+  "https://fixture-php.localhost$asset_uri" -o "$fixture_source/asset.br"
+grep -Ei '^content-encoding: br' "$fixture_source/asset-headers"
+grep -Fi 'Cache-Control: public, max-age=31536000, immutable' "$fixture_source/asset-headers"
+brotli --decompress --stdout "$fixture_source/asset.br" | sudo cmp - "$asset_path"
+for encoding in zstd gzip; do
+  curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
+    -H "Accept-Encoding: $encoding" --dump-header "$fixture_source/$encoding-headers" \
+    "https://fixture-php.localhost$asset_uri" -o /dev/null
+  grep -Ei "^content-encoding: $encoding" "$fixture_source/$encoding-headers"
+done
+curl --silent --resolve fixture-php.localhost:80:127.0.0.1 -D "$fixture_source/http-headers" http://fixture-php.localhost/ -o /dev/null
+if grep -Ei '^server:' "$fixture_source/http-headers"; then echo 'HTTP redirect header leaked' >&2; exit 1; fi
 sites_ci restart fixture-php web
 sites_ci disable fixture-php
 sites_ci enable fixture-php
@@ -114,6 +156,10 @@ fixture_https fixture-octane.localhost | grep -F 'Laravel fixture database=1'
 sudo test ! -f /srv/apps/fixture-octane/rr
 sudo test -x /usr/local/bin/rr
 sites_ci restart fixture-octane web
+sites_ci database backup fixture-php fixture-octane --output-dir /var/lib/sites-ci/selected-backups
+sudo test "$(sudo find /var/lib/sites-ci/selected-backups -name '*.sql' | wc -l)" = 2
+sites_ci database backup --all --output-dir /var/lib/sites-ci/all-backups
+sudo test "$(sudo find /var/lib/sites-ci/all-backups -name '*.sql' | wc -l)" = 2
 
 for rendering in true false; do
   if [[ $rendering == true ]]; then app=fixture-ssr; else app=fixture-spa; fi
