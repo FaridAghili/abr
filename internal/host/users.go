@@ -96,6 +96,18 @@ func (h Host) trustedAncestor(path string) error {
 	}
 }
 
+func (h Host) trustedFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !info.Mode().IsRegular() || !ok || int(stat.Uid) != os.Geteuid() || info.Mode().Perm()&0022 != 0 {
+		return fmt.Errorf("managed file must have trusted ownership and permissions, without symlinks: %s", path)
+	}
+	return nil
+}
+
 func (h Host) passwd(user string) (string, bool, error) {
 	output, err := h.run("Check Ubuntu account "+user, Command{Name: "getent", Args: []string{"passwd", user}, Private: true})
 	if err != nil {
@@ -132,7 +144,7 @@ func (h Host) ensureUser(a config.App) error {
 	}
 	if exists {
 		parts := strings.Split(entry, ":")
-		if saved == nil || len(parts) != 7 || parts[4] != "abr-"+a.Name || parts[5] != record.Home || (record.UID != "" && record.UID != parts[2]) {
+		if saved == nil || !validRuntimeAccount(parts, a.User) || parts[4] != "abr-"+a.Name || parts[5] != record.Home || (record.UID != "" && record.UID != parts[2]) {
 			return fmt.Errorf("refusing to adopt existing Ubuntu user %s; choose a new dedicated user", a.User)
 		}
 		if record.UID == "" {
@@ -158,13 +170,26 @@ func (h Host) ensureUser(a config.App) error {
 		return err
 	}
 	parts := strings.Split(entry, ":")
-	if !exists || len(parts) != 7 {
+	if !exists || !validRuntimeAccount(parts, a.User) || parts[4] != "abr-"+a.Name || parts[5] != record.Home {
 		return fmt.Errorf("could not verify newly created user %s", a.User)
 	}
 	if err := h.prepareHome(a.User, record.Home); err != nil {
 		return err
 	}
 	return h.saveUser(a, record, parts[2])
+}
+
+func validRuntimeAccount(parts []string, user string) bool {
+	if len(parts) != 7 || parts[0] != user || parts[6] != "/usr/sbin/nologin" {
+		return false
+	}
+	return nonRootIDs(parts[2], parts[3])
+}
+
+func nonRootIDs(uidText, gidText string) bool {
+	uid, uidErr := strconv.ParseUint(uidText, 10, 32)
+	gid, gidErr := strconv.ParseUint(gidText, 10, 32)
+	return uidErr == nil && gidErr == nil && uid > 0 && gid > 0
 }
 
 func (h Host) prepareHome(user, home string) error {

@@ -8,7 +8,8 @@ fi
 abr_binary_source=$(realpath "${1:-bin/abr}")
 abr_binary_directory=$(mktemp -d)
 fixture_source=''
-trap 'rm -rf "$abr_binary_directory"; if [[ -n $fixture_source ]]; then rm -rf "$fixture_source"; fi' EXIT
+fixture_git_shim=0
+trap 'rm -rf "$abr_binary_directory"; if [[ -n $fixture_source ]]; then rm -rf "$fixture_source"; fi; if [[ $fixture_git_shim == 1 ]]; then sudo rm -f /usr/local/bin/git; fi' EXIT
 install -m 755 "$abr_binary_source" "$abr_binary_directory/abr"
 abr_test_binary="$abr_binary_directory/abr"
 abr_ci() {
@@ -93,6 +94,10 @@ fi
 /usr/local/bin/svgo --version
 /usr/local/bin/ncu --version
 /usr/local/bin/composer --no-plugins --no-scripts --version
+# Installers must not retain write access to the published shared toolchain.
+fixture_denied _apt touch /opt/abr/node-tools/current/.abr-ci-write-probe
+test "$(stat -Lc '%u:%g:%a' /opt/abr/node-tools/current)" = 0:0:755
+test ! -e /opt/abr/node-tools/current/.home
 sudo systemctl start ssh.service
 # The host key exemption is only for this disposable localhost fixture.
 sudo ssh -F /dev/null -i /root/.ssh/abr-fixture-ssh -o IdentitiesOnly=yes \
@@ -120,6 +125,33 @@ sudo mysql --protocol=socket --user=root --batch --skip-column-names \
 abr_ci git setup
 abr_ci git setup
 
+# Exercise initial clone on the real host without any external repository or
+# SSH account. A disposable-only shim rewrites just this fixture URL to a local
+# bare repository, while preserving Abr's real runuser/setpriv invocation.
+test ! -e /usr/local/bin/git
+sudo /usr/bin/git init --bare /srv/abr-clone-fixture
+sudo chown -hR _apt /srv/abr-clone-fixture
+sudo chmod -R a+rX /srv/abr-clone-fixture
+cat > "$abr_binary_directory/git-fixture" <<'SH'
+#!/bin/sh
+case " $* " in
+  *' clone '* )
+    [ "$(id -u)" != 0 ] || exit 1
+    grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/self/status || exit 1
+    exec /usr/bin/git -c url.file:///srv/abr-clone-fixture.insteadOf=git@github.com:fixture/local.git "$@"
+    ;;
+esac
+exec /usr/bin/git "$@"
+SH
+sudo install -m 755 "$abr_binary_directory/git-fixture" /usr/local/bin/git
+fixture_git_shim=1
+abr_ci clone git@github.com:fixture/local.git /srv/apps/fixture-clone
+sudo test -d /srv/apps/fixture-clone/.git
+test "$(stat -c '%u' /srv/apps/fixture-clone/.git)" = 0
+test -z "$(sudo find /srv/apps -maxdepth 1 -name '.abr-clone-*' -print)"
+sudo rm /usr/local/bin/git
+fixture_git_shim=0
+
 fixture_source=$(mktemp -d)
 composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel:^13.0' "$fixture_source/laravel"
 (
@@ -129,6 +161,22 @@ composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel
   # npm 12's lock-only resolution incorrectly blocks bundled registry tarballs.
   # This opt-in is confined to generating our disposable fixture lockfile.
   npm install --package-lock-only --ignore-scripts --allow-remote=all
+  cat > abr-fixture-privileges.php <<'PHP'
+<?php
+if (posix_geteuid() === 0 || !preg_match('/^NoNewPrivs:\s+1$/m', file_get_contents('/proc/self/status'))) {
+    fwrite(STDERR, "Composer script has unsafe privileges\n");
+    exit(1);
+}
+PHP
+  cat > abr-fixture-privileges.cjs <<'JS'
+const fs = require('node:fs');
+if (process.getuid() === 0 || !/^NoNewPrivs:\s+1$/m.test(fs.readFileSync('/proc/self/status', 'utf8'))) {
+  throw new Error('npm script has unsafe privileges');
+}
+JS
+  # Exercise arbitrary Composer and npm project scripts under the real runner.
+  php -r '$p="composer.json"; $c=json_decode(file_get_contents($p),true); $c["scripts"]["pre-install-cmd"][]="@php abr-fixture-privileges.php"; file_put_contents($p,json_encode($c,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");'
+  node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync("package.json")); p.scripts.prebuild="node abr-fixture-privileges.cjs"; fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n");'
 )
 sudo cp -R "$fixture_source/laravel" /srv/apps/fixture-php
 sudo tee /srv/apps/fixture-php/routes/web.php >/dev/null <<'PHP'
@@ -136,7 +184,7 @@ sudo tee /srv/apps/fixture-php/routes/web.php >/dev/null <<'PHP'
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 Route::get('/', fn () => response('Laravel fixture database='.DB::select('SELECT 1 AS ok')[0]->ok)->header('X-Powered-By', 'fixture-runtime'));
-Route::get('/php-config', fn () => response()->json(['expose_php' => ini_get('expose_php'), 'display_errors' => ini_get('display_errors'), 'opcache' => ini_get('opcache.enable')]));
+Route::get('/php-config', fn () => response()->json(['expose_php' => ini_get('expose_php'), 'display_errors' => ini_get('display_errors'), 'opcache' => ini_get('opcache.enable'), 'unprivileged' => posix_geteuid() !== 0, 'no_new_privs' => (bool) preg_match('/^NoNewPrivs:\s+1$/m', file_get_contents('/proc/self/status'))]));
 PHP
 
 fixture_git() {
@@ -148,28 +196,30 @@ fixture_git() {
 }
 fixture_git /srv/apps/fixture-php
 abr_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --canonical-host non-www --scheduler
-# Repair the unescaped grants used by older Abr versions. A matching foreign
-# database must remain inaccessible after reconciling an already-ready account.
+# Fresh accounts must not access a foreign database whose name would match an
+# unescaped underscore in a database grant.
 sudo mysql --protocol=socket --user=root <<'SQL'
 CREATE DATABASE abrXfixtureXphp;
-REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'abr-fixture-php'@'localhost';
-GRANT ALL PRIVILEGES ON `abr_fixture_php`.* TO 'abr-fixture-php'@'localhost';
 SQL
-abr_ci database fixture-php
 printf 'USE abrXfixtureXphp; CREATE TABLE forbidden (id INT);\n' | sudo tee /var/lib/abr-ci/foreign.sql >/dev/null
 if abr_ci database import fixture-php /var/lib/abr-ci/foreign.sql --yes; then
   echo 'Wildcard database grant exposed another database' >&2; exit 1
 fi
-# The same literal grant works with partial revokes enabled too.
+# Provision a new account with partial revokes enabled and verify its scope.
 sudo mysql --protocol=socket --user=root -e 'SET GLOBAL partial_revokes=ON;'
-abr_ci database fixture-php
-if abr_ci database import fixture-php /var/lib/abr-ci/foreign.sql --yes; then
+sudo mkdir -p /srv/apps/fixture-literal/public /srv/apps/fixture-literal/storage/app/public
+abr_ci register --name fixture-literal --dir /srv/apps/fixture-literal --type laravel --domain fixture-literal.localhost
+sudo mysql --protocol=socket --user=root -e 'CREATE DATABASE abrXfixtureXliteral;'
+printf 'USE abrXfixtureXliteral; CREATE TABLE forbidden (id INT);\n' | sudo tee /var/lib/abr-ci/foreign-literal.sql >/dev/null
+if abr_ci database import fixture-literal /var/lib/abr-ci/foreign-literal.sql --yes; then
   echo 'Literal grant exposed another database' >&2; exit 1
 fi
+abr_ci remove fixture-literal
 sudo mysql --protocol=socket --user=root -e 'SET GLOBAL partial_revokes=OFF;'
-abr_ci database fixture-php
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/abr-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 abr_ci deploy fixture-php --no-pull
+test "$(sudo systemctl show abr-fixture-php-scheduler.service --property=NoNewPrivileges --value)" = yes
+test "$(sudo systemctl show abr-fixture-php-scheduler.service --property=ProtectSystem --value)" = full
 fixture_denied abr-fixture-php curl --fail --silent --max-time 2 \
   --unix-socket /var/lib/caddy/abr-admin.sock http://localhost/config/
 # Load the identity instead of test -r: Ubuntu's Rust test can ignore ACLs.
@@ -213,6 +263,7 @@ abr_ci enable fixture-php
 fixture_https fixture-php.localhost --dump-header "$fixture_source/headers" >/dev/null
 if grep -Ei '^(server|x-powered-by):' "$fixture_source/headers"; then echo 'Identifying response header leaked' >&2; exit 1; fi
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"opcache":"1"'
+curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"unprivileged":true,"no_new_privs":true'
 # A generated hashed asset is served with Brotli and immutable caching.
 asset_path=$(sudo find /srv/apps/fixture-php/public/build/assets -name 'app-*.css' -print -quit)
 sudo test -f "$asset_path.br"
@@ -263,17 +314,23 @@ for rendering in true false; do
   else
     app_domain=portal.fixture-php.localhost
   fi
-  sudo mkdir -p "$dir/app"
-  sudo tee "$dir/package.json" >/dev/null <<'JSON'
-{"name":"abr-nuxt-fixture","private":true,"type":"module","scripts":{"build":"nuxt build","postinstall":"nuxt prepare"},"dependencies":{"nuxt":"4.5.2","vue":"3.5.43","vue-router":"5.3.1"}}
+  nuxt_source="$fixture_source/$app"
+  mkdir -p "$nuxt_source/app"
+  tee "$nuxt_source/package.json" >/dev/null <<'JSON'
+{"name":"abr-nuxt-fixture","private":true,"type":"module","scripts":{"prebuild":"node abr-fixture-privileges.cjs","build":"nuxt build","postinstall":"nuxt prepare"},"dependencies":{"nuxt":"4.5.2","vue":"3.5.43","vue-router":"5.3.1"}}
 JSON
-  printf 'export default defineNuxtConfig({ssr: %s, devtools: {enabled: false}})\n' "$rendering" | sudo tee "$dir/nuxt.config.ts" >/dev/null
-  printf '<template><h1>Abr Nuxt fixture</h1></template>\n' | sudo tee "$dir/app/app.vue" >/dev/null
-  printf 'node_modules\n.output\n.nuxt\n.env\n' | sudo tee "$dir/.gitignore" >/dev/null
-  sudo npm --prefix "$dir" install --package-lock-only --ignore-scripts --allow-remote=all
+  printf 'export default defineNuxtConfig({ssr: %s, devtools: {enabled: false}})\n' "$rendering" | tee "$nuxt_source/nuxt.config.ts" >/dev/null
+  printf '<template><h1>Abr Nuxt fixture</h1></template>\n' | tee "$nuxt_source/app/app.vue" >/dev/null
+  printf 'node_modules\n.output\n.nuxt\n.env\n' | tee "$nuxt_source/.gitignore" >/dev/null
+  cp "$fixture_source/laravel/abr-fixture-privileges.cjs" "$nuxt_source/"
+  npm --prefix "$nuxt_source" install --package-lock-only --ignore-scripts --allow-remote=all
+  sudo cp -R "$nuxt_source" "$dir"
   fixture_git "$dir"
   abr_ci register --name "$app" --dir "$dir" --type nuxt --domain "$app_domain"
   abr_ci deploy "$app" --no-pull
+  test "$(sudo systemctl show "abr-$app-nuxt.service" --property=NoNewPrivileges --value)" = yes
+  nuxt_pid=$(sudo systemctl show "abr-$app-nuxt.service" --property=MainPID --value)
+  sudo awk '/^NoNewPrivs:/ {if ($2 != 1) exit 1; found=1} END {if (!found) exit 1}' "/proc/$nuxt_pid/status"
   fixture_https "$app_domain" -o "$fixture_source/$app.html"
   if [[ $rendering == true ]]; then grep -F 'Abr Nuxt fixture' "$fixture_source/$app.html"; else grep -F '__nuxt' "$fixture_source/$app.html"; fi
   nuxt_asset=$(sudo find "$dir/.output/public/_nuxt" -type f -name '*.js' -size +511c -print -quit)

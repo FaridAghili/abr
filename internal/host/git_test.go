@@ -162,6 +162,7 @@ func TestSharedGitAutomaticallySelectedAndAccessRevokedBeforeUserDeletion(t *tes
 
 func TestCloneUsesSharedIdentityAndRefusesExistingDestinations(t *testing.T) {
 	h, r, _, a := fixture(t)
+	r.users["_apt"] = "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"
 	destination := filepath.Join(h.AppsDir, "new-app")
 	if err := h.Clone("git@github.com:owner/repo.git", destination); err == nil {
 		t.Fatal("clone without identity succeeded")
@@ -178,16 +179,29 @@ func TestCloneUsesSharedIdentityAndRefusesExistingDestinations(t *testing.T) {
 	if err := h.Clone("git@github.com:owner/repo.git", destination); err != nil {
 		t.Fatal(err)
 	}
-	c := r.calls[len(r.calls)-1]
-	if c.Name != "git" || !strings.Contains(strings.Join(c.Env, " "), "GIT_SSH_COMMAND=ssh -F /dev/null") || !strings.Contains(strings.Join(c.Env, " "), ".git-key-") || !slices.Contains(c.Args, "core.hooksPath=/dev/null") || !slices.Contains(c.Args, "--template=") {
+	var c Command
+	for _, command := range r.calls {
+		if command.Name == "runuser" && slices.Contains(command.Args, "clone") {
+			c = command
+		}
+	}
+	if c.Name != "runuser" || c.Args[1] != "_apt" || !slices.Contains(c.Args, "--no-new-privs") || !strings.Contains(strings.Join(c.Args, " "), "GIT_SSH_COMMAND=ssh -F /dev/null") || !strings.Contains(strings.Join(c.Args, " "), ".abr-clone-") || !slices.Contains(c.Args, "core.hooksPath=/dev/null") || !slices.Contains(c.Args, "--template=") {
 		t.Fatal("initial clone missing shared identity or hook restrictions")
 	}
-	if paths, _ := filepath.Glob(filepath.Join(h.Manager.StateDir, ".git-key-*")); len(paths) != 0 {
+	if paths, _ := filepath.Glob(filepath.Join(h.AppsDir, ".abr-clone-*")); len(paths) != 0 {
 		t.Fatal("temporary clone credential was not removed")
 	}
-	r.fail = func(c Command) error { return testExit(7) }
-	if err := h.Clone("git@github.com:owner/repo.git", destination); err == nil {
+	r.fail = func(c Command) error {
+		if c.Name == "runuser" && slices.Contains(c.Args, "clone") {
+			return testExit(7)
+		}
+		return nil
+	}
+	if err := h.Clone("git@github.com:owner/repo.git", filepath.Join(h.AppsDir, "failed-app")); err == nil {
 		t.Fatal("failed clone reported success")
+	}
+	if paths, _ := filepath.Glob(filepath.Join(h.AppsDir, ".abr-clone-*")); len(paths) != 0 {
+		t.Fatal("failed clone retained temporary identity", paths)
 	}
 }
 

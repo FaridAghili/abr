@@ -28,6 +28,13 @@ func TestRenderAllComponents(t *testing.T) {
 		if strings.Contains(text, "{{") || strings.Contains(text, "Draft") {
 			t.Fatalf("unrendered template %s", f.Path)
 		}
+		if strings.HasSuffix(f.Path, ".service") {
+			for _, want := range []string{"User=abr-app\n", "NoNewPrivileges=true\n", "CapabilityBoundingSet=\n", "ProtectSystem=full\n", "ProtectHome=true\n", "PrivateTmp=true\n"} {
+				if !strings.Contains(text, want) {
+					t.Errorf("missing service protection %q in %s", want, f.Path)
+				}
+			}
+		}
 		if strings.HasSuffix(f.Path, ".caddy") {
 			for _, want := range []string{"app.test, extra.test", "redir https://app.test{uri} 308", "reverse_proxy 127.0.0.1:10000"} {
 				if !strings.Contains(text, want) {

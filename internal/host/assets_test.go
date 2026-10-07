@@ -1,12 +1,50 @@
 package host
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
+
+func TestAssetCompressionBatchesFilesAndStopsOnFailure(t *testing.T) {
+	h, runner, _, a := fixture(t)
+	directory := filepath.Join(a.Directory, "public/build/assets")
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 130 {
+		path := filepath.Join(directory, fmt.Sprintf("asset-%03d.js", i))
+		if err := os.WriteFile(path, []byte(strings.Repeat("x", 512)), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.compressAssets(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("expected three batches, got %d", len(runner.calls))
+	}
+	count := 0
+	for _, c := range runner.calls {
+		index := slices.Index(c.Args, "--quality=5")
+		paths := c.Args[index+2:]
+		if len(paths) > 64 || c.Name != "runuser" || c.Args[1] != a.User {
+			t.Fatal("unsafe compression batch", c)
+		}
+		count += len(paths)
+	}
+	if count != 130 {
+		t.Fatal("assets skipped or duplicated", count)
+	}
+	runner.calls = nil
+	runner.fail = func(Command) error { return testExit(1) }
+	if err := h.compressAssets(a, nil); err == nil || len(runner.calls) != 1 {
+		t.Fatal("continued after batch failure", err)
+	}
+}
 
 func TestAssetCompressionRunsAsAppAndSkipsUnsafeFiles(t *testing.T) {
 	h, runner, _, a := fixture(t)

@@ -85,6 +85,11 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 			return []byte("loaded\n"), nil
 		}
 	case "runuser":
+		if slices.Contains(c.Args, "clone") {
+			if err := os.MkdirAll(c.Args[len(c.Args)-1], 0755); err != nil {
+				return nil, err
+			}
+		}
 		text := strings.Join(c.Args, " ")
 		if strings.Contains(text, "git status") && r.dirty {
 			return []byte(" M tracked-file\n"), nil
@@ -155,15 +160,21 @@ func TestRegisterDatabaseIsPrivateStableAndScoped(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(sql, "ON `abr\\_app`.*") || strings.Contains(sql, "*.*") || !strings.Contains(sql, "REVOKE ALL PRIVILEGES, GRANT OPTION FROM") {
+	if !strings.Contains(sql, "ON `abr\\_app`.*") || strings.Contains(sql, "*.*") || strings.Contains(sql, "REVOKE") {
 		t.Fatal(sql)
 	}
+	runner.calls = nil
 	if err := h.Database(a.Name, false); err != nil {
 		t.Fatal(err)
 	}
 	data2, _ := h.read(h.credentialsPath(a.Name))
 	if !bytes.Equal(data, data2) {
 		t.Fatal("credentials changed on retry")
+	}
+	for _, c := range runner.calls {
+		if strings.Contains(string(c.Input), "GRANT ") || strings.Contains(string(c.Input), "REVOKE ") {
+			t.Fatal("existing database verification rewrote grants")
+		}
 	}
 	if err := h.Database(a.Name, true); err != nil || !strings.Contains(out.String(), "DB_PASSWORD="+c.Password) {
 		t.Fatalf("explicit --show failed: %v", err)

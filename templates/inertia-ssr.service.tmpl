@@ -6,6 +6,15 @@ After=network.target
 [Service]
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 UMask=0027
+NoNewPrivileges=true
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
 User={{.User}}
 WorkingDirectory={{unitPath .Directory}}
 EnvironmentFile={{unitPath .ManagedEnvironmentFile}}

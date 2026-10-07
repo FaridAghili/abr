@@ -6,7 +6,8 @@
 **Ubuntu 26.04 LTS AMD64** VPS.
 Laravel uses PHP-FPM or shared RoadRunner/Octane; Nuxt uses Node for SSR or SPA.
 Caddy serves direct HTTPS. Users, databases, services and ports are managed per app.
-Version **1.0.0**; development supports macOS ARM64.
+Initial development version **0.1.0**; development supports macOS ARM64.
+Version 1 release preparation and publishing are deferred until requested.
 
 ## Start with a fresh VPS
 
@@ -38,12 +39,10 @@ Version **1.0.0**; development supports macOS ARM64.
    sudo apt-get full-upgrade -y
    ```
 
-4. Download `abr-linux-amd64` and `abr-linux-amd64.sha256` from **Releases** once
-   a binary release is available. Alternatively, download the **abr-linux-amd64**
-   artifact from a successful main-branch run under **Actions → Check and package**
-   and extract GitHub's artifact ZIP. Upload the two files from your computer
-   using the variables from step 2. The original v0.1.0 release predates host
-   management.
+4. Download the **abr-linux-amd64** artifact from a successful main-branch run
+   under **Actions → Check and package** whose disposable Ubuntu host test passed.
+   Extract GitHub's artifact ZIP and upload `abr-linux-amd64` and
+   `abr-linux-amd64.sha256` using the variables from step 2.
 
    ```sh
    scp -P "$VPS_PORT" abr-linux-amd64 abr-linux-amd64.sha256 \
@@ -70,6 +69,11 @@ security updates. Root key login remains allowed. Use `--admin-user USER` when t
 SSH account differs from the sudo user; `--ssh-port PORT` preserves an additional
 port. `--no-firewall`, `--no-redis`, `--no-images` skip those features. Setup neither
 attaches Ubuntu Pro nor reboots; failed setup can leave package changes in place.
+Shared npm tools are installed under `/opt/abr/node-tools` by Ubuntu's `_apt`
+account with package scripts disabled. Root publishes the completed tree and
+links its commands into `/usr/local/bin`; installers retain no write access.
+Setup removes staging caches and retires only a recorded previous installation
+when none of its public tool links still use it.
 
 ## Deploy apps
 
@@ -102,6 +106,16 @@ the default driver. Optional flags: `--scheduler`, `--queue-workers N`, `--night
 management external. Install the corresponding Laravel packages in your project;
 Inertia's server bundle must honor `SSR_PORT`. Octane uses the shared RoadRunner;
 remove any app-local `rr` binary. Deployments have downtime and no automatic rollback.
+
+The `sudo abr` entry point is needed for users, permissions, databases and system
+services. Composer, npm, Artisan, Git updates and asset compression run as the
+dedicated app user with a clean environment and `no_new_privs`; their scripts
+cannot elevate through setuid programs. Do not manually run `sudo composer
+install`, `sudo npm ci`, or `sudo php artisan` inside a project. Package scripts
+still have the app user's access to project files, secrets and the shared Git key;
+review dependencies and commit lockfiles. This is not a sandbox for hostile apps.
+Initial clones use `_apt` and a temporary SSH identity; root publishes the
+checkout before registration assigns it to the dedicated app user.
 
 ```sh
 sudo abr clone git@github.com:OWNER/WEB.git /srv/apps/web
@@ -144,10 +158,7 @@ rejected. Point both hostnames' DNS at the VPS; set Laravel's `APP_URL` to the
 canonical HTTPS URL. Redirects use **308**, preserving method, path and query.
 
 For an existing app, edit its `domain` and `aliases` in `/etc/abr/config.toml`, then
-run `sudo abr config validate` and `sudo abr enable APP`. Upgrades preserve edited
-templates: on an existing VPS, change both `permanent` redirects in
-`/etc/abr/templates/caddy-site.caddy.tmpl` to `308` before enabling the app if its
-installed template still uses the old status code.
+run `sudo abr config validate` and `sudo abr enable APP`.
 
 ## Database backups and imports
 
@@ -175,15 +186,20 @@ existing tables or restart services. Dumps with foreign DEFINERs may need review
 ## Templates and runtime settings
 
 Runtime templates stay editable under `/etc/abr/templates`; setup copies missing
-files from the binary and preserves existing templates. Compare your edits with
-the [source templates](templates/) when upgrading; existing files are never
-automatically replaced by new defaults.
+files from the binary and preserves your template edits when rerun. The
+[source templates](templates/) define the initial defaults.
 `--templates-dir` selects another installed template directory. Shared settings
 apply on `abr setup`; app templates on `abr enable APP` or `abr deploy APP`.
 Templates are trusted root configuration; validate edits on a disposable Ubuntu
 host. App templates use Go text/template with validated values and escaped paths.
 Host configuration, state, templates and project parents must be root-owned and
-not writable by other users. App users own only their own project and home.
+not writable by other users. Config/template/state files must also have trusted
+owners and permissions; symlinks are rejected. App users own only their own
+project and home. Systemd app services prevent privilege escalation, have no
+capabilities, protect system directories and home directories, and use private
+temporary directories. Apps can still write their projects and upload storage.
+The shared FPM service also enforces `no_new_privs` for its pool workers; applying
+that drop-in during setup restarts FPM.
 Generated files carry ownership markers. Caddy/FPM configurations are validated
 before reload and restored on ordinary configuration failures. Shared
 SSH/MySQL/Redis/PHP/update templates are copied as native configuration.
@@ -209,17 +225,19 @@ The packaged welcome page is replaced with a generic 404. Identifying text in
 application bodies must be removed in the application itself.
 Default site templates also return 404 for `.env`, `.env.*`, and `.git` paths.
 
-Managed MySQL grants are reconciled on `abr database APP` and deployment. This
-removes older wildcard grants and limits each recorded account to its exact
-database, including when MySQL's `partial_revokes` setting is enabled. Account
-passwords and database contents are preserved. Upgraded hosts should run
-`sudo abr database APP` for every managed database before re-enabling apps, and
-copy the private-file `handle` block from the current Caddy site template into
-their installed template before enabling or deploying.
+New managed MySQL accounts receive grants scoped to their exact database,
+including when MySQL's `partial_revokes` setting is enabled. Repeated database
+commands verify recorded accounts and preserve passwords, grants and contents.
 
-Artisan and Composer command output stays private because exception messages can
-contain SQL bindings and database passwords. Deployment history records command
-failures; inspect application logs privately when investigating PHP failures.
+Artisan, Composer and npm command output stays private because project scripts
+and exception messages can contain SQL bindings and database passwords.
+Deployment history records command failures; inspect application logs privately
+when investigating failures. Secret-file reads reject symlinks/special files and
+are limited to 1 MiB. Deployment logs and backups have no automatic retention;
+monitor disk space and archive them deliberately.
+
+The [security review](docs/security-review.md) records the privilege boundaries,
+changes, validation and remaining server-use limitations.
 
 ## Development
 
@@ -247,7 +265,6 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/abr-linux-amd64 ./cmd/abr
 CI checks formatting/vet/race tests on Linux and macOS ARM64, scans reachable Go
 dependency vulnerabilities, builds the standalone binary and checksum, and
 runs actual setup/deployment/backup/restore tests on a disposable Ubuntu host
-from an isolated binary. Pushing a `v*` tag publishes those two assets to GitHub
-Releases only after both CI jobs pass. GitHub also includes its standard source
-archives.
+from an isolated binary. CI publishes development build artifacts and checksums;
+it does not publish GitHub releases.
 `scripts/host-smoke.sh` changes an entire host: never run it on production.

@@ -30,7 +30,21 @@ func (h Host) compressAssets(a config.App, environment map[string]string) error 
 	if resolved != directory {
 		return fmt.Errorf("build assets directory must not contain symlinks")
 	}
-	return filepath.WalkDir(directory, func(path string, entry fs.DirEntry, err error) error {
+	// Bound argv size and avoid one runuser/setpriv process per asset. Each
+	// batch still executes Brotli exclusively with the application's privileges.
+	batch := make([]string, 0, 64)
+	bytes := 0
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		args := append([]string{"--force", "--quality=5", "--"}, batch...)
+		_, err := h.asUser(a, environment, false, "/usr/bin/brotli", args...)
+		batch = batch[:0]
+		bytes = 0
+		return err
+	}
+	err = filepath.WalkDir(directory, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -54,7 +68,17 @@ func (h Host) compressAssets(a config.App, environment map[string]string) error 
 		} else if err != nil && !os.IsNotExist(err) {
 			return err
 		}
-		_, err = h.asUser(a, environment, false, "/usr/bin/brotli", "--force", "--quality=5", "--", path)
-		return err
+		if len(batch) == cap(batch) || bytes+len(path)+1 > 32<<10 {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		batch = append(batch, path)
+		bytes += len(path) + 1
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+	return flush()
 }

@@ -613,7 +613,7 @@ func (h Host) removeUser(a config.App) error {
 	}
 	if exists {
 		parts := strings.Split(entry, ":")
-		if len(parts) != 7 || parts[2] != record.UID || parts[4] != "abr-"+a.Name || parts[5] != record.Home {
+		if !validRuntimeAccount(parts, a.User) || parts[2] != record.UID || parts[4] != "abr-"+a.Name || parts[5] != record.Home {
 			return fmt.Errorf("refusing to delete changed Ubuntu account %s", a.User)
 		}
 		output, err := h.run("Verify no remaining processes for "+a.User, Command{Name: "pgrep", Args: []string{"-u", record.UID}, Private: true})

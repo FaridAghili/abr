@@ -57,7 +57,8 @@ func (h Host) installComposer() error {
 	if err := h.write("/usr/local/bin/composer", phar, 0755); err != nil {
 		return err
 	}
-	return h.command("/usr/local/bin/composer", "--no-plugins", "--no-scripts", "--version", "--no-ansi")
+	_, err = h.unprivileged("_apt", "/nonexistent", "/", nil, false, "/usr/local/bin/composer", "--no-plugins", "--no-scripts", "--version", "--no-ansi")
+	return err
 }
 
 func verifySHA256(data []byte, digest string) error {
@@ -77,17 +78,7 @@ func (h Host) installNPM(images bool) error {
 	if !h.DryRun && !strings.HasPrefix(strings.TrimSpace(string(out)), "24.") {
 		return fmt.Errorf("Node 24 is required")
 	}
-	if err := h.command("/usr/bin/npm", "install", "--global", "--prefix", "/usr/local", "--ignore-scripts", "--engine-strict", "npm@latest"); err != nil {
-		return err
-	}
-	packages := []string{"install", "--global", "--prefix", "/usr/local", "--ignore-scripts", "--engine-strict", "npm-check-updates@latest"}
-	if images {
-		packages = append(packages, "svgo@latest")
-	}
-	if err := h.command("/usr/local/bin/npm", packages...); err != nil {
-		return err
-	}
-	return h.command("/usr/local/bin/npm", "--version")
+	return h.installNodeTools(images)
 }
 
 func (h Host) configureRedis() (result error) {
@@ -190,7 +181,7 @@ $image->readImageBlob('<svg xmlns="http://www.w3.org/2000/svg" width="8" height=
 $image->setImageFormat("png");
 if (!str_starts_with($image->getImageBlob(), "\x89PNG\r\n\x1a\n")) { exit(1); }
 echo "PHP 8.5 extensions and Imagick SVG conversion verified\n";`
-	_, err := h.run("Verify PHP extensions and Imagick SVG conversion", Command{Name: "/usr/bin/php" + services.PHPVersion, Args: []string{"-r", code}})
+	_, err := h.unprivileged("_apt", "/nonexistent", "/", nil, false, "/usr/bin/php"+services.PHPVersion, "-r", code)
 	return err
 }
 
@@ -199,16 +190,30 @@ func (h Host) configurePHP() error {
 	if err := h.setupConfig("php-cli.ini.tmpl", filepath.Join(base, "cli/conf.d/99-abr.ini"), h.verifyPHP); err != nil {
 		return err
 	}
-	return h.setupConfig("php-fpm.ini.tmpl", filepath.Join(base, "fpm/conf.d/99-abr.ini"), func() error {
+	if err := h.setupConfig("php-fpm.ini.tmpl", filepath.Join(base, "fpm/conf.d/99-abr.ini"), func() error {
 		if err := h.command("/usr/sbin/php-fpm"+services.PHPVersion, "--test"); err != nil {
 			return err
 		}
 		return h.command("systemctl", "reload", "php"+services.PHPVersion+"-fpm")
+	}); err != nil {
+		return err
+	}
+	// A reload keeps the original master process's privilege settings. Restart
+	// after applying the drop-in so every pool worker inherits no_new_privs.
+	err := h.setupConfig("php-fpm.service.conf.tmpl", "/etc/systemd/system/php"+services.PHPVersion+"-fpm.service.d/abr-security.conf", func() error {
+		if err := h.command("systemctl", "daemon-reload"); err != nil {
+			return err
+		}
+		return h.command("systemctl", "restart", "php"+services.PHPVersion+"-fpm")
 	})
+	if err != nil && !h.DryRun {
+		return errors.Join(err, h.command("systemctl", "daemon-reload"), h.command("systemctl", "restart", "php"+services.PHPVersion+"-fpm"))
+	}
+	return err
 }
 
 func requireSetupTemplates(source fs.FS) error {
-	for _, name := range []string{"caddy-default.caddy.tmpl", "caddy-site.caddy.tmpl", "caddy-admin.service.conf.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "automatic-updates.conf.tmpl"} {
+	for _, name := range []string{"caddy-default.caddy.tmpl", "caddy-site.caddy.tmpl", "caddy-admin.service.conf.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "php-fpm.service.conf.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "automatic-updates.conf.tmpl"} {
 		if info, err := fs.Stat(source, name); err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("missing embedded template %s", name)
 		}

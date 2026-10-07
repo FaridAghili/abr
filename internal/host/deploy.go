@@ -66,6 +66,9 @@ func (h Host) Deploy(names []string, o DeployOptions) error {
 }
 
 func (h Host) asUser(a config.App, environment map[string]string, private bool, name string, args ...string) ([]byte, error) {
+	if a.User == "" || a.User == "root" {
+		return nil, fmt.Errorf("application commands require a dedicated non-root user")
+	}
 	if name == "git" {
 		configured, err := h.sharedGit()
 		if err != nil {
@@ -80,10 +83,17 @@ func (h Host) asUser(a config.App, environment map[string]string, private bool, 
 			environment["GIT_TERMINAL_PROMPT"] = "0"
 		}
 	}
-	command := []string{"--user", a.User, "--", "env", "-i", "HOME=/var/lib/abr-users/" + a.User, "USER=" + a.User, "LOGNAME=" + a.User, "LANG=C.UTF-8", "PATH=/usr/local/bin:/usr/bin:/bin"}
+	return h.unprivileged(a.User, "/var/lib/abr-users/"+a.User, a.Directory, environment, private, name, args...)
+}
+
+func (h Host) unprivileged(user, home, directory string, environment map[string]string, private bool, name string, args ...string) ([]byte, error) {
+	if user == "" || user == "root" {
+		return nil, fmt.Errorf("refusing to run application/tool commands as root")
+	}
+	command := []string{"--user", user, "--", "env", "-i", "HOME=" + home, "USER=" + user, "LOGNAME=" + user, "LANG=C.UTF-8", "PATH=/usr/local/bin:/usr/bin:/bin"}
 	keys := make([]string, 0, len(environment))
 	for key := range environment {
-		if key != "PATH" {
+		if key != "PATH" && key != "HOME" && key != "USER" && key != "LOGNAME" {
 			keys = append(keys, key)
 		}
 	}
@@ -91,9 +101,11 @@ func (h Host) asUser(a config.App, environment map[string]string, private bool, 
 	for _, key := range keys {
 		command = append(command, key+"="+environment[key])
 	}
-	command = append(command, name)
+	// Inherited by all dependency scripts and child processes, including execs
+	// of setuid programs. runuser alone does not prevent privilege escalation.
+	command = append(command, "/usr/bin/setpriv", "--no-new-privs", "--", name)
 	command = append(command, args...)
-	return h.run(fmt.Sprintf("Run %s as %s", strings.Join(append([]string{name}, args...), " "), a.User), Command{Name: "runuser", Args: command, Dir: a.Directory, Private: private, Stream: !private || name != "git"})
+	return h.run(fmt.Sprintf("Run %s as %s", strings.Join(append([]string{name}, args...), " "), user), Command{Name: "runuser", Args: command, Dir: directory, Private: private, Stream: !private || name != "git"})
 }
 
 func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result error) {
@@ -187,9 +199,9 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	}
 	php := "/usr/bin/php" + services.PHPVersion
 	run := func(name string, args ...string) error {
-		// Artisan/Composer scripts can include SQL bindings and database passwords
-		// in exception output. Keep those commands out of terminal/deployment logs.
-		_, err := h.asUser(a, plan.Environment, name == php || name == "composer", name, args...)
+		// PHP and npm scripts can read .env and include SQL bindings/passwords in
+		// exception output. Keep their output out of terminal/deployment logs.
+		_, err := h.asUser(a, plan.Environment, name == php || name == "composer" || name == "npm", name, args...)
 		return err
 	}
 	// Build frontend assets before installing PHP dependencies or running Artisan.
@@ -223,7 +235,7 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		if h.DryRun {
 			h.say("Would generate APP_KEY only if missing")
 		} else {
-			data, err := h.read(filepath.Join(a.Directory, ".env"))
+			data, err := readProjectEnv(h.path(filepath.Join(a.Directory, ".env")))
 			if err != nil {
 				return err
 			}
@@ -302,7 +314,7 @@ func dotenvValue(data []byte, key string) string {
 }
 
 func (h Host) laravelEnv(a config.App) error {
-	data, err := h.read(filepath.Join(a.Directory, ".env"))
+	data, err := readProjectEnv(h.path(filepath.Join(a.Directory, ".env")))
 	if err != nil {
 		return fmt.Errorf("prepare the project's .env before deployment: %w", err)
 	}

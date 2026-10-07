@@ -2,6 +2,7 @@ package host
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -183,7 +184,11 @@ func (h Host) gitSSH() string {
 
 func (h Host) gitSSHWithKey(key string) string {
 	dir := h.gitDir()
-	return "ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o UserKnownHostsFile=" + shellQuote(filepath.Join(dir, "known_hosts")) + " -i " + shellQuote(key)
+	return gitSSHCommand(key, filepath.Join(dir, "known_hosts"))
+}
+
+func gitSSHCommand(key, knownHosts string) string {
+	return "ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o UserKnownHostsFile=" + shellQuote(knownHosts) + " -i " + shellQuote(key)
 }
 
 func (h Host) sharedGit() (bool, error) {
@@ -234,7 +239,7 @@ func (h Host) Clone(repository, directory string) error {
 	if !filepath.IsAbs(directory) || filepath.Clean(h.AppsDir) == "/" || filepath.Dir(filepath.Clean(directory)) != filepath.Clean(h.AppsDir) {
 		return fmt.Errorf("clone directory must be directly under %s", h.AppsDir)
 	}
-	return h.locked(func() error {
+	return h.locked(func() (result error) {
 		if h.DryRun {
 			h.say("Would clone %s into %s using the shared VPS SSH key", repository, directory)
 			return nil
@@ -266,14 +271,44 @@ func (h Host) Clone(repository, directory string) error {
 		if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Uid) != os.Geteuid() {
 			return fmt.Errorf("apps directory must be owned by the manager's administrator")
 		}
-		// A fresh clone has no app user yet. Disable all hooks/configured templates
-		// when cloning as root; dependency/build commands never run as root.
-		key, cleanup, err := h.privateGitCopy(h.path(filepath.Join(h.gitDir(), "id_ed25519")))
+		// A fresh clone has no app user yet. Give _apt a temporary identity and
+		// staging tree, never access to the live shared identity or root's home.
+		entry, exists, err := h.passwd("_apt")
 		if err != nil {
 			return err
 		}
-		defer cleanup()
-		_, err = h.run("Clone "+repository, Command{Name: "git", Args: []string{"-c", "core.hooksPath=/dev/null", "clone", "--template=", "--", repository, directory}, Env: []string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=" + h.gitSSHWithKey(key)}})
-		return err
+		parts := strings.Split(entry, ":")
+		if !exists || len(parts) != 7 || parts[0] != "_apt" || !nonRootIDs(parts[2], parts[3]) {
+			return fmt.Errorf("clone requires Ubuntu's unprivileged _apt account")
+		}
+		stage, err := os.MkdirTemp(h.path(h.AppsDir), ".abr-clone-")
+		if err != nil {
+			return err
+		}
+		defer func() { result = errors.Join(result, os.RemoveAll(stage)) }()
+		key := filepath.Join(stage, "identity")
+		keyData, err := readGitKey(h.path(filepath.Join(h.gitDir(), "id_ed25519")))
+		if err != nil {
+			return err
+		}
+		if err := h.write(key, keyData, 0600); err != nil {
+			return err
+		}
+		knownHosts := filepath.Join(stage, "known_hosts")
+		if err := h.write(knownHosts, []byte(githubHostKey), 0600); err != nil {
+			return err
+		}
+		if err := h.command("chown", "-hR", "_apt", "--", stage); err != nil {
+			return err
+		}
+		checkout := filepath.Join(stage, "project")
+		environment := map[string]string{"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": gitSSHCommand(key, knownHosts)}
+		if _, err := h.unprivileged("_apt", "/nonexistent", "/", environment, true, "git", "-c", "core.hooksPath=/dev/null", "clone", "--template=", "--", repository, checkout); err != nil {
+			return err
+		}
+		if err := h.command("chown", "-hR", "root:root", "--", checkout); err != nil {
+			return err
+		}
+		return os.Rename(checkout, h.path(directory))
 	})
 }

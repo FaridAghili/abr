@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"abr/internal/manager"
 	"abr/internal/storage"
@@ -33,10 +34,22 @@ type Runner interface{ Run(Command) ([]byte, error) }
 type ExecRunner struct{ Output io.Writer }
 
 const maxCommandOutput = 1 << 20
+const hostPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 type commandOutput struct {
 	buffer    bytes.Buffer
 	truncated bool
+}
+
+type synchronizedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (w *synchronizedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
 }
 
 func (w *commandOutput) Bytes() []byte { return w.buffer.Bytes() }
@@ -53,31 +66,56 @@ func (w *commandOutput) Write(p []byte) (int, error) {
 }
 
 func (r ExecRunner) Run(c Command) ([]byte, error) {
-	cmd := exec.Command(c.Name, c.Args...)
+	// Resolve before exec using a fixed path; exec.Command otherwise searches the
+	// caller's PATH even when cmd.Env has a safe replacement.
+	name := c.Name
+	if !filepath.IsAbs(name) {
+		if strings.ContainsRune(name, '/') {
+			return nil, fmt.Errorf("command must be an absolute path or a bare name")
+		}
+		name = ""
+		for _, dir := range filepath.SplitList(hostPath) {
+			candidate := filepath.Join(dir, c.Name)
+			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+				name = candidate
+				break
+			}
+		}
+		if name == "" {
+			return nil, fmt.Errorf("command %s not found in the host path", c.Name)
+		}
+	}
+	cmd := exec.Command(name, c.Args...)
 	cmd.Dir = c.Dir
-	cmd.Env = append(os.Environ(), c.Env...)
+	// Do not expose sudo's environment or honor loader, Git, npm, PHP, or proxy
+	// overrides while executing privileged host operations.
+	cmd.Env = append([]string{"PATH=" + hostPath, "HOME=/root", "USER=root", "LOGNAME=root", "LANG=C.UTF-8"}, c.Env...)
 	cmd.Stdin = bytes.NewReader(c.Input)
 	if c.Stdin != nil {
 		cmd.Stdin = c.Stdin
 	}
 	var output commandOutput
 	var w io.Writer = &output
+	var log io.Writer
 	if !c.Private && r.Output != nil {
-		w = io.MultiWriter(w, r.Output)
+		// os/exec copies stdout and stderr concurrently. Callers include buffers
+		// and TUI writers that do not support concurrent writes.
+		log = &synchronizedWriter{w: r.Output}
+		w = io.MultiWriter(w, log)
 	}
 	cmd.Stdout = w
 	if c.Stream {
 		cmd.Stdout = io.Discard
-		if !c.Private && r.Output != nil {
-			cmd.Stdout = r.Output
+		if log != nil {
+			cmd.Stdout = log
 		}
 	}
 	if c.Stdout != nil {
 		cmd.Stdout = c.Stdout
 	}
 	cmd.Stderr = io.Discard
-	if !c.Private && r.Output != nil {
-		cmd.Stderr = r.Output
+	if log != nil {
+		cmd.Stderr = log
 	}
 	if err := cmd.Run(); err != nil {
 		// Output is streamed/logged for ordinary commands; never put it in errors.
@@ -140,6 +178,22 @@ func (h Host) guard() error {
 	for _, dir := range []string{h.Manager.StateDir, filepath.Dir(h.Manager.ConfigPath), h.TemplatesDir, h.AppsDir} {
 		if err := h.trustedAncestor(dir); err != nil {
 			return err
+		}
+	}
+	for _, path := range []string{h.Manager.ConfigPath, h.Manager.ConfigPath + ".lock", h.Manager.RegistryPath(), filepath.Join(h.Manager.StateDir, "ports.lock"), filepath.Join(h.Manager.StateDir, "host.lock")} {
+		if err := h.trustedFile(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	entries, err := os.ReadDir(h.TemplatesDir)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".tmpl") {
+			if err := h.trustedFile(filepath.Join(h.TemplatesDir, entry.Name())); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -219,7 +273,17 @@ func (h Host) write(path string, data []byte, mode os.FileMode) error {
 	return storage.AtomicWriteMode(h.path(path), data, mode)
 }
 
-func (h Host) read(path string) ([]byte, error) { return os.ReadFile(h.path(path)) }
+func (h Host) read(path string) ([]byte, error) {
+	if path == h.Manager.StateDir || strings.HasPrefix(path, h.Manager.StateDir+string(filepath.Separator)) {
+		if err := h.trustedDirectory(filepath.Dir(h.path(path))); err != nil {
+			return nil, err
+		}
+		if err := h.trustedFile(h.path(path)); err != nil {
+			return nil, err
+		}
+	}
+	return os.ReadFile(h.path(path))
+}
 
 func (h Host) removeFile(path string) error {
 	if h.DryRun {
