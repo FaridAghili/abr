@@ -62,7 +62,7 @@ func TestConfigStrictAndRoundTrip(t *testing.T) {
 		t.Fatalf("round trip changed config\n%s", encoded)
 	}
 	for _, bad := range []string{
-		"unknown = true", "[ports]\nfrist = 1234", "[ports]\nfirst = 20000\nlast = 10000", "[ports]\nfirst = 0", "[[apps]]\nname = 'missing'", string(data) + "\n[apps.nuxt]\nmode = 'ssr'", "[ports]\nfirst = 'not a number'",
+		"unknown = true", "wildcards = []", "[ports]\nfrist = 1234", "[ports]\nfirst = 20000\nlast = 10000", "[ports]\nfirst = 0", "[[apps]]\nname = 'missing'", string(data) + "\n[apps.nuxt]\nmode = 'ssr'", "[ports]\nfirst = 'not a number'",
 	} {
 		if _, err := Parse([]byte(bad)); err == nil {
 			t.Errorf("accepted invalid config: %s", bad)
@@ -79,7 +79,7 @@ func TestDuplicateAndInvalidApps(t *testing.T) {
 		{"relative directory", func(a *App) { a.Directory = "srv/app" }},
 		{"root", func(a *App) { a.User = "root" }},
 		{"domain", func(a *App) { a.Domain = "https://example.com" }},
-		{"wildcard", func(a *App) { a.Wildcards = []string{"example.com"} }},
+		{"wildcard", func(a *App) { a.Domain = "*.example.com" }},
 		{"negative workers", func(a *App) { a.Queue.Workers = -1 }},
 		{"nuxt laravel", func(a *App) { a.Type = "nuxt"; a.Database.Enabled = true }},
 	} {

@@ -45,9 +45,6 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 	if err := a.Validate(); err != nil {
 		return Plan{}, err
 	}
-	if len(a.Wildcards) != 0 {
-		return Plan{}, fmt.Errorf("%s: wildcard HTTPS needs a DNS challenge provider; use explicit domains for now", a.Name)
-	}
 	p := Plan{FPM: a.Type == "laravel" && a.Web.Driver == "fpm", Environment: map[string]string{
 		"PATH": "/usr/local/bin:/usr/bin:/bin", "NODE_ENV": "production", "APP_ENV": "production",
 	}}

@@ -75,6 +75,8 @@ jobs:
         run: |
           sudo systemctl --no-pager --full status caddy php8.5-fpm mysql sites-fixture-php-scheduler.service sites-fixture-php-scheduler.timer sites-fixture-octane-octane.service || true
           sudo journalctl --no-pager -b -n 300 || true
+          sudo namei -l /var/lib/sites-ci/git/id_ed25519 || true
+          sudo getfacl -p /var/lib/sites-ci /var/lib/sites-ci/git /var/lib/sites-ci/git/id_ed25519 /var/lib/sites-ci/git/known_hosts || true
           if getent passwd sites-fixture-php >/dev/null; then
             sudo runuser --user sites-fixture-php -- env -i HOME=/var/lib/sites-users/sites-fixture-php PATH=/usr/bin:/bin git -C /srv/apps/fixture-php status --porcelain || true
           fi

@@ -123,10 +123,14 @@ func (m *model) registerForm() tea.Cmd {
 func (m *model) setupForm() tea.Cmd {
 	m.context, m.notice = "", ""
 	ssh := "0"
+	var admin string
 	rr := m.options.RoadRunnerVersion
 	features := []string{"redis", "images", "firewall"}
 	return m.setForm("form", "Set up VPS", func() tea.Cmd {
 		args := []string{"setup", "--ssh-port", ssh, "--roadrunner-version", rr}
+		if admin != "" {
+			args = append(args, "--admin-user", admin)
+		}
 		selected := map[string]bool{}
 		for _, s := range features {
 			selected[s] = true
@@ -136,8 +140,8 @@ func (m *model) setupForm() tea.Cmd {
 				args = append(args, "--no-"+f)
 			}
 		}
-		return m.review(action{title: "Set up VPS", args: args, note: "Installs PHP 8.5, Composer, MySQL, Node 24, Caddy and shared RoadRunner, plus the selected components and host tools. Updates package configuration and starts services. Caddy serves HTTPS directly; no Nginx or Cloudflare."})
-	}, huh.NewGroup(huh.NewInput().Title("SSH port · 0 discovers current sshd ports").Value(&ssh).Validate(func(s string) error {
+		return m.review(action{title: "Set up VPS", args: args, note: "Installs shared runtimes and selected tools, configures local MySQL/Redis, and enables security updates and Fail2ban. Applies key-only SSH after checking administrator keys. Preserves the administrator account and SSH port; root key login remains allowed. Test key login in a second session before setup."})
+	}, huh.NewGroup(huh.NewInput().Title("Existing SSH admin · optional").Description("Defaults to sudo user or root; install and test its SSH key first.").Value(&admin)), huh.NewGroup(huh.NewInput().Title("SSH port · 0 discovers current sshd ports").Value(&ssh).Validate(func(s string) error {
 		n, e := strconv.Atoi(s)
 		if e != nil || n < 0 || n > 65535 {
 			return errors.New("Enter 0 or a port from 1 to 65535")

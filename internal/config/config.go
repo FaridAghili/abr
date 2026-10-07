@@ -31,7 +31,6 @@ type App struct {
 	Domain      string    `toml:"domain"`
 	Aliases     []string  `toml:"aliases,omitempty"`
 	Domains     []string  `toml:"domains,omitempty"`
-	Wildcards   []string  `toml:"wildcards,omitempty"`
 	HealthCheck string    `toml:"health_check,omitempty"`
 	Web         Web       `toml:"web,omitempty"`
 	Queue       Queue     `toml:"queue,omitempty"`
@@ -109,7 +108,6 @@ func (c Config) Validate() error {
 		directories[dir] = a.Name
 		all := append([]string{a.Domain}, a.Aliases...)
 		all = append(all, a.Domains...)
-		all = append(all, a.Wildcards...)
 		for _, d := range all {
 			d = strings.ToLower(d)
 			if owner, ok := domains[d]; ok {
@@ -146,17 +144,12 @@ func (a App) Validate() error {
 	if a.User == "root" {
 		return fmt.Errorf("runtime user must not be root")
 	}
-	if !validDomain(a.Domain, false) {
+	if !validDomain(a.Domain) {
 		return fmt.Errorf("invalid main domain %q", a.Domain)
 	}
 	for _, d := range append(append([]string{}, a.Aliases...), a.Domains...) {
-		if !validDomain(d, false) {
+		if !validDomain(d) {
 			return fmt.Errorf("invalid domain %q", d)
-		}
-	}
-	for _, d := range a.Wildcards {
-		if !validDomain(d, true) || !strings.HasPrefix(d, "*.") {
-			return fmt.Errorf("invalid wildcard %q; use *.example.com", d)
 		}
 	}
 	if a.HealthCheck != "" {
@@ -186,10 +179,7 @@ func (a App) Validate() error {
 	return nil
 }
 
-func validDomain(s string, wildcard bool) bool {
-	if wildcard {
-		s = strings.TrimPrefix(s, "*.")
-	}
+func validDomain(s string) bool {
 	if len(s) == 0 || len(s) > 253 {
 		return false
 	}

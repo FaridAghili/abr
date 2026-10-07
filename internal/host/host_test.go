@@ -575,7 +575,9 @@ func TestRoadRunnerDigestAndArchiveEntryValidation(t *testing.T) {
 		var b bytes.Buffer
 		gz := gzip.NewWriter(&b)
 		tr := tar.NewWriter(gz)
-		data := []byte("\x7fELFtest-executable")
+		data := make([]byte, 64)
+		copy(data, "\x7fELF")
+		data[4], data[5], data[18] = 2, 1, 62
 		if kind != tar.TypeReg {
 			data = nil
 		}

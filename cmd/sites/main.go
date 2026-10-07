@@ -119,7 +119,6 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.StringVar(&app.Domain, "domain", "", "main domain (required)")
 		fs.Var((*stringsFlag)(&app.Aliases), "alias", "redirect domain (repeatable)")
 		fs.Var((*stringsFlag)(&app.Domains), "serving-domain", "additional serving domain (repeatable)")
-		fs.Var((*stringsFlag)(&app.Wildcards), "wildcard", "config-only wildcard; host DNS challenges are not implemented")
 		fs.StringVar(&app.HealthCheck, "health-check", "", "optional deployment health-check URL")
 		fs.StringVar(&app.Web.Driver, "web-driver", "", "Laravel: fpm (default) or octane")
 		fs.IntVar(&app.Web.Workers, "octane-workers", 0, "Octane worker count (default 2)")
@@ -131,7 +130,8 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&noDatabase, "no-database", false, "Laravel: use an existing/self-managed database")
 		fs.Var(&imports, "port", "import free ENDPOINT=PORT (repeatable)")
 	case "setup":
-		fs.StringVar(&setup.RoadRunnerVersion, "roadrunner-version", host.DefaultRoadRunnerVersion, "shared RoadRunner release")
+		fs.StringVar(&setup.RoadRunnerVersion, "roadrunner-version", host.DefaultRoadRunnerVersion, "shared RoadRunner release (default: latest stable)")
+		fs.StringVar(&setup.AdminUser, "admin-user", "", "existing SSH administrator (default: sudo user or root); must already have authorized keys")
 		fs.IntVar(&setup.SSHPort, "ssh-port", 0, "SSH port to preserve (default: discover effective sshd ports)")
 		fs.BoolVar(&setup.NoFirewall, "no-firewall", false, "leave firewall unchanged")
 		fs.BoolVar(&setup.NoRedis, "no-redis", false, "skip Redis server")

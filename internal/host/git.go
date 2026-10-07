@@ -165,7 +165,7 @@ func (h Host) gitSSH() string {
 
 func (h Host) gitSSHWithKey(key string) string {
 	dir := h.gitDir()
-	return "ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=" + shellQuote(filepath.Join(dir, "known_hosts")) + " -i " + shellQuote(key)
+	return "ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o UserKnownHostsFile=" + shellQuote(filepath.Join(dir, "known_hosts")) + " -i " + shellQuote(key)
 }
 
 func (h Host) sharedGit() (bool, error) {
@@ -237,6 +237,13 @@ func (h Host) Clone(repository, directory string) error {
 		resolved, err := filepath.EvalSymlinks(h.path(h.AppsDir))
 		if err != nil || resolved != filepath.Clean(h.path(h.AppsDir)) {
 			return fmt.Errorf("apps directory and its parents must not be symlinks")
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || info.Mode().Perm()&0022 != 0 {
+			return fmt.Errorf("apps directory must not be writable by other users")
+		}
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Uid) != os.Geteuid() {
+			return fmt.Errorf("apps directory must be owned by the manager's administrator")
 		}
 		// A fresh clone has no app user yet. Disable all hooks/configured templates
 		// when cloning as root; dependency/build commands never run as root.

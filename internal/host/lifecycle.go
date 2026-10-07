@@ -420,6 +420,13 @@ func (h Host) ready(a config.App, r ports.Registry, m manifest) error {
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
+	// Recheck after waiting for sockets; an initial active state can precede
+	// an immediate process failure during startup.
+	for _, unit := range m.Units {
+		if err := h.command("systemctl", "is-active", "--quiet", unit); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

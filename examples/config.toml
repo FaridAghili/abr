@@ -1,4 +1,4 @@
-# Shared runtimes and application .env files remain owner-managed.
+# Setup manages shared runtimes; application .env values are owner-managed.
 # The range controls new automatic allocations; saved/imported ports stay stable.
 [ports]
 first = 10000
@@ -6,13 +6,12 @@ last = 19999
 
 [[apps]]
 name = "mango"
-directory = "/srv/mango"
-user = "mango"
+directory = "/srv/apps/mango"
+user = "sites-mango"
 type = "laravel"
 domain = "mango.example.com"
 aliases = ["www.mango.example.com"]
 domains = ["api.mango.example.com"]
-wildcards = []
 health_check = "https://mango.example.com/up"
 [apps.web]
 driver = "octane"
@@ -28,8 +27,8 @@ enabled = false
 
 [[apps]]
 name = "quiet"
-directory = "/srv/quiet"
-user = "quiet"
+directory = "/srv/apps/quiet"
+user = "sites-quiet"
 type = "laravel"
 domain = "quiet.example.com"
 [apps.web]
@@ -41,7 +40,7 @@ enabled = true
 
 [[apps]]
 name = "frontend"
-directory = "/srv/frontend"
-user = "frontend"
+directory = "/srv/apps/frontend"
+user = "sites-frontend"
 type = "nuxt"
 domain = "frontend.example.com"

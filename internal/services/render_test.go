@@ -102,8 +102,8 @@ func TestTemplatesAreRequiredAndEditable(t *testing.T) {
 	if !strings.Contains(string(p.Files[len(p.Files)-1].Data), "owner customization") {
 		t.Fatal("edits ignored")
 	}
-	a.Wildcards = []string{"*.app.test"}
+	a.Domain = "*.app.test"
 	if _, err := Render(a, r, dir, t.TempDir()); err == nil {
-		t.Fatal("unsupported wildcard silently enabled")
+		t.Fatal("wildcard domain accepted")
 	}
 }

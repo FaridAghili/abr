@@ -1,85 +1,23 @@
 # sites
 
-A small CLI for an owner-managed Ubuntu 26.04 LTS AMD64 VPS. Development runs on
-macOS Apple Silicon. The version remains **0.1.0** while stabilizing.
+A small CLI and terminal menu for an owner-managed Ubuntu 26.04 LTS AMD64 VPS.
+Developed on macOS Apple Silicon. Version stays **0.1.0** during stabilization.
+Caddy serves directly with automatic HTTPS. Laravel supports PHP-FPM or shared
+RoadRunner/Octane; Nuxt runs its Node server with the project's existing SSR setting.
+Each app gets a dedicated Ubuntu user. Ports and managed databases are automatic.
 
-Caddy serves applications directly with automatic HTTPS. No Nginx or Cloudflare
-is required. PHP, Node, Composer, MySQL, Redis, and RoadRunner are shared system
-installations. Every application gets a dedicated managed Ubuntu user.
-Nuxt always runs through its Node server; the project controls SSR itself.
+## Prepare the VPS
 
-## Interactive terminal
+Start with a clean Ubuntu 26.04 AMD64 host. Attach Ubuntu Pro if desired, run your
+initial apt update/upgrade, and install your SSH public key for the existing root
+or sudo account. **Test a second SSH session with that key before setup.** Keep
+that session open. Allow SSH and TCP 80/443 plus UDP 443 in the provider firewall.
+Point application DNS records directly at the VPS; publish AAAA only with working IPv6.
 
-Run `sudo sites` or `sudo sites tui` on the VPS to open the menu. It includes
-searchable applications, guided setup and registration, deployment, status,
-service restart, recent logs, database management, and port/config checks.
-Use arrows to navigate, `/` to search menus, Tab/Shift+Tab to move between form
-fields, and Space to toggle components. Esc goes back; Ctrl+C goes back or quits
-from the home menu. Confirmation starts on **Cancel**; choose **Run command**
-and press Enter to proceed. Long reviews and output scroll with arrows/Page Up/
-Page Down. Use a terminal of at least 48 columns and 16 rows.
-
-The header shows config/state paths and live or dry-run mode. Opening the menu
-writes no state and does not infer service health; **Service status** queries
-systemd. Changes run through the same CLI commands, with live output and explicit
-failure messages. Wait for an operation to finish before leaving its screen.
-Database credentials require an explicit reveal action and are discarded from
-the UI when leaving the output screen. Recent logs are a snapshot; use
-`sudo sites logs APP --follow` for streaming outside the menu.
-
-For local use, choose temporary paths. This opens a host preview menu on macOS:
-
-```sh
-go build -o bin/sites ./cmd/sites
-work=$(mktemp -d)
-./bin/sites --config "$work/config.toml" --state-dir "$work/state" \
-  --templates-dir ./templates --apps-dir "$work/apps" --dry-run tui
-```
-
-To save local registrations, omit `--dry-run` and choose **Config only** in the
-registration form. Real host commands still require root on Ubuntu. Full CLI
-flags remain available for advanced options such as explicit imported ports.
-`sites help` always prints command help; when stdin or stdout is redirected,
-no arguments prints help and `sites tui` reports that a terminal is required.
-
-## Local development
-
-Use the Go version in `go.mod`:
-
-```sh
-go build -o bin/sites ./cmd/sites
-./bin/sites version
-./bin/sites setup --dry-run --ssh-port 22
-
-work=$(mktemp -d)
-./bin/sites --config "$work/config.toml" --state-dir "$work/state" register \
-  --config-only --name mango-web --dir /srv/apps/mango-web \
-  --type nuxt --domain web.example.com
-./bin/sites --config "$work/config.toml" --state-dir "$work/state" register \
-  --config-only --name mango-api --dir /srv/apps/mango-api \
-  --type laravel --domain api.example.com --web-driver octane \
-  --octane-workers 2 --queue-workers 2 --scheduler
-./bin/sites --config "$work/config.toml" config validate
-./bin/sites --config "$work/config.toml" list
-./bin/sites --state-dir "$work/state" ports
-./bin/sites --config "$work/config.toml" --state-dir "$work/state" doctor
-./bin/sites --config "$work/config.toml" --state-dir "$work/state" \
-  --templates-dir ./templates deploy mango-web --dry-run
-```
-
-`--config-only` registers metadata and reserves ports without host operations.
-Host previews execute no commands, download nothing, and write no files.
-An enable/deploy preview requires existing port reservations; after editing TOML,
-run `ports --allocate`. A preview does not establish that packages, permissions,
-application dependencies, or DNS will work on the VPS.
-
-## Initial VPS setup
-
-Start with Ubuntu 26.04 LTS AMD64. Establish SSH key access and a sudo login before
-setup. Point each domain's A record at the VPS; only publish AAAA records if IPv6
-is working. Allow the same SSH/web ports in the provider's firewall.
-
-Extract the new workflow artifact, preserving its executable and `templates/`:
+Download the archive and checksum from the latest successful main-branch
+[GitHub Actions run](https://github.com/FaridAghili/sites-manager/actions).
+The original `v0.1.0` release assets predate these host-management features.
+Extract the workflow artifact ZIP first, then:
 
 ```sh
 sha256sum -c sites-linux-amd64.tar.gz.sha256
@@ -91,280 +29,187 @@ sudo ./sites setup
 sudo install -m 755 sites /usr/local/bin/sites
 ```
 
-Setup installs PHP 8.5 CLI/FPM and extensions (bcmath, curl, gd, imagick, intl,
-mbstring, mysql, redis, xml, zip), Composer, MySQL, Redis, Node 24/npm, Caddy,
-Git, build tools, ACL tools, UFW, Fail2ban, unattended-upgrades, ncdu, and the
-image tools from the server checklist, including shared SVGO 4.1.0.
-Caddy uses its official stable repository;
-Node uses the signed NodeSource 24 repository. Composer comes from Ubuntu.
-RoadRunner defaults to release `2025.1.15`, installed once under
-`/opt/roadrunner/VERSION/rr`, with `/usr/local/bin/rr` pointing at it. Downloads
-must match GitHub's published asset SHA256. Previous version directories remain.
-Use `--roadrunner-version YEAR.MAJOR.PATCH` for a deliberate shared upgrade.
-An existing regular `/usr/local/bin/rr` must be relocated before setup; existing
-symlinks are replaced.
+If the SSH account differs from the sudo user, use `setup --admin-user ubuntu`
+(or `root`). Setup verifies an authorized key before installing packages, then
+validates effective key-only SSH settings before reload. Root can log in with a
+key; passwords, keyboard-interactive authentication, and empty passwords are disabled.
+Conflicting SSH settings fail with restoration of the managed configuration.
+Setup does not create an administrator, attach Pro, reboot, or replace your SSH keys.
 
-Setup preserves existing Caddy configuration and adds a `sites-*.caddy` import.
-It copies missing templates into `/etc/sites/templates`, preserving local edits.
-It creates a missing empty config, enables services, and reloads FPM/Caddy. It
-sets PHP CLI to 8.5, FPM execution time to 60s, post size to 128M, upload size to
-100M, and leaves CLI execution time unlimited. It enables the SSH Fail2ban jail.
+Setup installs and verifies:
 
-Before enabling UFW, setup allows discovered SSH ports, TCP 80/443, and UDP 443.
-For socket-activated SSH, port forwarding, or a nonstandard SSH configuration,
-pass the actual reachable port with `--ssh-port PORT`. Use `--no-firewall` to
-leave UFW unchanged. Setup does not change SSH authentication or create an admin
-login. It does not attach Ubuntu Pro, reboot, or install personal shell plugins.
-Redis and image utilities are included by default; `--no-redis` and `--no-images`
-skip them. Initial setup targets a clean host; rerunning it can upgrade installed
-packages and reload shared services. Runtime upgrades are manual owner actions.
+- PHP 8.5 CLI/FPM with bcmath, curl, gd, imagick, intl, mbstring, mysql, redis,
+  xml, zip, and Excimer. SVG support includes ImageMagick's extra codecs and
+  librsvg, with an actual SVG-to-PNG test that preserves packaged security limits.
+- Node 24 from its signed NodeSource repository, latest compatible npm,
+  npm-check-updates, and SVGO. Global npm installations disable lifecycle scripts.
+- Latest stable Caddy from its signed official repository, latest stable Composer
+  with official SHA256 verification, and latest stable RoadRunner with GitHub's
+  asset SHA256 verification. RoadRunner is shared under `/opt/roadrunner/VERSION/`.
+- Ubuntu MySQL 8.4: loopback binding, local-infile disabled, root socket
+  authentication, and strong password validation. Existing anonymous/remote-root
+  accounts or a test database cause an error for manual review; setup deletes no data.
+- Redis bound to loopback with protected mode, image optimization utilities
+  (gifsicle, jpegoptim, libavif, optipng, pngquant, webp), Git, build/ACL tools,
+  Fail2ban's SSH jail, and unattended security updates.
 
-## Add and deploy Laravel
+UFW preserves discovered sshd/socket/current-connection ports and allows web
+traffic, with incoming denied and outgoing allowed. `--ssh-port PORT` preserves
+an additional SSH port. `--no-firewall` leaves UFW unchanged; `--no-redis` and
+`--no-images` skip those optional packages. PHP-FPM gets execution/post/upload
+limits of 60s/128M/100M; CLI execution remains unlimited, and PHP exposure is disabled.
 
-Clone the project into its own directory under `/srv/apps`. This example uses a
-public HTTPS repository; for your private repositories, set up the shared VPS
-key and use `sites clone` as shown below. Replace the URL and domain with yours:
+Setup copies missing templates to `/etc/sites/templates`, preserving local edits,
+and preserves the existing Caddyfile. Rerunning can upgrade packages and restart
+shared services. `--roadrunner-version YEAR.MAJOR.PATCH` selects a specific release.
+Setup is not one transaction: package/runtime changes may remain after an error.
+Keep host and database backups, and retry after resolving the reported failure.
 
-```sh
-sudo git clone https://github.com/OWNER/PROJECT.git /srv/apps/mango-api
-sudo sites register --name mango-api --dir /srv/apps/mango-api \
-  --type laravel --domain api.example.com --web-driver octane \
-  --octane-workers 2 --queue-workers 2 --scheduler
-sudo sites database mango-api --show
-sudo cp /srv/apps/mango-api/.env.example /srv/apps/mango-api/.env
-sudoedit /srv/apps/mango-api/.env
-sudo sites deploy mango-api --no-pull
-```
-
-Registration creates `sites-mango-api`, gives it ownership of the clone, reserves
-only required ports, and creates a dedicated MySQL database and localhost user.
-Only that database receives privileges, without `GRANT OPTION`. Credentials are
-saved as root-readable files under `/var/lib/sites/credentials/` and
-`/var/lib/sites/databases/`; they are never stored in TOML or printed unless
-`database APP --show` is used. Keep the state directory backed up: it records
-ownership and the password needed for retrying a partial database creation.
-The generated password includes 256 random bits and mixed character classes.
-
-Prepare `.env` with production application settings, generated database values,
-and any mail/storage/Nightwatch secrets. Deployment verifies that managed DB
-values match. Use `--no-database` during registration to use an existing database
-instead. The tool refuses to adopt an existing MySQL database/account or an
-existing Ubuntu user without its own ownership record. No database import,
-password reset, or database deletion is performed.
-
-For PHP-FPM, register with `--web-driver fpm` (the default). It gets an `ondemand`
-pool with five children and a Unix socket accessible to Caddy. No TCP port is
-reserved. App users are system accounts with login disabled and private homes
-under `/var/lib/sites-users/`. A `--user` override must still be a new dedicated
-account. No manual user creation is needed. Caddy receives ACL access to public
-assets; `.env` is mode 600 and the project root is private to its user plus Caddy
-traversal access. Public upload directories receive inherited read ACLs.
-
-## Add and deploy Nuxt
-
-The same process works for Medfolio SSR and Mango's `ssr: false` SPA:
-
-```sh
-sudo git clone https://github.com/OWNER/NUXT-PROJECT.git /srv/apps/mango-web
-sudo sites register --name mango-web --dir /srv/apps/mango-web \
-  --type nuxt --domain web.example.com
-# Prepare .env if the project requires it.
-sudo sites deploy mango-web --no-pull
-```
-
-Nuxt gets one HTTP port, a systemd service running
-`node --env-file-if-exists=.env .output/server/index.mjs`, and a Caddy reverse proxy.
-The service binds to loopback with `NITRO_HOST` and `NITRO_PORT`. Static generation
-is outside this version; there is no SSR/static mode flag or separate static
-service template.
-
-## One VPS key for private GitHub repositories
-
-Create the shared VPS identity once, or import an existing unencrypted private
-key with `sudo sites git setup --key /home/ubuntu/.ssh/id_ed25519`:
+## One key for private GitHub repositories
 
 ```sh
 sudo sites git setup
 ```
 
-Copy the printed public key into your **GitHub account → Settings → SSH and GPG
-keys → New SSH key**, choosing **Authentication Key**. Add it to your account
-once; there is no separate key per repository. See
-[GitHub's account SSH key instructions](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account).
-Rerunning the command prints the same public key without replacing the private
-key. An import cannot overwrite an existing different shared identity.
+Add the printed public key once to **GitHub account → Settings → SSH and GPG keys
+→ New SSH key → Authentication Key**. Reruns reuse the identity. To import an
+existing unencrypted key instead, use `git setup --key /home/ubuntu/.ssh/id_ed25519`.
+The root-owned shared identity is readable only by managed app users through ACLs;
+Git commands select it explicitly and strictly verify GitHub's host key.
+Apps share its account permissions, including repository write access where granted.
+Private Composer/npm packages outside the app repository need their own credentials.
 
-Then clone using SSH URLs:
+## Register and deploy
+
+For Laravel, replace the repository, name, and domain:
 
 ```sh
-sudo sites clone git@github.com:FaridAghili/mango-web.git /srv/apps/mango-web
-sudo sites register --name mango-web --dir /srv/apps/mango-web \
-  --type nuxt --domain mango.example.com
+sudo sites clone git@github.com:OWNER/PROJECT.git /srv/apps/api
+sudo sites register --name api --dir /srv/apps/api --type laravel \
+  --domain api.example.com --alias www.api.example.com --web-driver octane \
+  --octane-workers 2 --queue-workers 2 --scheduler
+sudo sites database api --show
+sudo install -m 600 /srv/apps/api/.env.example /srv/apps/api/.env
+sudoedit /srv/apps/api/.env
+sudo sites deploy api --no-pull
+sudo sites status api
+```
+
+Copy the generated database values into `.env`, together with production settings
+and your application's secrets. Registration creates `sites-api` and a scoped
+MySQL database/user without global privileges. Credentials remain root-readable
+under `/var/lib/sites/`; they are revealed only with `database APP --show`.
+Use `--no-database` during registration for an existing database. For PHP-FPM,
+use `--web-driver fpm` (default); it uses a Unix socket and needs no TCP port.
+
+Nuxt works the same for SSR and `ssr: false`:
+
+```sh
+sudo sites clone git@github.com:OWNER/NUXT-PROJECT.git /srv/apps/web
+sudo sites register --name web --dir /srv/apps/web --type nuxt --domain example.com
 # Prepare the project's .env if required.
-sudo sites deploy mango-web --no-pull
-# Subsequent deployments pull from GitHub first:
-sudo sites deploy mango-web
+sudo sites deploy web --no-pull
 ```
 
-Use **Set up shared GitHub key** and **Clone application** for the same operations
-in the TUI. Clone requires a new directory directly under `--apps-dir` and does
-not register or deploy it. A failed clone is reported; an existing destination
-is never overwritten. Existing clones must have an SSH remote, for example:
+After the first deployment, `sudo sites deploy api` pulls with `git pull --ff-only`.
+`deploy APP...` runs sequentially; `deploy --all` selects every app. Dirty working
+trees are rejected. Commit dependency lockfiles. Commands run as the app user:
 
-```sh
-sudo runuser -u sites-mango-web -- \
-  git -C /srv/apps/mango-web remote set-url origin git@github.com:FaridAghili/mango-web.git
-```
+1. For Nuxt and Laravel with `package.json`: `npm ci --include=dev`, then `npm run build`.
+2. For Laravel: `composer install --no-dev --optimize-autoloader --no-interaction
+   --prefer-dist` and `composer check-platform-reqs --no-dev`.
+3. Initialize a missing Laravel APP_KEY and storage link, clear cached config,
+   run `artisan migrate --force`, then `artisan optimize:clear` and `artisan optimize`.
+4. Render and validate host configuration, start selected services, verify
+   sockets/listeners, reload Caddy, and run the configured optional HTTP health check.
 
-The root-owned identity is stored under `--state-dir/git` (normally
-`/var/lib/sites/git`). The manager grants only managed app users read access to
-this key and traversal access to its directory, using filesystem ACLs. Other
-state files remain private. Git commands automatically select the shared key
-with strict verification against
-[GitHub's published host key](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints).
-Removing an app revokes its access before deleting the user, including protection
-against UID reuse. Composer/npm/build/Artisan still run as each app's own user.
-Without a shared identity, existing per-app Git/SSH credentials continue to work.
+Laravel's frontend build must work before `vendor/` exists on a fresh clone.
+Composer/npm packages and scripts must already declare the needed dependencies.
+No custom `deploy.sh` is used. Laravel runs with production environment and debug off.
+Deployments are **in place with downtime**; failures are reported and can leave
+an app disabled. Code/schema rollback is not automatic. Private deployment
+logs and results are stored under `/var/lib/sites/deployments/`.
 
-All managed apps share this key's GitHub account permissions, including write
-access where your account has it. Back up the shared identity privately with the
-state directory. Private Composer/npm dependencies need their own credentials
-if they live outside the application repository; this identity is selected for
-the manager's Git commands.
+Additional Laravel components: `--nightwatch` needs its package/token;
+`--inertia-ssr` needs an SSR bundle built by the project's build command that
+honors `process.env.SSR_PORT`. The manager supplies `INERTIA_SSR_URL`.
+Queue timeout is 60s; set Laravel's `retry_after` above that. The scheduler uses
+a systemd timer. No manual worker/service startup is required for selected components.
 
-## Standard deployment commands
-
-`deploy APP...` deploys sequentially; `deploy --all` selects all registered apps.
-Flags also work after an app name. Deployments reject dirty Git working trees,
-run `git pull --ff-only` unless `--no-pull` is specified, and then execute:
-
-- Nuxt, and Laravel projects with `package.json`: `npm ci --include=dev`, then
-  `npm run build`. Build tools require dev dependencies even in production.
-- Laravel: `composer install --no-dev --optimize-autoloader --no-interaction
-  --prefer-dist`, then `composer check-platform-reqs --no-dev`.
-- Laravel initialization: generate `APP_KEY` only when absent, clear cached
-  configuration, and create `public/storage` only when absent. Existing keys
-  and uploads remain intact.
-- Laravel: `php8.5 artisan migrate --force --no-interaction`, then
-  `php8.5 artisan optimize:clear --no-interaction` and
-  `php8.5 artisan optimize --no-interaction`. Application caches are cleared
-  after migrations so the first deployment can create the database cache table.
-- Render/validate configuration, start services, verify sockets/listeners,
-  reload Caddy, and perform the optional HTTP health check.
-
-Laravel frontend builds must work before `vendor/` is installed on a fresh clone;
-any build script that invokes Artisan needs adjusting for this order. Laravel
-projects without `package.json` skip npm.
-
-Composer and npm lockfiles must be committed. Commands run as the app user,
-including Git. Configure the shared VPS key once as described above, or supply
-per-app credentials if no shared key is configured. Use `--no-pull` for the
-initial clone or an intentionally prepared checkout.
-Projects must already declare Octane/RoadRunner or other selected Composer
-packages; the manager installs locked dependencies without editing requirements.
-Nuxt's `.env` is read by Node at runtime as well as by Nuxt at build time.
-
-Deployment is **in place with downtime**: managed routing/services are disabled
-before pulling or replacing code. A failed deployment stops immediately and
-leaves the app disabled, or reports a failed health check after startup. Code and
-schema rollback are not automatic. Private logs/history record the commit,
-timestamps, and outcome under `/var/lib/sites/deployments/`. No `deploy.sh` or shell
-hooks are executed. Laravel always runs with production
-`APP_ENV` and debug disabled through the managed environment.
-Octane also receives `OCTANE_HTTPS=true` for direct HTTPS through Caddy.
-
-## Manage services
-
-```sh
-sudo sites enable mango-api
-sudo sites status mango-api
-sudo sites status
-sudo sites restart mango-api
-sudo sites restart mango-api web
-sudo sites restart mango-api queue
-sudo sites logs mango-api queue --follow
-sudo sites disable mango-api
-sudo sites remove mango-api
-```
-
-`enable` reconciles generated files and component counts. Caddy and FPM config
-are validated before reload. Ordinary configuration failures restore prior files
-and services; a failed restoration returns an error and retains recovery state.
-Reconciliation and backend switching can interrupt requests; no zero-downtime
-switch is promised. `restart APP` performs reconciliation; selecting a component
-restarts only that component. FPM `web` restart reloads the shared FPM master.
-Its journal is shared across pools. Status returns systemd's nonzero result for
-inactive/failed services. Queue services allow 120s to stop and use a 60s worker
-timeout; set Laravel's queue `retry_after` above this timeout.
-
-`disable` retains users/databases/ports. `remove` stops services, verifies that
-ports are free and the owned user has no remaining processes, removes managed
-configuration and the Ubuntu account, then unregisters and releases ports.
-It preserves the clone, `.env`, uploads, home directory, MySQL accounts/databases,
-and credentials. Draining FPM requests can delay removal; retry once they finish.
-Retained project/home files become root-owned before account deletion, so a
-reused Linux UID cannot read their secrets. Registration restores ownership.
-An interrupted removal may leave conservative orphan reservations; errors are
-reported and `doctor` detects them. Accounts/files with changed identities or
-unmanaged content are refused.
-
-Repeated `--alias DOMAIN` adds permanent HTTPS redirects to the main domain;
-`--serving-domain DOMAIN` serves the same app on additional names. Direct HTTPS
-uses public ACME certificates with working DNS and reachable ports. Wildcard
-metadata may be stored with `--config-only`, but enabling it returns an error:
-DNS challenge plugins and credentials are not implemented.
-
-Optional Laravel flags: `--nightwatch`, `--inertia-ssr`, `--queue-workers N`,
-`--scheduler`. Nightwatch needs its package and token in `.env`. Inertia needs a
-built SSR bundle that explicitly uses `process.env.SSR_PORT` for its port; the
-manager also supplies `INERTIA_SSR_URL`. Startup fails if it does not listen on
-the reserved port. Inertia's stock server may bind all interfaces: keep UFW
-restricted to SSH/web and configure loopback in the application where supported.
-RoadRunner HTTP/RPC and Nuxt bind explicitly to loopback.
-
-## Configuration and state
-
-Defaults: `/etc/sites/config.toml`, `/var/lib/sites/`, `/etc/sites/templates/`,
-and `/srv/apps/`. Override them with `--config`, `--state-dir`, `--templates-dir`,
-`--apps-dir`. Host commands still require root on Ubuntu 26.04 AMD64; alternate
-paths do not bypass platform checks. See [examples/config.toml](examples/config.toml).
-TOML uses maintained [go-toml v2](https://github.com/pelletier/go-toml). Unknown
-keys, duplicates, shared runtime users, overlapping project trees, and invalid
-component combinations are rejected.
-
-**Migration from the original milestone:** remove `[apps.nuxt] mode = ...` and
-`deploy_file` entries. Each Nuxt app now needs a `nuxt-http` reservation, including
-formerly static apps. Change pre-existing runtime user names to unused dedicated
-accounts if necessary, then run `ports --allocate`. The `--nuxt-mode` and
-`--deploy-file` flags no longer exist. Original release `v0.1.0` assets are older;
-use the workflow artifact for this implementation until a new release is published.
-
-| Component | Reserved endpoint |
+| Component | Stable reserved ports |
 | --- | --- |
-| Octane | `octane-http`, `roadrunner-rpc` |
-| Nuxt | `nuxt-http` |
-| Inertia SSR | `inertia-ssr` |
-| Nightwatch | `nightwatch-ingest` |
-| FPM, queue, scheduler | No TCP ports |
+| Octane | HTTP and RoadRunner RPC |
+| Nuxt | HTTP |
+| Inertia SSR | SSR |
+| Nightwatch | Ingest |
+| FPM, queue, scheduler | None |
 
-Registration supports `--port ENDPOINT=PORT` to import free assignments. Automatic
-range defaults to 10000–19999. Assignments remain stable across deployment,
-disabling, and range changes. Locks and atomic writes protect portable state.
-A host-operation lock serializes setup/deploy/lifecycle commands. Lock acquisition
-waits at most 10s; locks release on process exit. Leave permanent lock files in place.
-All generated files carry an ownership marker and paths use a `sites-` prefix.
-Multiple files and host commands cannot be one atomic transaction; interrupted
-operations retain state/resources for inspection and retry. Registration can
-persist before a later permission/database step fails; use `database APP` or
-`enable APP` to finish preparation, rather than duplicate-registering it.
+RoadRunner and Nuxt bind to loopback. Inertia's server must honor its assigned
+port; configure loopback in the application where supported and keep UFW restricted.
+Assignments survive deploy/disable and are released on removal. The default
+allocation range is 10000–19999; `register --port ENDPOINT=PORT` imports free ports.
 
-`doctor` remains a portable configuration/registry/port check. It does not identify
-which process owns a port, so a running managed listener is reported as occupied.
-Use `status`, `logs`, and the optional deployment health check for a running app.
-
-## Checks and distribution
+## Manage applications
 
 ```sh
+sudo sites                  # Interactive menu; also: sites tui
+sudo sites list
+sudo sites ports
+sudo sites status
+sudo sites restart api      # Or: restart api web / queue / scheduler / nightwatch / inertia-ssr
+sudo sites logs api queue --follow
+sudo sites disable api
+sudo sites enable api
+sudo sites remove api
+```
+
+The menu offers setup, shared Git identity, clone, registration, deploy, services,
+database, and portable checks. Arrows navigate; `/` searches; Tab moves between
+form fields; Space toggles; Esc goes back. Confirmations default to Cancel.
+
+Repeated `--alias DOMAIN` redirects to the main domain; `--serving-domain DOMAIN`
+serves the same app without redirect. Unrelated apex/subdomain apps are independent.
+Wildcard domains are unsupported. Change aliases/components/health checks later by
+editing TOML, validating, allocating any new ports, and reconciling:
+
+```sh
+sudoedit /etc/sites/config.toml
+sudo sites config validate
+sudo sites ports --allocate
+sudo sites enable api
+```
+
+Keep app names/users/directories fixed after registration; those identify owned
+resources. `disable` retains users/databases/ports. `remove` deletes only recorded
+managed host files and the app user, revokes shared-key access, and releases ports.
+It preserves projects, .env, uploads, homes, MySQL databases/users, and credentials;
+retained files become root-owned to prevent access through UID reuse.
+Back up both application data and `/var/lib/sites`.
+
+Defaults are `/etc/sites/config.toml`, `/var/lib/sites`, `/etc/sites/templates`,
+and `/srv/apps`. Override with `--config`, `--state-dir`, `--templates-dir`, and
+`--apps-dir`. TOML uses maintained go-toml v2 and rejects unknown keys, duplicates,
+overlapping projects, shared users, and invalid components. See
+[examples/config.toml](examples/config.toml). `doctor` checks portable config/state
+and port availability; a running managed port is occupied, so use `status`/`logs`
+to assess live services. Keep permanent lock files; process exit releases locks.
+
+## Development and distribution
+
+Use the Go version in `go.mod`. Host commands require root on Ubuntu 26.04 AMD64;
+macOS can run portable commands and host previews without touching system paths:
+
+```sh
+go build -o bin/sites ./cmd/sites
+work=$(mktemp -d)
+./bin/sites --config "$work/config.toml" --state-dir "$work/state" register \
+  --config-only --name demo --dir /srv/apps/demo --type nuxt --domain demo.example.com
+./bin/sites --config "$work/config.toml" config validate
+./bin/sites --config "$work/config.toml" --state-dir "$work/state" list
+./bin/sites --state-dir "$work/state" ports
+./bin/sites --config "$work/config.toml" --state-dir "$work/state" \
+  --templates-dir ./templates deploy demo --dry-run
+
 gofmt -w cmd internal
 test -z "$(gofmt -l cmd internal)"
 go vet ./...
@@ -374,18 +219,11 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
   -ldflags '-s -w' -o bin/sites-linux-amd64 ./cmd/sites
 ```
 
-GitHub Actions runs formatting/vet/tests, builds the CGO-free Linux AMD64 binary,
-packages it with `templates/`, the example config, and README, generates SHA256,
-and uploads the archive/checksum. It runs on pushes, pull requests, and manual
-runs, using the Go version in `go.mod` and official supported actions.
-A separate disposable Ubuntu job runs setup (without enabling UFW), deploys
-sample Laravel/FPM, shared RoadRunner/Octane, and both SSR/SPA Nuxt apps, checks
-local HTTPS and MySQL, and exercises restart/disable/remove and re-registration.
-It uses localhost certificates and never
-connects to the production server. The same destructive fixture script is
-`scripts/host-smoke.sh`; outside Actions it requires `SITES_HOST_TEST=1` explicitly.
-
-Local tests cover private credentials, partial SQL retry, refusal to adopt accounts,
-configuration rollback, safe removal, failed deployments, and previews alongside
-registry/locking/listener tests. Real host integration is exercised by the Ubuntu
-workflow; it cannot run natively on macOS. Review its result before using a real VPS.
+GitHub Actions runs on push, PR, and manual dispatch with official actions and
+Go from `go.mod`. It checks formatting/vet/tests, packages the Linux AMD64 CGO-free
+executable, standalone `templates/`, example TOML and README, generates SHA256,
+and uploads archive/checksum. Keep templates beside the executable when running
+initial setup. A separate disposable Ubuntu job tests actual setup, SSH key login,
+MySQL, Laravel FPM/Octane, Nuxt SSR/SPA, and lifecycle operations. It never contacts
+production. Review that job before using a VPS. `scripts/host-smoke.sh` changes an
+entire host and requires Actions or explicit `SITES_HOST_TEST=1` on a disposable host.

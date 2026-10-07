@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -21,17 +20,18 @@ import (
 	"sites-manager/internal/services"
 )
 
-const DefaultRoadRunnerVersion = "2025.1.15"
+const DefaultRoadRunnerVersion = "latest"
 
 type SetupOptions struct {
 	RoadRunnerVersion             string
 	SSHPort                       int // Zero discovers ports from the effective sshd configuration.
+	AdminUser                     string
 	NoFirewall, NoRedis, NoImages bool
 	DistributionTemplates         string
 }
 
 func (h Host) Setup(o SetupOptions) error {
-	if !regexp.MustCompile(`^\d{4}\.\d+\.\d+$`).MatchString(o.RoadRunnerVersion) {
+	if o.RoadRunnerVersion != "latest" && !regexp.MustCompile(`^\d{4}\.\d+\.\d+$`).MatchString(o.RoadRunnerVersion) {
 		return fmt.Errorf("invalid RoadRunner version")
 	}
 	if o.SSHPort < 0 || o.SSHPort > 65535 {
@@ -40,24 +40,28 @@ func (h Host) Setup(o SetupOptions) error {
 	return h.locked(func() error {
 		if !h.DryRun {
 			// Discover missing distribution assets before making package changes.
-			if _, err := os.Stat(filepath.Join(o.DistributionTemplates, "nuxt.service.tmpl")); err != nil {
-				return fmt.Errorf("keep the distribution's templates beside its executable: %w", err)
+			if err := requireSetupTemplates(o.DistributionTemplates); err != nil {
+				return err
 			}
 		}
-		if err := h.command("apt-get", "update"); err != nil {
+		admin, err := h.sshPreflight(o.AdminUser)
+		if err != nil {
 			return err
 		}
-		packages := []string{"install", "-y", "ca-certificates", "curl", "gnupg", "git", "unzip", "xz-utils", "acl", "build-essential", "openssh-server", "ufw", "fail2ban", "unattended-upgrades", "composer", "mysql-server", "ncdu"}
-		for _, extension := range []string{"cli", "fpm", "bcmath", "curl", "gd", "imagick", "intl", "mbstring", "mysql", "redis", "xml", "zip"} {
+		if err := h.command("apt-get", "-o", "APT::Update::Error-Mode=any", "update"); err != nil {
+			return err
+		}
+		packages := []string{"install", "-y", "ca-certificates", "curl", "gnupg", "git", "unzip", "xz-utils", "acl", "build-essential", "openssh-server", "ufw", "fail2ban", "unattended-upgrades", "mysql-server", "ncdu", "libmagickcore-7.q16-10-extra", "librsvg2-bin"}
+		for _, extension := range []string{"cli", "fpm", "bcmath", "curl", "gd", "imagick", "intl", "mbstring", "mysql", "redis", "xml", "zip", "excimer"} {
 			packages = append(packages, "php"+services.PHPVersion+"-"+extension)
 		}
 		if !o.NoRedis {
 			packages = append(packages, "redis-server")
 		}
 		if !o.NoImages {
-			packages = append(packages, "imagemagick", "librsvg2-bin", "gifsicle", "jpegoptim", "libavif-bin", "optipng", "pngquant", "webp")
+			packages = append(packages, "imagemagick-7.q16", "gifsicle", "jpegoptim", "libavif-bin", "optipng", "pngquant", "webp")
 		}
-		if _, err := h.run("Install shared Ubuntu packages: "+strings.Join(packages[2:], ", "), Command{Name: "apt-get", Args: packages, Env: []string{"DEBIAN_FRONTEND=noninteractive"}}); err != nil {
+		if _, err := h.run("Install shared Ubuntu packages: "+strings.Join(packages[2:], ", "), Command{Name: "apt-get", Args: append([]string{"-o", "DPkg::Lock::Timeout=120"}, packages...), Env: []string{"DEBIAN_FRONTEND=noninteractive"}}); err != nil {
 			return err
 		}
 		if err := h.command("update-alternatives", "--set", "php", "/usr/bin/php"+services.PHPVersion); err != nil {
@@ -89,24 +93,19 @@ func (h Host) Setup(o SetupOptions) error {
 		if err := h.write("/etc/apt/preferences.d/sites-node", []byte("Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n"), 0644); err != nil {
 			return err
 		}
-		if err := h.command("apt-get", "update"); err != nil {
+		if err := h.command("apt-get", "-o", "APT::Update::Error-Mode=any", "update"); err != nil {
 			return err
 		}
-		if _, err := h.run("Install Caddy and shared Node 24/npm", Command{Name: "apt-get", Args: []string{"install", "-y", "caddy", "nodejs"}, Env: []string{"DEBIAN_FRONTEND=noninteractive"}}); err != nil {
+		if _, err := h.run("Install Caddy and shared Node 24/npm", Command{Name: "apt-get", Args: []string{"-o", "DPkg::Lock::Timeout=120", "install", "-y", "caddy", "nodejs"}, Env: []string{"DEBIAN_FRONTEND=noninteractive"}}); err != nil {
 			return err
 		}
-		if !o.NoImages {
-			if err := h.command("npm", "install", "--global", "--prefix", "/usr/local", "--ignore-scripts", "svgo@4.1.0"); err != nil {
-				return err
-			}
+		if err := h.installNPM(!o.NoImages); err != nil {
+			return err
+		}
+		if err := h.installComposer(); err != nil {
+			return err
 		}
 		if err := h.installRoadRunner(o.RoadRunnerVersion); err != nil {
-			return err
-		}
-		if err := h.write("/etc/php/"+services.PHPVersion+"/fpm/conf.d/99-sites.ini", []byte("; Managed by sites\nmax_execution_time = 60\npost_max_size = 128M\nupload_max_filesize = 100M\nexpose_php = Off\n"), 0644); err != nil {
-			return err
-		}
-		if err := h.write("/etc/php/"+services.PHPVersion+"/cli/conf.d/99-sites.ini", []byte("; Managed by sites\nmax_execution_time = 0\n"), 0644); err != nil {
 			return err
 		}
 		if !h.DryRun {
@@ -130,54 +129,29 @@ func (h Host) Setup(o SetupOptions) error {
 		} else if err != nil {
 			return err
 		}
-		// Preserve the existing Caddyfile. Add exactly one managed import.
-		caddy, err := h.read("/etc/caddy/Caddyfile")
-		if err != nil && !h.DryRun {
-			return err
-		}
-		const importLine = "import /etc/caddy/sites.d/sites-*.caddy"
-		if !strings.Contains(string(caddy), importLine) {
-			caddy = append(caddy, []byte("\n# Sites application configuration\n"+importLine+"\n")...)
-			if err := h.write("/etc/caddy/Caddyfile", caddy, 0644); err != nil {
-				return err
-			}
-		}
-		if err := h.command("caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"); err != nil {
+		if err := h.configureCaddyImport(); err != nil {
 			return err
 		}
 		if err := h.command("systemctl", "enable", "--now", "mysql", "php"+services.PHPVersion+"-fpm", "caddy"); err != nil {
 			return err
 		}
-		if err := h.command("/usr/sbin/php-fpm"+services.PHPVersion, "--test"); err != nil {
+		if err := h.configurePHP(); err != nil {
 			return err
 		}
-		if err := h.command("systemctl", "reload", "php"+services.PHPVersion+"-fpm"); err != nil {
+		if err := h.hardenMySQL(); err != nil {
 			return err
 		}
 		if !o.NoRedis {
-			if err := h.command("systemctl", "enable", "--now", "redis-server"); err != nil {
+			if err := h.configureRedis(); err != nil {
 				return err
 			}
 		}
-		sshPorts := []string{strconv.Itoa(o.SSHPort)}
-		if o.SSHPort == 0 {
-			sshPorts = nil
-			out, err := h.run("Discover effective SSH listening ports", Command{Name: "/usr/sbin/sshd", Args: []string{"-T"}, Private: true})
-			if err != nil {
-				return err
-			}
-			for _, line := range strings.Split(string(out), "\n") {
-				parts := strings.Fields(line)
-				if len(parts) == 2 && parts[0] == "port" {
-					sshPorts = append(sshPorts, parts[1])
-				}
-			}
-			if h.DryRun {
-				sshPorts = []string{"<effective-SSH-port>"}
-			}
-			if len(sshPorts) == 0 {
-				return fmt.Errorf("could not discover SSH port; pass --ssh-port explicitly")
-			}
+		if err := h.hardenSSH(admin); err != nil {
+			return err
+		}
+		sshPorts, err := h.sshPorts(o.SSHPort)
+		if err != nil {
+			return err
 		}
 		if !o.NoFirewall {
 			for _, port := range sshPorts {
@@ -189,6 +163,12 @@ func (h Host) Setup(o SetupOptions) error {
 				if err := h.command("ufw", "allow", rule); err != nil {
 					return err
 				}
+			}
+			if err := h.command("ufw", "default", "deny", "incoming"); err != nil {
+				return err
+			}
+			if err := h.command("ufw", "default", "allow", "outgoing"); err != nil {
+				return err
 			}
 			if err := h.command("ufw", "--force", "enable"); err != nil {
 				return err
@@ -220,6 +200,11 @@ func (h Host) Setup(o SetupOptions) error {
 		if err := h.command("fail2ban-client", "status", "sshd"); err != nil {
 			return err
 		}
+		if err := h.setupConfig("automatic-updates.conf.tmpl", "/etc/apt/apt.conf.d/99-sites-updates", func() error {
+			return h.command("systemctl", "enable", "--now", "apt-daily.timer", "apt-daily-upgrade.timer")
+		}); err != nil {
+			return err
+		}
 		if err := h.command("systemctl", "reload", "caddy"); err != nil {
 			return err
 		}
@@ -233,7 +218,15 @@ func (h Host) Setup(o SetupOptions) error {
 }
 
 func fetch(url string, limit int64) ([]byte, error) {
-	client := &http.Client{Timeout: 2 * time.Minute}
+	if !strings.HasPrefix(url, "https://") {
+		return nil, fmt.Errorf("downloads require HTTPS")
+	}
+	client := &http.Client{Timeout: 2 * time.Minute, CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		if request.URL.Scheme != "https" || len(via) >= 10 {
+			return fmt.Errorf("unsafe or excessive download redirects")
+		}
+		return nil
+	}}
 	request, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -263,12 +256,19 @@ func (h Host) installRoadRunner(version string) error {
 		h.say("Would install /opt/roadrunner/%s/rr and link /usr/local/bin/rr", version)
 		return nil
 	}
-	data, err := fetch("https://api.github.com/repos/roadrunner-server/roadrunner/releases/tags/v"+version, 2<<20)
+	url := "https://api.github.com/repos/roadrunner-server/roadrunner/releases/tags/v" + version
+	if version == "latest" {
+		url = "https://api.github.com/repos/roadrunner-server/roadrunner/releases/latest"
+	}
+	data, err := fetch(url, 2<<20)
 	if err != nil {
 		return err
 	}
 	var release struct {
-		Assets []struct {
+		Tag        string `json:"tag_name"`
+		Draft      bool   `json:"draft"`
+		Prerelease bool   `json:"prerelease"`
+		Assets     []struct {
 			Name   string `json:"name"`
 			URL    string `json:"browser_download_url"`
 			Digest string `json:"digest"`
@@ -277,6 +277,11 @@ func (h Host) installRoadRunner(version string) error {
 	if err := json.Unmarshal(data, &release); err != nil {
 		return err
 	}
+	resolved := strings.TrimPrefix(release.Tag, "v")
+	if release.Draft || release.Prerelease || !regexp.MustCompile(`^\d{4}\.\d+\.\d+$`).MatchString(resolved) || (version != "latest" && resolved != version) {
+		return fmt.Errorf("unexpected or unstable RoadRunner release")
+	}
+	version = resolved
 	name := "roadrunner-" + version + "-linux-amd64.tar.gz"
 	for _, asset := range release.Assets {
 		if asset.Name != name {
@@ -304,11 +309,15 @@ func (h Host) installRoadRunner(version string) error {
 		if info, err := os.Lstat(link); err == nil && info.Mode()&os.ModeSymlink == 0 {
 			return fmt.Errorf("%s is not a symlink; relocate the existing binary before setup", link)
 		}
-		tmp := link + ".sites-new"
+		tmpDir, err := os.MkdirTemp(filepath.Dir(link), ".sites-rr-")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(tmpDir)
+		tmp := filepath.Join(tmpDir, "rr")
 		if err := os.Symlink(binaryPath, tmp); err != nil {
 			return err
 		}
-		defer os.Remove(tmp)
 		if err := os.Rename(tmp, link); err != nil {
 			return err
 		}
@@ -349,8 +358,8 @@ func verifiedRoadRunner(archive []byte, digest string) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if len(binary) < 4 || string(binary[:4]) != "\x7fELF" {
-		return nil, fmt.Errorf("RoadRunner archive has no ELF executable")
+	if len(binary) < 64 || string(binary[:4]) != "\x7fELF" || binary[4] != 2 || binary[5] != 1 || binary[18] != 62 || binary[19] != 0 {
+		return nil, fmt.Errorf("RoadRunner archive has no Linux AMD64 ELF executable")
 	}
 	return binary, nil
 }

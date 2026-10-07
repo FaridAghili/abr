@@ -22,8 +22,26 @@ if [[ ${GITHUB_ACTIONS:-false} == true ]]; then
   printf '[client]\nuser=root\npassword=root\n' | sudo tee /root/.my.cnf >/dev/null
   sudo chmod 600 /root/.my.cnf
 fi
-sites_ci setup --no-firewall --ssh-port 22
-test "$(/usr/local/bin/svgo --version)" = 4.1.0
+# A real key login prerequisite for the disposable host's root test account.
+sudo apt-get install -y openssh-server
+sudo install -d -m 700 /root/.ssh
+sudo install -d -m 755 /run/sshd
+sudo ssh-keygen -t ed25519 -N '' -f /root/.ssh/sites-fixture-ssh >/dev/null
+sudo bash -c 'cat /root/.ssh/sites-fixture-ssh.pub >> /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys'
+sites_ci setup --no-firewall --ssh-port 22 --admin-user root
+/usr/local/bin/svgo --version
+/usr/local/bin/ncu --version
+/usr/local/bin/composer --no-plugins --no-scripts --version
+sudo systemctl start ssh.service
+# The host key exemption is only for this disposable localhost fixture.
+sudo ssh -F /dev/null -i /root/.ssh/sites-fixture-ssh -o IdentitiesOnly=yes \
+  -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  -o ConnectTimeout=10 root@127.0.0.1 true
+sudo /usr/sbin/sshd -T | grep -Fx 'passwordauthentication no'
+sudo /usr/sbin/sshd -T | grep -Fx 'authenticationmethods publickey'
+sudo mysql --protocol=socket --user=root --batch --skip-column-names \
+  -e 'SELECT @@bind_address, @@local_infile;' | grep -Fx $'127.0.0.1\t0'
+sudo redis-cli CONFIG GET bind | grep -Fx '127.0.0.1 -::1'
 # Shared identity tests remain offline: no GitHub account or private repository.
 sites_ci git setup
 sites_ci git setup
