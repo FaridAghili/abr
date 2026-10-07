@@ -42,8 +42,8 @@ jobs:
           cp -R templates dist/package/templates
           cp config.example.toml dist/package/config.example.toml
           cp README.md dist/package/README.md
-          cp -R assets docs dist/package/
-          tar -czf dist/abr-linux-amd64.tar.gz -C dist/package abr templates config.example.toml README.md assets docs
+          cp -R assets dist/package/
+          tar -czf dist/abr-linux-amd64.tar.gz -C dist/package abr templates config.example.toml README.md assets
           cd dist
           sha256sum abr-linux-amd64.tar.gz > abr-linux-amd64.tar.gz.sha256
       - name: Upload distribution

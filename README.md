@@ -1,27 +1,66 @@
-# abr
+![Abr logo](assets/abr-logo.png)
 
-A Go CLI and interactive menu for a clean **Ubuntu 26.04 LTS AMD64** VPS.
+# Abr
+
+**Abr (ابر)** means cloud in Persian. A Go CLI and interactive menu for a clean
+**Ubuntu 26.04 LTS AMD64** VPS.
 Laravel uses PHP-FPM or shared RoadRunner/Octane; Nuxt uses Node for SSR or SPA.
 Caddy serves direct HTTPS. Users, databases, services and ports are managed per app.
 Version remains **0.1.0** during stabilization; development supports macOS ARM64.
 
-Before setup, update/upgrade Ubuntu, install your SSH public key for your existing
-root/sudo account, and **test key login in a second session**. Keep it open. Allow
-SSH, TCP 80/443 and UDP 443 in your provider firewall and point DNS at the VPS.
+## Start with a fresh VPS
 
-Download the archive/checksum from a successful main-branch GitHub Actions run
-and extract the artifact ZIP. The original v0.1.0 release predates host management.
+1. Allow your SSH port, TCP 80/443 and UDP 443 in your provider firewall, and point
+   your app's DNS at the VPS.
 
-```sh
-sha256sum -c abr-linux-amd64.tar.gz.sha256
-mkdir abr-distribution
-tar -xzf abr-linux-amd64.tar.gz -C abr-distribution
-cd abr-distribution
-./abr setup --dry-run
-sudo ./abr setup
-sudo install -m 755 abr /usr/local/bin/abr
-sudo abr
-```
+2. On your computer (macOS/Linux shell), replace the placeholders and install
+   your SSH public key for your existing root/sudo account. If you need a key,
+   first run `ssh-keygen -t ed25519`.
+
+   ```sh
+   VPS_HOST=YOUR_VPS_IP
+   VPS_USER=YOUR_SSH_USER
+   VPS_PORT=22
+   cat ~/.ssh/id_ed25519.pub | ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
+     'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys'
+   ssh -p "$VPS_PORT" -o PasswordAuthentication=no \
+     -o KbdInteractiveAuthentication=no "$VPS_USER@$VPS_HOST"
+   ```
+
+   **Test key login in a second terminal and keep that session open during setup.**
+   Setup requires working key access and disables password login.
+
+3. On the VPS, update Ubuntu. If `/var/run/reboot-required` exists, run
+   `sudo reboot`, then reconnect before continuing.
+
+   ```sh
+   sudo apt-get update
+   sudo apt-get full-upgrade -y
+   ```
+
+4. Download the **abr-linux-amd64** artifact from a successful main-branch run
+   under **Actions → Check and package** in this repository. Extract the ZIP on
+   your computer, then upload its contents from that directory using the
+   variables from step 2. The original v0.1.0 release predates host management.
+
+   ```sh
+   scp -P "$VPS_PORT" abr-linux-amd64.tar.gz abr-linux-amd64.tar.gz.sha256 \
+     "$VPS_USER@$VPS_HOST:"
+   ```
+
+5. On the VPS, verify the archive, run setup and install Abr:
+
+   ```sh
+   cd ~
+   sha256sum -c abr-linux-amd64.tar.gz.sha256
+   mkdir -p abr-distribution
+   tar -xzf abr-linux-amd64.tar.gz -C abr-distribution
+   cd abr-distribution
+   ./abr setup --dry-run --admin-user "$(id -un)"
+   sudo ./abr setup --admin-user "$(id -un)"
+   sudo install -m 755 abr /usr/local/bin/abr
+   sudo abr
+   ```
 
 Keep `templates/` beside the executable during initial setup. Setup installs PHP
 8.5/extensions (including Imagick SVG support and Excimer), Node 24, latest compatible
@@ -31,6 +70,8 @@ security updates. Root key login remains allowed. Use `--admin-user USER` when t
 SSH account differs from the sudo user; `--ssh-port PORT` preserves an additional
 port. `--no-firewall`, `--no-redis`, `--no-images` skip those features. Setup neither
 attaches Ubuntu Pro nor reboots; failed setup can leave package changes in place.
+
+## Deploy apps
 
 For private repositories, use one GitHub account SSH key for the VPS:
 
@@ -79,6 +120,8 @@ are not. Edit `/etc/abr/config.toml` to change settings, then run `abr ports
 --allocate` and `abr enable APP`. `abr remove APP` removes managed services/user
 and reservations while preserving the project, secrets, home and database.
 
+## Database backups and imports
+
 Database backups and imports are available in the menu and CLI:
 
 ```sh
@@ -100,9 +143,25 @@ account, disable client shell/file commands, and can overwrite data. Stop all
 writers first. Failure may leave partial changes; import does not clear extra
 existing tables or restart services. Dumps with foreign DEFINERs may need review.
 
-Runtime templates stay editable under `/etc/abr/templates`; setup preserves
-existing templates. Review/copy updated distribution templates when upgrading.
-Shared settings apply on `abr setup`; app templates on `abr enable/deploy APP`.
+## Templates and runtime settings
+
+Runtime templates stay editable under `/etc/abr/templates`; setup copies missing
+files from the distribution and preserves existing templates. Review/copy updated
+distribution templates when upgrading.
+`--templates-dir` selects another installed template directory. Shared settings
+apply on `abr setup`; app templates on `abr enable APP` or `abr deploy APP`.
+Templates are trusted root configuration; validate edits on a disposable Ubuntu
+host. App templates use Go text/template with validated values and escaped paths.
+Generated files carry ownership markers. Caddy/FPM configurations are validated
+before reload and restored on ordinary configuration failures. Shared
+SSH/MySQL/Redis/PHP/update templates are copied as native configuration.
+
+Nuxt uses one service regardless of SSR settings and loads `.env` with Node's
+`--env-file-if-exists`; Laravel reads `.env` itself. Inertia's bundle must honor
+`SSR_PORT`, and Laravel receives `INERTIA_SSR_URL`. Nightwatch receives its ingest
+endpoint. Octane finds shared RoadRunner through PATH. Queue timeout/shutdown
+grace are 60s/120s; customize these and other limits in the templates.
+
 Defaults suit a modest shared host: MySQL 256 MiB buffer pool/100 connections,
 Redis 256 MiB with **no eviction** and AOF every second, FPM five ondemand children
 per app/recycling every 500 requests, shared OPcache 128 MiB. Measure RAM/workload
@@ -117,7 +176,9 @@ browser caching; HTML/API/SSR responses keep the application's cache policy.
 The packaged welcome page is replaced with a generic 404. Identifying text in
 application bodies must be removed in the application itself.
 
-For portable local development, use temporary paths and `--config-only`:
+## Development
+
+From the repository root on macOS/Linux, use temporary paths and `--config-only`:
 
 ```sh
 task_dir=$(mktemp -d)
