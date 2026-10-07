@@ -104,6 +104,10 @@ if [[ ${GITHUB_ACTIONS:-false} == true ]]; then
   printf '[client]\nuser=root\npassword=root\n' | sudo tee /root/.my.cnf >/dev/null
   sudo chmod 600 /root/.my.cnf
 fi
+# Keep scheduled distribution upgrades from racing our repeated apt installs.
+# This override belongs only to the disposable fixture; setup still writes its
+# production update policy and enables the real systemd timers.
+printf 'APT::Periodic::Enable "0";\n' | sudo tee /etc/apt/apt.conf.d/zz-abr-ci-periodic >/dev/null
 # A real key login prerequisite for the disposable host's root test account.
 sudo apt-get install -y openssh-server
 sudo install -d -m 700 /root/.ssh
