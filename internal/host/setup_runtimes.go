@@ -180,7 +180,7 @@ func (h Host) configurePHP() error {
 }
 
 func requireSetupTemplates(source string) error {
-	for _, name := range []string{"caddy-site.caddy.tmpl", "caddy-admin.service.conf.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "automatic-updates.conf.tmpl"} {
+	for _, name := range []string{"caddy-default.caddy.tmpl", "caddy-site.caddy.tmpl", "caddy-admin.service.conf.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "automatic-updates.conf.tmpl"} {
 		if info, err := os.Stat(filepath.Join(source, name)); err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("missing distribution template %s; keep templates/ beside the executable", name)
 		}
@@ -206,9 +206,25 @@ func (h Host) configureCaddyImport() error {
 	if err != nil && !h.DryRun {
 		return err
 	}
-	changed := !hasDirective(old, directive)
+	// Replace the known packaged welcome page, preserving custom Caddy configurations.
+	lines := []string{}
+	for _, line := range strings.Split(string(old), "\n") {
+		line, _, _ = strings.Cut(line, "#")
+		if strings.Join(strings.Fields(line), " ") != directive {
+			lines = append(lines, line)
+		}
+	}
+	packaged := strings.Join(strings.Fields(strings.Join(lines, " ")), " ") == ":80 { root * /usr/share/caddy file_server }"
+	changed := packaged || !hasDirective(old, directive)
 	if changed {
-		data := append(append([]byte(nil), old...), []byte("\n# Sites application configuration\n"+directive+"\n")...)
+		base := old
+		if packaged {
+			base, err = os.ReadFile(filepath.Join(h.TemplatesDir, "caddy-default.caddy.tmpl"))
+			if err != nil {
+				return err
+			}
+		}
+		data := append(append([]byte(nil), base...), []byte("\n# Sites application configuration\n"+directive+"\n")...)
 		if err := h.write(path, data, 0644); err != nil {
 			return err
 		}

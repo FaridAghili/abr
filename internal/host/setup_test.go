@@ -337,3 +337,42 @@ func TestRedisConvertsLiveDatasetBeforeConfigAndRestart(t *testing.T) {
 		}
 	}
 }
+
+func TestCaddyReplacesOnlyPackagedWelcomeAndRestoresInvalidReplacement(t *testing.T) {
+	const path = "/etc/caddy/Caddyfile"
+	h, r := setupFixture(t)
+	stock := []byte("# Packaged welcome\n:80 {\n root * /usr/share/caddy\n file_server\n}\n")
+	if err := h.write(path, stock, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.configureCaddyImport(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := h.read(path)
+	if strings.Contains(string(data), "/usr/share/caddy") || !strings.Contains(string(data), "header -Server") || !strings.Contains(string(data), "respond 404") {
+		t.Fatal(string(data))
+	}
+	if err := h.configureCaddyImport(); err != nil {
+		t.Fatal(err)
+	}
+	repeated, _ := h.read(path)
+	if !bytes.Equal(data, repeated) {
+		t.Fatal("default configuration not idempotent")
+	}
+	if err := h.write(path, stock, 0644); err != nil {
+		t.Fatal(err)
+	}
+	r.fail = func(c Command) error {
+		if c.Name == "caddy" {
+			return testExit(1)
+		}
+		return nil
+	}
+	if err := h.configureCaddyImport(); err == nil {
+		t.Fatal("invalid replacement accepted")
+	}
+	restored, _ := h.read(path)
+	if !bytes.Equal(restored, stock) {
+		t.Fatal("original welcome config not restored")
+	}
+}

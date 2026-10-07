@@ -39,6 +39,12 @@ sudo redis-cli SET sites-fixture-persist survives-setup >/dev/null
 sudo redis-cli SAVE >/dev/null
 sites_ci setup --no-firewall --ssh-port 22 --admin-user root
 sudo redis-cli GET sites-fixture-persist | grep -Fx survives-setup
+fixture_default_headers=$(mktemp)
+fixture_default_body=$(mktemp)
+curl --silent --show-error http://127.0.0.1/ -D "$fixture_default_headers" -o "$fixture_default_body"
+grep -F '404' "$fixture_default_body"
+if grep -Ei '^server:' "$fixture_default_headers"; then echo 'Default HTTP header leaked' >&2; exit 1; fi
+rm -f "$fixture_default_headers" "$fixture_default_body"
 # Caddy administration is restricted to root and Caddy, not application users.
 sudo test -S /var/lib/caddy/sites-admin.sock
 if curl --silent --max-time 2 http://127.0.0.1:2019/config/ >/dev/null; then
@@ -182,6 +188,16 @@ JSON
   sites_ci deploy "$app" --no-pull
   fixture_https "$app.localhost" -o "$fixture_source/$app.html"
   if [[ $rendering == true ]]; then grep -F 'Sites Nuxt fixture' "$fixture_source/$app.html"; else grep -F '__nuxt' "$fixture_source/$app.html"; fi
+  nuxt_asset=$(sudo find "$dir/.output/public/_nuxt" -type f -name '*.js' -size +511c -print -quit)
+  sudo test -f "$nuxt_asset.br"
+  nuxt_uri=${nuxt_asset#"$dir/.output/public"}
+  curl --fail --silent --insecure --resolve "$app.localhost:443:127.0.0.1" \
+    -H 'Accept-Encoding: br' -D "$fixture_source/nuxt-headers" \
+    "https://$app.localhost$nuxt_uri" -o "$fixture_source/nuxt.br"
+  grep -Ei '^content-encoding: br' "$fixture_source/nuxt-headers"
+  grep -Fi 'Cache-Control: public, max-age=31536000, immutable' "$fixture_source/nuxt-headers"
+  if grep -Ei '^(server|x-powered-by):' "$fixture_source/nuxt-headers"; then echo 'Nuxt identifying header leaked' >&2; exit 1; fi
+  brotli --decompress --stdout "$fixture_source/nuxt.br" | sudo cmp - "$nuxt_asset"
   sites_ci restart "$app" web
 done
 sites_ci ports

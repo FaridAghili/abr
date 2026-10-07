@@ -114,7 +114,8 @@ Caddy strips Server/X-Powered-By headers, compresses dynamic responses with
 [precompressed Brotli](https://caddyserver.com/docs/caddyfile/directives/file_server)
 for built assets generated during deploy. Versioned Vite/Nuxt assets get immutable
 browser caching; HTML/API/SSR responses keep the application's cache policy.
-Identifying text in application bodies must be removed in the application itself.
+The packaged welcome page is replaced with a generic 404. Identifying text in
+application bodies must be removed in the application itself.
 
 For portable local development, use temporary paths and `--config-only`:
 
