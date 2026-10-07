@@ -140,7 +140,7 @@ func TestCanonicalRedirectsPreserveURIAndLeaveSubdomainAppsSeparate(t *testing.T
 						t.Fatal("HTTP redirect does not preserve request method")
 					}
 					if app.Name == "site" {
-						if !strings.Contains(text, a.Aliases[0]+", http://"+a.Aliases[0]+" {") || !strings.Contains(text, "redir https://"+a.Domain+"{uri} 308") || strings.Contains(text, api.Domain) {
+						if !strings.Contains(text, a.Aliases[0]+" {") || !strings.Contains(text, "http://"+a.Aliases[0]+" {") || !strings.Contains(text, "redir https://"+a.Domain+"{uri} 308") || strings.Contains(text, api.Domain) {
 							t.Fatalf("invalid canonical routing: %s", text)
 						}
 					} else if !strings.Contains(text, "api.example.com {") || strings.Contains(text, "www.") || strings.Contains(text, "redir https://example.com") {

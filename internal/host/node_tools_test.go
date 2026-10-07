@@ -91,6 +91,12 @@ func TestNodeToolsInstallUnprivilegedAndRetireOnlyRecordedTree(t *testing.T) {
 	for _, c := range runner.calls {
 		if slices.Contains(c.Args, "--prefix") {
 			installs++
+			stage := c.Args[slices.Index(c.Args, "--prefix")+1]
+			for _, setting := range []string{"NPM_CONFIG_USERCONFIG=" + filepath.Join(stage, ".home/.npmrc"), "NPM_CONFIG_GLOBALCONFIG=" + filepath.Join(stage, ".npmrc-global")} {
+				if !slices.Contains(c.Args, setting) {
+					t.Fatalf("npm configuration is not isolated: %+v", c)
+				}
+			}
 			if c.Name != "runuser" || c.Args[1] != "_apt" || !slices.Contains(c.Args, "--no-new-privs") || !slices.Contains(c.Args, "--ignore-scripts") || c.Dir != "/" {
 				t.Fatalf("privileged package installer: %+v", c)
 			}

@@ -29,10 +29,18 @@ fixture_https() {
   curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 1 \
     --max-time 10 --insecure --resolve "$1:443:127.0.0.1" "https://$1/" "${@:2}"
 }
+fixture_security_headers() {
+  tr -d '\r' < "$1" | grep -Fix 'Strict-Transport-Security: max-age=15768000'
+  tr -d '\r' < "$1" | grep -Fix 'X-Frame-Options: SAMEORIGIN'
+  tr -d '\r' < "$1" | grep -Fix 'X-Content-Type-Options: nosniff'
+  if grep -Ei '^(server|x-powered-by):' "$1"; then echo 'Identifying response header leaked' >&2; exit 1; fi
+}
 fixture_redirect() {
   # Both HTTP and HTTPS must preserve path/query and return method-preserving 308.
   local scheme port redirect_status
-  for scheme in http https; do
+  local schemes=(http https)
+  if [[ ${3:-} == http ]]; then schemes=(http); fi
+  for scheme in "${schemes[@]}"; do
     port=80
     if [[ $scheme == https ]]; then port=443; fi
     redirect_status=$(curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 1 \
@@ -41,6 +49,11 @@ fixture_redirect() {
       --write-out '%{http_code}' "$scheme://$1/preserved/path?x=1&y=2")
     test "$redirect_status" = 308
     tr -d '\r' < "$fixture_source/redirect-headers" | grep -Fix "location: https://$2/preserved/path?x=1&y=2"
+    if [[ $scheme == https ]]; then
+      fixture_security_headers "$fixture_source/redirect-headers"
+    elif grep -Ei '^(strict-transport-security|server|x-powered-by):' "$fixture_source/redirect-headers"; then
+      echo 'Unexpected HTTP redirect header' >&2; exit 1
+    fi
   done
 }
 
@@ -183,7 +196,7 @@ sudo tee /srv/apps/fixture-php/routes/web.php >/dev/null <<'PHP'
 <?php
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
-Route::get('/', fn () => response('Laravel fixture database='.DB::select('SELECT 1 AS ok')[0]->ok)->header('X-Powered-By', 'fixture-runtime'));
+Route::get('/', fn () => response('Laravel fixture database='.DB::select('SELECT 1 AS ok')[0]->ok)->withHeaders(['X-Powered-By' => 'fixture-runtime', 'Strict-Transport-Security' => 'max-age=0', 'X-Frame-Options' => 'DENY', 'X-Content-Type-Options' => 'fixture-invalid']));
 Route::get('/php-config', fn () => response()->json(['expose_php' => ini_get('expose_php'), 'display_errors' => ini_get('display_errors'), 'opcache' => ini_get('opcache.enable'), 'unprivileged' => posix_geteuid() !== 0, 'no_new_privs' => (bool) preg_match('/^NoNewPrivs:\s+1$/m', file_get_contents('/proc/self/status'))]));
 PHP
 
@@ -195,7 +208,7 @@ fixture_git() {
   sudo git -C "$1" commit --no-gpg-sign -m 'Fixture'
 }
 fixture_git /srv/apps/fixture-php
-abr_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --canonical-host non-www --scheduler
+abr_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --serving-domain extra.fixture-php.localhost --canonical-host non-www --scheduler
 # Fresh accounts must not access a foreign database whose name would match an
 # unescaped underscore in a database grant.
 sudo mysql --protocol=socket --user=root <<'SQL'
@@ -232,8 +245,9 @@ for private_uri in /.env /.env.production /.git/config; do
   sudo mkdir -p "/srv/apps/fixture-php/public$(dirname "$private_uri")"
   printf 'private fixture data' | sudo tee "/srv/apps/fixture-php/public$private_uri" >/dev/null
   private_status=$(curl --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
-    --write-out '%{http_code}' --output "$fixture_source/private-response" "https://fixture-php.localhost$private_uri")
+    --write-out '%{http_code}' -D "$fixture_source/private-headers" --output "$fixture_source/private-response" "https://fixture-php.localhost$private_uri")
   test "$private_status" = 404
+  fixture_security_headers "$fixture_source/private-headers"
   if grep -F 'private fixture data' "$fixture_source/private-response"; then
     echo 'Private static file was exposed' >&2; exit 1
   fi
@@ -241,6 +255,11 @@ for private_uri in /.env /.env.production /.git/config; do
 done
 sudo rmdir /srv/apps/fixture-php/public/.git
 fixture_redirect www.fixture-php.localhost fixture-php.localhost
+for serving_domain in fixture-php.localhost extra.fixture-php.localhost; do
+  fixture_redirect "$serving_domain" "$serving_domain" http
+  fixture_https "$serving_domain" -D "$fixture_source/serving-headers" >/dev/null
+  fixture_security_headers "$fixture_source/serving-headers"
+done
 sudo test -S /run/php/abr-fixture-php.sock
 sudo test "$(sudo stat -c '%a' /srv/apps/fixture-php/.env)" = 600
 sudo test "$(sudo stat -c '%a' /var/lib/abr-ci/credentials/fixture-php.env)" = 600
@@ -261,7 +280,7 @@ if abr_ci database import fixture-php /var/lib/abr-ci/shell.sql --yes; then echo
 sudo test ! -e /var/lib/abr-ci/import-shell-executed
 abr_ci enable fixture-php
 fixture_https fixture-php.localhost --dump-header "$fixture_source/headers" >/dev/null
-if grep -Ei '^(server|x-powered-by):' "$fixture_source/headers"; then echo 'Identifying response header leaked' >&2; exit 1; fi
+fixture_security_headers "$fixture_source/headers"
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"opcache":"1"'
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"unprivileged":true,"no_new_privs":true'
 # A generated hashed asset is served with Brotli and immutable caching.
@@ -273,6 +292,7 @@ curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
   "https://fixture-php.localhost$asset_uri" -o "$fixture_source/asset.br"
 grep -Ei '^content-encoding: br' "$fixture_source/asset-headers"
 grep -Fi 'Cache-Control: public, max-age=31536000, immutable' "$fixture_source/asset-headers"
+fixture_security_headers "$fixture_source/asset-headers"
 brotli --decompress --stdout "$fixture_source/asset.br" | sudo cmp - "$asset_path"
 for encoding in zstd gzip; do
   curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
@@ -295,11 +315,20 @@ fixture_git /srv/apps/fixture-octane
 abr_ci register --name fixture-octane --dir /srv/apps/fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost --canonical-host www
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-octane/.env.example > /srv/apps/fixture-octane/.env; cat /var/lib/abr-ci/credentials/fixture-octane.env >> /srv/apps/fixture-octane/.env; chmod 600 /srv/apps/fixture-octane/.env'
 abr_ci deploy fixture-octane --no-pull
-fixture_https www.fixture-octane.localhost | grep -F 'Laravel fixture database=1'
+fixture_https www.fixture-octane.localhost -D "$fixture_source/octane-headers" | grep -F 'Laravel fixture database=1'
+fixture_security_headers "$fixture_source/octane-headers"
+fixture_redirect www.fixture-octane.localhost www.fixture-octane.localhost http
 fixture_redirect fixture-octane.localhost www.fixture-octane.localhost
 sudo test ! -f /srv/apps/fixture-octane/rr
 sudo test -x /usr/local/bin/rr
 abr_ci restart fixture-octane web
+# Exercise Caddy's error route while the disposable upstream is unavailable.
+sudo systemctl stop abr-fixture-octane-octane.service
+error_status=$(curl --silent --show-error --insecure --resolve www.fixture-octane.localhost:443:127.0.0.1 \
+  -D "$fixture_source/error-headers" -o /dev/null --write-out '%{http_code}' https://www.fixture-octane.localhost/)
+test "$error_status" = 502
+fixture_security_headers "$fixture_source/error-headers"
+sudo systemctl start abr-fixture-octane-octane.service
 abr_ci database backup fixture-php fixture-octane --output-dir /var/lib/abr-ci/selected-backups
 sudo test "$(sudo find /var/lib/abr-ci/selected-backups -name '*.sql' | wc -l)" = 2
 abr_ci database backup --all --output-dir /var/lib/abr-ci/all-backups
@@ -331,7 +360,9 @@ JSON
   test "$(sudo systemctl show "abr-$app-nuxt.service" --property=NoNewPrivileges --value)" = yes
   nuxt_pid=$(sudo systemctl show "abr-$app-nuxt.service" --property=MainPID --value)
   sudo awk '/^NoNewPrivs:/ {if ($2 != 1) exit 1; found=1} END {if (!found) exit 1}' "/proc/$nuxt_pid/status"
-  fixture_https "$app_domain" -o "$fixture_source/$app.html"
+  fixture_redirect "$app_domain" "$app_domain" http
+  fixture_https "$app_domain" -D "$fixture_source/nuxt-page-headers" -o "$fixture_source/$app.html"
+  fixture_security_headers "$fixture_source/nuxt-page-headers"
   if [[ $rendering == true ]]; then grep -F 'Abr Nuxt fixture' "$fixture_source/$app.html"; else grep -F '__nuxt' "$fixture_source/$app.html"; fi
   nuxt_asset=$(sudo find "$dir/.output/public/_nuxt" -type f -name '*.js' -size +511c -print -quit)
   sudo test -f "$nuxt_asset.br"
@@ -341,7 +372,7 @@ JSON
     "https://$app_domain$nuxt_uri" -o "$fixture_source/nuxt.br"
   grep -Ei '^content-encoding: br' "$fixture_source/nuxt-headers"
   grep -Fi 'Cache-Control: public, max-age=31536000, immutable' "$fixture_source/nuxt-headers"
-  if grep -Ei '^(server|x-powered-by):' "$fixture_source/nuxt-headers"; then echo 'Nuxt identifying header leaked' >&2; exit 1; fi
+  fixture_security_headers "$fixture_source/nuxt-headers"
   brotli --decompress --stdout "$fixture_source/nuxt.br" | sudo cmp - "$nuxt_asset"
   abr_ci restart "$app" web
 done

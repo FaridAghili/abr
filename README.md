@@ -216,6 +216,16 @@ per app/recycling every 500 requests, shared OPcache 128 MiB. Measure RAM/worklo
 and adjust these limits; Redis rejects writes at its limit and crashes can lose
 about one second of writes. PHP error display/version headers are disabled.
 
+Caddy redirects HTTP to HTTPS for every main domain, additional serving domain,
+and redirect alias using method-preserving 308 responses. HTTPS responses,
+including aliases, static files and errors, set six-month HSTS
+(`Strict-Transport-Security: max-age=15768000`). Each managed host gets its own
+policy; it does not force unrelated subdomains onto HTTPS or opt into preload.
+The templates set `X-Frame-Options: SAMEORIGIN` and
+`X-Content-Type-Options: nosniff`, following the
+[Laravel deployment guide](https://laravel.com/docs/13.x/deployment).
+These headers are applied when responses are written, overriding upstream values.
+
 Caddy strips Server/X-Powered-By headers, compresses dynamic responses with
 [zstd/gzip](https://caddyserver.com/docs/caddyfile/directives/encode), and serves
 [precompressed Brotli](https://caddyserver.com/docs/caddyfile/directives/file_server)

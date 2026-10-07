@@ -2,6 +2,9 @@
     header {
         -Server
         -X-Powered-By
+        Strict-Transport-Security "max-age=15768000"
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
     }
     encode zstd gzip
     root * {{quote .AssetRoot}}
@@ -41,6 +44,9 @@
         header {
             -Server
             -X-Powered-By
+            Strict-Transport-Security "max-age=15768000"
+            X-Frame-Options "SAMEORIGIN"
+            X-Content-Type-Options "nosniff"
         }
         respond "{err.status_code}" {err.status_code}
     }
@@ -51,11 +57,18 @@
     redir https://{host}{uri} 308
 }
 {{range .Aliases}}
-{{.}}, http://{{.}} {
+{{.}} {
     header {
         -Server
         -X-Powered-By
+        Strict-Transport-Security "max-age=15768000"
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
     }
+    redir https://{{$.Domain}}{uri} 308
+}
+http://{{.}} {
+    header -Server
     redir https://{{$.Domain}}{uri} 308
 }
 {{end}}

@@ -2,6 +2,8 @@
 
 ## 0.1.0 — initial development version
 
+- Redirect every managed HTTP domain to HTTPS and set six-month HSTS plus
+  Laravel's recommended frame and content-type headers on HTTPS responses.
 - Install shared npm tools without root privileges, freeze the published files,
   and clean staging caches and recorded unused previous installations.
 - Clone repositories without root privileges using a temporary SSH identity;

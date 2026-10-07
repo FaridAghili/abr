@@ -74,7 +74,13 @@ func (h Host) installNodeTools(images bool) (result error) {
 		packages = append(packages, "svgo@latest")
 	}
 	home := filepath.Join(stage, ".home")
-	if _, err := h.unprivileged("_apt", home, "/", map[string]string{"NPM_CONFIG_USERCONFIG": "/dev/null", "NPM_CONFIG_GLOBALCONFIG": "/dev/null"}, false, "/usr/bin/npm", packages...); err != nil {
+	// npm rejects loading the same path as both user and global configuration.
+	// Distinct absent files in the private stage avoid inherited host settings.
+	npmConfig := map[string]string{
+		"NPM_CONFIG_USERCONFIG":   filepath.Join(home, ".npmrc"),
+		"NPM_CONFIG_GLOBALCONFIG": filepath.Join(stage, ".npmrc-global"),
+	}
+	if _, err := h.unprivileged("_apt", home, "/", npmConfig, false, "/usr/bin/npm", packages...); err != nil {
 		return err
 	}
 	// Never follow package symlinks while changing ownership or validating paths.
