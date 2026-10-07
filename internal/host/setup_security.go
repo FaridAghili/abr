@@ -142,6 +142,11 @@ func (h Host) setupConfig(source, target string, apply func() error) (result err
 }
 
 func (h Host) hardenSSH(admin sshAdmin) error {
+	// Package upgrades can remove this runtime directory when SSH is inactive
+	// or socket-activated; sshd's syntax check still requires it.
+	if err := h.command("install", "-d", "-m", "0755", "-o", "root", "-g", "root", "/run/sshd"); err != nil {
+		return err
+	}
 	const path = "/etc/ssh/sshd_config.d/00-sites-hardening.conf"
 	err := h.setupConfig("ssh-hardening.conf.tmpl", path, func() error {
 		if err := h.command("/usr/sbin/sshd", "-t"); err != nil {
