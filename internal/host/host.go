@@ -152,6 +152,15 @@ func (h Host) locked(fn func() error) error {
 	if h.DryRun {
 		return fn()
 	}
+	if err := h.trustedAncestor(h.path(h.Manager.StateDir)); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(h.path(h.Manager.StateDir), 0700); err != nil {
+		return err
+	}
+	if err := h.trustedDirectory(h.path(h.Manager.StateDir)); err != nil {
+		return err
+	}
 	return storage.WithLock(filepath.Join(h.Manager.StateDir, "host.lock"), fn)
 }
 
@@ -194,10 +203,18 @@ func (h Host) write(path string, data []byte, mode os.FileMode) error {
 		h.say("Would write %s (mode %04o)", path, mode)
 		return nil
 	}
+	dirMode := os.FileMode(0700)
 	if mode != 0600 {
-		if err := os.MkdirAll(filepath.Dir(h.path(path)), 0755); err != nil {
-			return err
-		}
+		dirMode = 0755
+	}
+	if err := h.trustedAncestor(filepath.Dir(h.path(path))); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(h.path(path)), dirMode); err != nil {
+		return err
+	}
+	if err := h.trustedDirectory(filepath.Dir(h.path(path))); err != nil {
+		return err
 	}
 	return storage.AtomicWriteMode(h.path(path), data, mode)
 }

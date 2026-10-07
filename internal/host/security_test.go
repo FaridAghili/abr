@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -160,5 +161,50 @@ func TestDeploymentKeepsArtisanAndComposerOutputPrivate(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("deployment did not reach PHP commands")
+	}
+}
+
+func TestGitKeyReadsAreBoundedAndRefuseSpecialFiles(t *testing.T) {
+	dir := t.TempDir()
+	large := filepath.Join(dir, "large")
+	if err := os.WriteFile(large, bytes.Repeat([]byte("x"), (64<<10)+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(large, link); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{large, link, fifo, dir} {
+		if _, err := readGitKey(path); err == nil {
+			t.Fatal("unsafe SSH key accepted", path)
+		}
+	}
+}
+
+func TestManagedWritesRefuseUnsafeParents(t *testing.T) {
+	h, _, _, _ := fixture(t)
+	outside := filepath.Join(h.root, "outside")
+	if err := os.Mkdir(outside, 0755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(h.root, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.write(filepath.Join(link, "new", "file"), []byte("secret"), 0600); err == nil {
+		t.Fatal("wrote through a parent symlink")
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatal("changed symlink target", entries, err)
+	}
+	if err := os.Chmod(outside, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.write(filepath.Join(outside, "file"), []byte("secret"), 0600); err == nil {
+		t.Fatal("wrote into an untrusted directory")
 	}
 }

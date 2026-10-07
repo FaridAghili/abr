@@ -40,12 +40,14 @@ jobs:
           cache-dependency-path: go.sum
       - name: Check formatting
         run: |
-          files=$(gofmt -l $(git ls-files '*.go'))
+          files=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
           if [ -n "$files" ]; then
             echo "Run gofmt on:"
             echo "$files"
             exit 1
           fi
+      - name: Validate workflow
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - name: Vet
         run: go vet ./...
       - name: Test

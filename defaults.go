@@ -8,7 +8,7 @@ import (
 )
 
 // Version is shared by the CLI, TUI and outbound download requests.
-const Version = "0.1.0"
+const Version = "1.0.0"
 
 //go:embed templates/*.tmpl config.example.toml
 var defaults embed.FS

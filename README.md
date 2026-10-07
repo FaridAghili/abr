@@ -6,7 +6,7 @@
 **Ubuntu 26.04 LTS AMD64** VPS.
 Laravel uses PHP-FPM or shared RoadRunner/Octane; Nuxt uses Node for SSR or SPA.
 Caddy serves direct HTTPS. Users, databases, services and ports are managed per app.
-Version remains **0.1.0** during stabilization; development supports macOS ARM64.
+Version **1.0.0**; development supports macOS ARM64.
 
 ## Start with a fresh VPS
 
@@ -93,6 +93,7 @@ Copy the displayed database credentials into `.env` and set your app secrets.
 Later, `sudo abr deploy api` pulls with `git pull --ff-only`. Apps share the GitHub
 key's permissions; private Composer/npm dependencies may need separate credentials.
 Use `git setup --key /absolute/private-key` to import an existing unencrypted key.
+Imported keys must be regular files without symlinks and no larger than 64 KiB.
 
 Laravel deployment runs **npm ci → npm run build → Composer install → migrations →
 optimization → services**. It generates a missing APP_KEY and storage link. FPM is

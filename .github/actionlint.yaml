@@ -1,0 +1,5 @@
+# GitHub supports Ubuntu 26.04; actionlint's built-in label list lags behind.
+# https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

@@ -64,13 +64,14 @@ func (h Host) project(a config.App) error {
 // A private path under a sticky administrator-owned /tmp is safe for tests and
 // backups. Other writable or foreign-owned ancestors allow path replacement.
 func (h Host) trustedDirectory(path string) error {
+	first := true
 	for {
 		info, err := os.Lstat(path)
 		if err != nil {
 			return err
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !info.IsDir() || !ok || int(stat.Uid) != os.Geteuid() || (info.Mode().Perm()&0022 != 0 && info.Mode()&os.ModeSticky == 0) {
+		if !info.IsDir() || !ok || int(stat.Uid) != os.Geteuid() || (info.Mode().Perm()&0022 != 0 && (first || info.Mode()&os.ModeSticky == 0)) {
 			return fmt.Errorf("directory must have trusted ownership and permissions, without symlinks: %s", path)
 		}
 		parent := filepath.Dir(path)
@@ -78,6 +79,7 @@ func (h Host) trustedDirectory(path string) error {
 			return nil
 		}
 		path = parent
+		first = false
 	}
 }
 

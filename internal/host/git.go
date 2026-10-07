@@ -3,6 +3,7 @@ package host
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -48,12 +49,9 @@ func (h Host) GitSetup(source string) error {
 					return err
 				}
 			} else {
-				data, err := os.ReadFile(source)
+				data, err := readGitKey(source)
 				if err != nil {
 					return err
-				}
-				if len(data) > 64<<10 {
-					return fmt.Errorf("SSH key is too large")
 				}
 				if err := h.write(candidate, data, 0600); err != nil {
 					return err
@@ -115,12 +113,9 @@ func (h Host) publicGitKey(path string) ([]byte, error) {
 // OpenSSH rejects a root-owned identity's ACL mask when root uses it. Root-only
 // operations use a temporary 0600 copy; managed users read the single shared key.
 func (h Host) privateGitCopy(path string) (string, func(), error) {
-	data, err := os.ReadFile(path)
+	data, err := readGitKey(path)
 	if err != nil {
 		return "", nil, err
-	}
-	if len(data) > 64<<10 {
-		return "", nil, fmt.Errorf("SSH key is too large")
 	}
 	dir, err := os.MkdirTemp(h.path(h.Manager.StateDir), ".git-key-*")
 	if err != nil {
@@ -133,6 +128,29 @@ func (h Host) privateGitCopy(path string) (string, func(), error) {
 		return "", nil, err
 	}
 	return key, cleanup, nil
+}
+
+func readGitKey(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 64<<10 {
+		return nil, fmt.Errorf("SSH key must be a regular file of at most 64 KiB")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, (64<<10)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 64<<10 {
+		return nil, fmt.Errorf("SSH key is too large")
+	}
+	return data, nil
 }
 
 func (h Host) gitFile(path string, directory bool) error {
