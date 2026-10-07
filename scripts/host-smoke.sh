@@ -342,9 +342,9 @@ fixture_denied nobody head -c 1 /var/lib/abr-ci/git/id_ed25519
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 
 # Failed preflight must leave the live app and its Git checkout untouched.
-sudo mv /srv/apps/fixture-php/.env /srv/apps/fixture-php/.env.preflight
+sudo mv /srv/apps/fixture-php/.env "$abr_binary_directory/fixture-php.env"
 fixture_refused 'app services were not stopped' deploy fixture-php --no-pull
-sudo mv /srv/apps/fixture-php/.env.preflight /srv/apps/fixture-php/.env
+sudo mv "$abr_binary_directory/fixture-php.env" /srv/apps/fixture-php/.env
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 
 # Fetch an invalid incoming commit from a disposable local remote; no external
