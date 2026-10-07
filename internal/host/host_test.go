@@ -131,6 +131,27 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 			return []byte("loaded\n"), nil
 		}
 	case "runuser":
+		if slices.Contains(c.Args, "mktemp") && c.Args[len(c.Args)-1] == ".abr-env-XXXXXXXXXX" {
+			f, err := os.CreateTemp(c.Dir, ".abr-env-")
+			if err != nil {
+				return nil, err
+			}
+			f.Close()
+			return []byte(filepath.Base(f.Name()) + "\n"), nil
+		}
+		if slices.Contains(c.Args, "tee") && strings.HasPrefix(c.Args[len(c.Args)-1], ".abr-env-") {
+			return nil, os.WriteFile(filepath.Join(c.Dir, c.Args[len(c.Args)-1]), c.Input, 0600)
+		}
+		if slices.Contains(c.Args, "mv") && slices.Contains(c.Args, "-fT") && c.Args[len(c.Args)-1] == ".env" {
+			return nil, os.Rename(filepath.Join(c.Dir, c.Args[len(c.Args)-2]), filepath.Join(c.Dir, ".env"))
+		}
+		if slices.Contains(c.Args, "rm") && strings.HasPrefix(c.Args[len(c.Args)-1], ".abr-env-") {
+			err := os.Remove(filepath.Join(c.Dir, c.Args[len(c.Args)-1]))
+			if os.IsNotExist(err) {
+				err = nil
+			}
+			return nil, err
+		}
 		if slices.Contains(c.Args, "clone") {
 			if err := os.MkdirAll(c.Args[len(c.Args)-1], 0755); err != nil {
 				return nil, err

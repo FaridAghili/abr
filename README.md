@@ -77,16 +77,52 @@ Shared npm tools are installed under `/opt/abr/node-tools` by Ubuntu's `_apt`
 account with package scripts disabled. Root publishes the completed tree and
 links its commands into `/usr/local/bin`; installers retain no write access.
 Setup removes staging caches and retires only a recorded previous installation
-when none of its public tool links still use it.
+when none of its public tool links still use it. After installing Node tools,
+setup runs `ncu -g` and installs any available global upgrades. Ordinary
+`npm -g` and `ncu -g` use the shared installation by default.
+
+For an existing VPS, choose **Server & credentials → Update server**, or run:
+
+```sh
+sudo abr update
+sudo abr update --dry-run
+```
+
+Update refreshes apt indexes, runs `full-upgrade`, `autoremove` and `autoclean`,
+self-updates Composer to its stable release, then runs `ncu -g` and installs all
+reported global npm upgrades, including npm, npm-check-updates and installed
+SVGO. Other installed global packages are preserved and included. Packages
+outside Abr's prefix are installed into the shared prefix when upgrades are
+published; their original files are retained. Package downloads and installs
+still run as `_apt` with scripts disabled. Project dependency lockfiles and app
+code are handled by Deploy. Updates stop on failure; completed apt changes are
+not rolled back, and the server is not rebooted.
 
 ## Deploy apps
 
 Run `sudo abr` for the interactive menu. Forms show one field at a time, with a
 short explanation and example. Use Enter to continue and Shift+Tab to revisit a
 field. Advanced registration settings are optional. **Server & credentials**
-contains VPS setup, shared GitHub/Composer access and the TablePlus admin login; **Tools** contains checks
-and bulk operations. Completed setup, clone and registration steps explain what
-to do next. Destructive imports and full app deletion require confirmation.
+contains VPS setup and updates, shared GitHub/Composer access and the TablePlus admin login; **Tools** contains checks
+and bulk operations. **Set up VPS** asks for a server name (advanced settings
+are optional), installs the tools, automatically creates/reuses and displays the
+GitHub public key, asks for Composer credentials (or lets you skip), and ends
+with the TablePlus MySQL login and password. Press Enter after copying the key
+to continue the same setup workflow.
+
+**Clone application** asks for the repository and app name, detects Laravel
+or Nuxt, and continues directly to registration using that name. Detection uses
+root `artisan` / `nuxt.config.*` files, with Composer and npm dependencies as a
+fallback; unknown or ambiguous projects ask for the framework. Enter the domain
+(**Prefer www** is the TUI default), then choose Laravel's web server, queue
+workers and MySQL. Scheduler, other components and extra domains are optional
+advanced settings. After registration, Abr copies `.env.example` to `.env` if
+absent, fills managed database values, and offers to open it in nano as the app
+user. Save with Ctrl+O, Enter, and exit with Ctrl+X; deployment then starts
+automatically using the cloned checkout. You can also skip the editor and deploy.
+The workflow stops on errors; preview mode does not advance into steps that need
+newly created files. Config-only registration saves settings without deployment.
+Destructive imports and full app deletion require confirmation.
 
 For private repositories, use one GitHub account SSH key for the VPS:
 
@@ -97,14 +133,17 @@ sudo abr clone git@github.com:OWNER/PROJECT.git api
 sudo abr register --name api --type laravel \
   --domain api.example.com --web-driver octane \
   --queue-workers 2 --scheduler
-sudo install -m 600 /srv/apps/api/.env.example /srv/apps/api/.env
-sudo abr database api --show
+sudo abr env api
 sudoedit /srv/apps/api/.env
 sudo abr deploy api --no-pull
 sudo abr status api
 ```
 
-Copy the displayed database credentials into `.env` and set your app secrets.
+`abr env APP` preserves existing `.env` settings and updates managed MySQL values
+without printing secrets. For a new Laravel `.env`, it also sets production mode,
+disables debug and uses the registered HTTPS domain as `APP_URL`. Existing keys
+and app settings are kept; Nuxt projects without an example get an empty `.env`.
+Set your app secrets before deploying.
 Managed MySQL uses `DB_HOST=127.0.0.1` and port 3306. `DB_DATABASE` is the app
 name with hyphens replaced by underscores. `DB_USERNAME` uses the same name up
 to 32 characters; longer usernames are shortened with a hash suffix. Abr adds no

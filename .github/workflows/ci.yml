@@ -18,7 +18,7 @@ jobs:
   build:
     name: Ubuntu checks, build and host test
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -59,8 +59,12 @@ jobs:
           go build -trimpath -ldflags '-s -w' -o dist/abr-linux-amd64 ./cmd/abr
       - name: Setup from a standalone binary and deploy Laravel and Nuxt
         id: host
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: bash scripts/host-smoke.sh dist/abr-linux-amd64
+      - name: Parse all app templates with installed Caddy
+        run: |
+          command -v caddy
+          go test ./internal/services -run '^TestCaddyTemplatesAdapt$' -count=1
       - name: Host diagnostics on failure
         if: failure() && steps.host.outcome == 'failure'
         run: |
@@ -124,5 +128,10 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           sha256sum --check SHA256SUMS
-          gh release create "$RELEASE_TAG" abr-linux-amd64 ./*.tar.gz SHA256SUMS \
-            --verify-tag --title "Abr $RELEASE_TAG" --notes-file release-notes.md --latest
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" abr-linux-amd64 ./*.tar.gz SHA256SUMS --clobber
+            gh release edit "$RELEASE_TAG" --title "Abr $RELEASE_TAG" --notes-file release-notes.md --latest
+          else
+            gh release create "$RELEASE_TAG" abr-linux-amd64 ./*.tar.gz SHA256SUMS \
+              --verify-tag --title "Abr $RELEASE_TAG" --notes-file release-notes.md --latest
+          fi

@@ -154,6 +154,38 @@ fi
 /usr/local/bin/svgo --version
 /usr/local/bin/ncu --version
 /usr/local/bin/composer --no-plugins --no-scripts --version
+# Ordinary global npm/ncu commands must see the manager's shared installation.
+node_global_env=(env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent NPM_CONFIG_USERCONFIG=/nonexistent/user.npmrc NPM_CONFIG_GLOBALCONFIG=/nonexistent/global.npmrc)
+test "$("${node_global_env[@]}" /usr/local/bin/npm prefix --global)" = /opt/abr/node-tools/current
+# Force a real registry-backed SVGO upgrade and include an administrator global.
+# Only disposable CI metadata is changed; no package installer runs as root.
+sudo cp /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin-before-update.json"
+node_native_root=$(sudo env -i PATH=/usr/bin:/bin HOME=/nonexistent NPM_CONFIG_USERCONFIG=/nonexistent/user.npmrc NPM_CONFIG_GLOBALCONFIG=/nonexistent/global.npmrc /usr/bin/npm root --global)
+sudo test ! -e "$node_native_root/is-number"
+sudo mkdir "$node_native_root/is-number"
+printf '{"name":"is-number","version":"6.0.0"}\n' | sudo tee "$node_native_root/is-number/package.json" >/dev/null
+sudo python3 - <<'PYUPDATE'
+import json
+from pathlib import Path
+path = Path('/opt/abr/node-tools/current/lib/node_modules/svgo/package.json')
+package = json.loads(path.read_text())
+package['version'] = '0.0.0'
+path.write_text(json.dumps(package))
+PYUPDATE
+abr_ci update
+sudo cmp /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin-before-update.json"
+sudo redis-cli GET abr-fixture-persist | grep -Fx survives-setup
+/usr/local/bin/composer --no-plugins --no-scripts --version
+/usr/local/bin/svgo --version
+"${node_global_env[@]}" /usr/local/bin/npm list --global --depth=0 --json > "$abr_binary_directory/updated-globals.json"
+python3 - "$abr_binary_directory/updated-globals.json" <<'PYUPDATE'
+import json, sys
+packages = json.load(open(sys.argv[1]))['dependencies']
+assert packages['svgo']['version'] != '0.0.0'
+assert packages['is-number']['version'] == '7.0.0'
+assert 'npm' in packages and 'npm-check-updates' in packages
+PYUPDATE
+# Read-only installed tools remain inaccessible to their installer after updating.
 # Installers must not retain write access to the published shared toolchain.
 fixture_denied _apt touch /opt/abr/node-tools/current/.abr-ci-write-probe
 test "$(stat -Lc '%u:%g:%a' /opt/abr/node-tools/current)" = 0:0:755
@@ -325,8 +357,16 @@ printf 'USE fixtureXliteral; CREATE TABLE forbidden (id INT);\n' | sudo tee /var
 fixture_refused 'import failed; database may be partially changed' database import fixture-literal /var/lib/abr-ci/foreign-literal.sql --yes
 abr_ci remove fixture-literal
 sudo mysql --protocol=socket --user=root -e 'SET GLOBAL partial_revokes=OFF;'
-sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/abr-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
+sudo rm -f /srv/apps/fixture-php/.env
+abr_ci env fixture-php
+sudo test "$(sudo stat -c '%U:%a' /srv/apps/fixture-php/.env)" = abr-fixture-php:600
+sudo grep -Fx 'APP_ENV=production' /srv/apps/fixture-php/.env
+sudo grep -Fx 'APP_DEBUG=false' /srv/apps/fixture-php/.env
 abr_ci deploy fixture-php --no-pull
+sudo cp /srv/apps/fixture-php/.env "$abr_binary_directory/prepared-php.env"
+abr_ci env fixture-php
+sudo cmp /srv/apps/fixture-php/.env "$abr_binary_directory/prepared-php.env"
+test -x /usr/bin/nano
 fixture_caddy_format /etc/caddy/abr.d/abr-fixture-php.caddy
 fixture_denied abr-fixture-php sh -c 'printf overwritten >> /var/lib/abr-ci/composer/auth.json'
 fixture_denied nobody cat /var/lib/abr-ci/composer/auth.json
@@ -452,6 +492,21 @@ grep -Ei '^content-encoding: br' "$fixture_source/asset-headers"
 grep -Fi 'Cache-Control: public, max-age=31536000, immutable' "$fixture_source/asset-headers"
 fixture_security_headers "$fixture_source/asset-headers"
 brotli --decompress --stdout "$fixture_source/asset.br" | sudo cmp - "$asset_path"
+# An existing hashed file can still fail to serve; never cache that error.
+sudo touch /srv/apps/fixture-php/public/build/assets/denied-AbCd1234.css
+sudo chmod 000 /srv/apps/fixture-php/public/build/assets/denied-AbCd1234.css
+asset_error_status=$(curl --silent --show-error --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
+  -D "$fixture_source/asset-error-headers" -o /dev/null --write-out '%{http_code}' \
+  https://fixture-php.localhost/build/assets/denied-AbCd1234.css)
+case "$asset_error_status" in
+  403|404) ;; # Caddy may reject the file matcher before file_server runs.
+  *) echo "Unexpected inaccessible asset status: $asset_error_status" >&2; exit 1 ;;
+esac
+fixture_security_headers "$fixture_source/asset-error-headers"
+if grep -Ei '^cache-control:.*(immutable|max-age=31536000)' "$fixture_source/asset-error-headers"; then
+  echo 'Asset error received immutable caching' >&2; exit 1
+fi
+sudo rm /srv/apps/fixture-php/public/build/assets/denied-AbCd1234.css
 # A stable filename can change on the next deploy and must not be immutable.
 printf 'body { color: black; }\n' | sudo tee /srv/apps/fixture-php/public/build/assets/plain.css >/dev/null
 curl --fail --silent --show-error --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
@@ -479,7 +534,11 @@ sudo cp /srv/apps/fixture-php/routes/web.php /srv/apps/fixture-octane/routes/web
 printf '\n.rr.yaml\n' | sudo tee -a /srv/apps/fixture-octane/.gitignore >/dev/null
 fixture_git /srv/apps/fixture-octane
 abr_ci register --name fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost --canonical-host www
-sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-octane/.env.example > /srv/apps/fixture-octane/.env; cat /var/lib/abr-ci/credentials/fixture-octane.env >> /srv/apps/fixture-octane/.env; chmod 600 /srv/apps/fixture-octane/.env'
+sudo rm -f /srv/apps/fixture-octane/.env
+abr_ci env fixture-octane
+sudo test "$(sudo stat -c '%U:%a' /srv/apps/fixture-octane/.env)" = abr-fixture-octane:600
+sudo grep -Fx 'APP_ENV=production' /srv/apps/fixture-octane/.env
+sudo grep -Fx 'APP_DEBUG=false' /srv/apps/fixture-octane/.env
 abr_ci deploy fixture-octane --no-pull
 fixture_https www.fixture-octane.localhost -D "$fixture_source/octane-headers" | grep -F 'Laravel fixture database=1'
 fixture_security_headers "$fixture_source/octane-headers"
@@ -529,6 +588,8 @@ for rendering in true false; do
   sudo cp -R "$nuxt_source" "$dir"
   fixture_git "$dir"
   abr_ci register --name "$app" --type nuxt --domain "$app_domain"
+  abr_ci env "$app"
+  sudo test "$(sudo stat -c '%U:%a' "$dir/.env")" = "abr-$app:600"
   abr_ci deploy "$app" --no-pull
   fixture_caddy_format "/etc/caddy/abr.d/abr-$app.caddy"
   test "$(sudo systemctl show "abr-$app-nuxt.service" --property=NoNewPrivileges --value)" = yes

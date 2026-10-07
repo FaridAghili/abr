@@ -46,12 +46,14 @@ Commands:
                    --domain HOST --queue-workers N --scheduler=true|false, etc.
   ports            Show reservations (--allocate reconciles config edits)
   doctor           Portable config/registry/port checks
+  update           Upgrade apt packages, clean up, self-update Composer and global npm tools
   setup            Install shared VPS packages, Caddy, Node 24 and RoadRunner
                    Prompts for VPS name; --hostname NAME is scriptable
   git setup        Create/reuse one VPS GitHub SSH key (--key imports an existing key)
   composer auth    Save shared private-package credentials; prompts for email/token
                    --host HOST --username USER --password-stdin is scriptable
   clone URL NAME   Clone a GitHub SSH repository into /srv/apps/NAME
+  env APP          Prepare .env from its example and fill managed MySQL values
   database APP     Create/verify MySQL database (--show prints credentials)
   database --admin TablePlus root connection details (--show prints password)
   database backup APP... | --all --output-dir DIR
@@ -116,7 +118,7 @@ func run(args []string, out, stderr io.Writer) error {
 		command, args = "database "+args[0], args[1:]
 	}
 	switch command {
-	case "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "git setup", "composer auth", "clone", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
+	case "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -242,7 +244,7 @@ func run(args []string, out, stderr io.Writer) error {
 		if (databaseAdmin && len(positional) != 0) || (!databaseAdmin && len(positional) != 1) {
 			return fmt.Errorf("use abr database APP [--show] or abr database --admin [--show]")
 		}
-	case "enable", "disable", "remove", "edit":
+	case "enable", "disable", "remove", "edit", "env":
 		if len(positional) != 1 {
 			return fmt.Errorf("use abr %s APP", command)
 		}
@@ -310,6 +312,8 @@ func run(args []string, out, stderr io.Writer) error {
 		base := []string{"--config", m.ConfigPath, "--state-dir", m.StateDir,
 			"--templates-dir", h.TemplatesDir, "--apps-dir", h.AppsDir,
 			"--dry-run=" + strconv.FormatBool(h.DryRun)}
+		editorHost := h
+		editorHost.Output = io.Discard
 		return tui.Run(tui.Options{
 			Version: version, ConfigPath: m.ConfigPath, StateDir: m.StateDir,
 			TemplatesDir: h.TemplatesDir, AppsDir: h.AppsDir, DryRun: h.DryRun,
@@ -317,6 +321,7 @@ func run(args []string, out, stderr io.Writer) error {
 			RunCommand: func(command []string, output io.Writer) error {
 				return run(append(append([]string(nil), base...), command...), output, output)
 			},
+			EnvEditor: editorHost.EnvEditor,
 			ComposerAuth: func(repository, username, password string, output io.Writer) error {
 				commandHost := h
 				commandHost.Output = output
@@ -426,6 +431,8 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		setup.Hostname = name
 		return h.Setup(setup)
+	case "update":
+		return h.Update()
 	case "database backup":
 		return h.BackupDatabases(positional, backupAll, backupDirectory)
 	case "database import":
@@ -435,6 +442,8 @@ func run(args []string, out, stderr io.Writer) error {
 			return h.MySQLAdmin(show)
 		}
 		return h.Database(positional[0], show)
+	case "env":
+		return h.PrepareEnv(positional[0])
 	case "enable":
 		return h.Enable(positional[0])
 	case "disable":

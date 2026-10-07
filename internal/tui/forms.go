@@ -19,16 +19,19 @@ func textInput(title, description, example string, value *string) *huh.Input {
 }
 
 func (m *model) composerAuthForm() tea.Cmd {
+	return m.composerCredentialsForm(false)
+}
+
+func (m *model) composerCredentialsForm(setup bool) tea.Cmd {
 	m.context, m.notice = "", ""
 	repository := "nova.laravel.com"
 	var username, password string
 	return m.setForm("form", "Shared Composer credentials", func() tea.Cmd {
 		if m.options.ComposerAuth == nil {
-			m.notice = "Composer credential saving is unavailable"
-			return nil
+			return m.workflowError("Save Composer credentials", errors.New("Composer credential saving is unavailable"))
 		}
 		save := m.options.ComposerAuth
-		return m.review(action{
+		a := action{
 			title: "Save shared Composer credentials",
 			args:  []string{"composer", "auth", "--host", repository, "--username", username},
 			note:  fmt.Sprintf("Repository: %s\nAccount: %s\n\nReuse this account for all app deployments. The token stays hidden.", repository, username),
@@ -36,7 +39,12 @@ func (m *model) composerAuthForm() tea.Cmd {
 				defer func() { password = "" }()
 				return save(repository, username, password, output)
 			},
-		})
+		}
+		if setup {
+			a.after = m.setupComplete
+			return m.start(a)
+		}
+		return m.review(a)
 	}, huh.NewGroup(
 		textInput("Repository hostname", "The package server's hostname, without https:// or a path.", "nova.laravel.com", &repository).Validate(required)),
 		huh.NewGroup(textInput("Username / email", "For Nova, enter the email used for your Nova account.", "you@example.com", &username).Validate(required)),
@@ -83,21 +91,29 @@ func (m *model) cloneForm() tea.Cmd {
 	m.context, m.notice = "", ""
 	var repository, name string
 	return m.setForm("form", "Clone application", func() tea.Cmd {
-		return m.review(action{title: "Clone " + name, args: []string{"clone", repository, name}, note: fmt.Sprintf("Repository: %s\nDirectory: %s\n\nClone using the server GitHub key. Register this app by the same name afterward.", repository, filepath.Join(m.options.AppsDir, name))})
+		return m.review(action{title: "Clone " + name, args: []string{"clone", repository, name}, note: fmt.Sprintf("Repository: %s\nDirectory: %s\n\nClone, detect Laravel or Nuxt, then continue directly to registration, .env and deployment.", repository, filepath.Join(m.options.AppsDir, name)), after: func() tea.Cmd { return m.clonedRegistration(name) }})
 	}, huh.NewGroup(
 		textInput("GitHub repository", "Copy the SSH URL from GitHub. Add the server key to GitHub first.", "git@github.com:owner/project.git", &repository).Validate(required)),
 		huh.NewGroup(textInput("Application name", "A short name for this app. Its folder is created automatically.", "example-api", &name).Validate(applicationName)))
 }
 
 func (m *model) registerForm() tea.Cmd {
+	return m.registrationForm("", "", false)
+}
+
+func (m *model) registrationForm(name, detected string, cloned bool) tea.Cmd {
 	m.context, m.notice = "", ""
-	var name, domain, kind, driver, aliases, domains, health string
+	var domain, kind, driver, aliases, domains, health string
 	var configOnly, extra bool
-	canonicalHost := config.CanonicalAsEntered
+	canonicalHost := config.CanonicalWWW
 	workers, queue := "2", "0"
 	kind, driver = "laravel", "fpm"
-	components := []string{"database"}
-	return m.setForm("form", "Register application", func() tea.Cmd {
+	if detected != "" {
+		kind = detected
+	}
+	database := true
+	var components []string
+	next := func() tea.Cmd {
 		args := []string{"register", "--name", name, "--type", kind, "--domain", domain}
 		args = append(args, "--canonical-host", canonicalHost)
 		if extra && configOnly {
@@ -120,53 +136,67 @@ func (m *model) registerForm() tea.Cmd {
 			if driver == "octane" {
 				args = append(args, "--octane-workers", workers)
 			}
-			hasDB := false
-			for _, component := range components {
-				if component == "database" {
-					hasDB = true
-				} else {
+			if extra {
+				for _, component := range components {
 					args = append(args, "--"+component)
 				}
 			}
-			if !hasDB {
+			if !database {
 				args = append(args, "--no-database")
 			}
 		}
-		note := "Register this project and create its app user and selected database. Deploy after preparing .env."
+		note := "Create the app user and selected database, prepare .env from .env.example, offer an editor, then deploy this checkout with npm, Composer and migrations as needed."
 		if extra && configOnly {
 			note = "Save configuration and reserve ports for local development only."
 		}
-		return m.review(action{title: "Register " + name, args: args, note: fmt.Sprintf("Project: %s\nDomain: %s\n\n%s", filepath.Join(m.options.AppsDir, name), domain, note)})
-	}, huh.NewGroup(huh.NewSelect[string]().Title("Application type").Description("Choose the framework used by this project.\nExample: Laravel for a PHP application.").Options(huh.NewOption("Laravel", "laravel"), huh.NewOption("Nuxt", "nuxt")).Value(&kind)),
+		a := action{title: "Register " + name, args: args, note: fmt.Sprintf("Project: %s\nFramework: %s\nDomain: %s\n\n%s", filepath.Join(m.options.AppsDir, name), kind, domain, note)}
+		if !(extra && configOnly) {
+			a.after = func() tea.Cmd { return m.prepareEnvironment(name) }
+		}
+		return m.review(a)
+	}
+	groups := []*huh.Group{huh.NewGroup(huh.NewSelect[string]().Title("Application type").Description("Choose the framework used by this project.\nExample: Laravel for a PHP application.").Options(huh.NewOption("Laravel", "laravel"), huh.NewOption("Nuxt", "nuxt")).Value(&kind)),
 		huh.NewGroup(
 			textInput("Application name", "Use the name you chose when cloning. The project path is automatic.", "example-api", &name).Validate(applicationName)),
 		huh.NewGroup(textInput("Primary domain", "Enter a hostname without https://. Point its DNS to this VPS.", "example.com", &domain).Validate(func(s string) error {
 			a := config.App{Name: "test", Directory: "/srv/test", User: "abr-test", Type: "nuxt", Domain: s}
 			return a.Validate()
 		})),
-		huh.NewGroup(huh.NewSelect[string]().Title("Canonical host").Description("Choose which address visitors should use.\nExample: prefer non-www to redirect www.example.com to example.com.").Options(
+		huh.NewGroup(huh.NewSelect[string]().Title("Canonical host").Description("Choose which address visitors should use.\nExample: prefer www to redirect example.com to www.example.com.").Options(
+			huh.NewOption("Prefer www (default) · redirect non-www", config.CanonicalWWW),
 			huh.NewOption("As entered · no automatic www alias", config.CanonicalAsEntered),
-			huh.NewOption("Prefer www · redirect non-www", config.CanonicalWWW),
 			huh.NewOption("Prefer non-www · redirect www", config.CanonicalNonWWW),
 		).Value(&canonicalHost)),
 		huh.NewGroup(huh.NewSelect[string]().Title("Laravel web server").Description("PHP-FPM is the default. Choose Octane if your app uses it.\nExample: PHP-FPM for a standard Laravel app.").Options(huh.NewOption("PHP-FPM (default)", "fpm"), huh.NewOption("Octane / RoadRunner", "octane")).Value(&driver)).WithHideFunc(func() bool { return kind != "laravel" }),
 		huh.NewGroup(textInput("Octane workers", "How many Octane processes serve requests. Start with 2.", "2", &workers).Validate(workerCount)).WithHideFunc(func() bool { return kind != "laravel" || driver != "octane" }),
 		huh.NewGroup(textInput("Queue workers", "Processes for background jobs. Use 0 if your app has no queue.", "1", &queue).Validate(workerCount)).WithHideFunc(func() bool { return kind != "laravel" }),
-		huh.NewGroup(huh.NewMultiSelect[string]().Height(4).Title("Laravel components").Description("Select only components your app uses.\nExample: database and scheduler for scheduled jobs.").Options(huh.NewOption("MySQL database", "database").Selected(true), huh.NewOption("Scheduler · scheduled jobs", "scheduler"), huh.NewOption("Nightwatch · monitoring", "nightwatch"), huh.NewOption("Inertia SSR · server rendering", "inertia-ssr")).Value(&components)).WithHideFunc(func() bool { return kind != "laravel" }),
+		huh.NewGroup(huh.NewSelect[bool]().Title("MySQL database").Description("Create a dedicated database and fill its values into .env.\nExample: enable MySQL for a Laravel app that stores data.").Options(huh.NewOption("Enable MySQL (default)", true), huh.NewOption("Use my own database", false)).Value(&database)).WithHideFunc(func() bool { return kind != "laravel" }),
 		huh.NewGroup(huh.NewSelect[bool]().Title("Advanced settings?").Description("Most apps can skip these optional settings.\nExample: add an old domain that redirects to your primary domain.").Options(huh.NewOption("Skip (default)", false), huh.NewOption("Configure extras", true)).Value(&extra)),
+		huh.NewGroup(huh.NewMultiSelect[string]().Height(8).Title("Laravel components").Description("Optional services used by this project.\nExample: scheduler for scheduled jobs.").Options(huh.NewOption("Scheduler · scheduled jobs", "scheduler"), huh.NewOption("Nightwatch · monitoring", "nightwatch"), huh.NewOption("Inertia SSR · server rendering", "inertia-ssr")).Value(&components)).WithHideFunc(func() bool { return !extra || kind != "laravel" }),
 		huh.NewGroup(textInput("Redirect domains (optional)", "Comma-separated domains to redirect. Leave blank for none.", "old.example.com, legacy.example.com", &aliases)).WithHideFunc(func() bool { return !extra }),
 		huh.NewGroup(textInput("Extra serving domains (optional)", "Comma-separated domains that serve this app. Leave blank for none.", "shop.example.com, app.example.com", &domains)).WithHideFunc(func() bool { return !extra }),
 		huh.NewGroup(textInput("Health check URL (optional)", "After deployment, check this URL responds successfully. Or leave blank.", "https://example.com/up", &health)).WithHideFunc(func() bool { return !extra }),
-		huh.NewGroup(huh.NewSelect[bool]().Title("Registration mode").Description("Manage this VPS, or save settings for local development only.\nExample: manage host when registering an app on your VPS.").Options(huh.NewOption("Manage host user and selected database", false), huh.NewOption("Config only · portable local development", true)).Value(&configOnly)).WithHideFunc(func() bool { return !extra }))
+		huh.NewGroup(huh.NewSelect[bool]().Title("Registration mode").Description("Manage this VPS, or save settings for local development only.\nExample: manage host when registering an app on your VPS.").Options(huh.NewOption("Manage host user and selected database", false), huh.NewOption("Config only · portable local development", true)).Value(&configOnly)).WithHideFunc(func() bool { return !extra })}
+	if cloned {
+		groups = append(groups[:1], groups[2:]...)
+	}
+	if detected != "" {
+		groups = groups[1:]
+	}
+	return m.setForm("form", "Register application", next, groups...)
 }
 func (m *model) setupForm() tea.Cmd {
 	m.context, m.notice = "", ""
 	ssh := "0"
 	var admin string
 	var hostname string
+	var extra bool
 	rr := m.options.RoadRunnerVersion
 	features := []string{"redis", "images", "firewall"}
 	return m.setForm("form", "Set up VPS", func() tea.Cmd {
+		if !extra {
+			ssh, admin, rr, features = "0", "", m.options.RoadRunnerVersion, []string{"redis", "images", "firewall"}
+		}
 		args := []string{"setup", "--hostname", hostname, "--ssh-port", ssh, "--roadrunner-version", rr}
 		if admin != "" {
 			args = append(args, "--admin-user", admin)
@@ -180,15 +210,15 @@ func (m *model) setupForm() tea.Cmd {
 				args = append(args, "--no-"+f)
 			}
 		}
-		return m.review(action{title: "Set up VPS", args: args, note: "Set Ubuntu's hostname, install server tools and prepare the TablePlus admin login. Enable security updates and key-only SSH. Test your key login in a second session before continuing."})
-	}, huh.NewGroup(textInput("VPS name", "Sets Ubuntu's hostname and labels the GitHub key. Use lowercase letters, digits and hyphens.", "my-vps", &hostname).Validate(config.ValidateHostname)), huh.NewGroup(textInput("SSH administrator (optional)", "Existing account with a tested SSH key. Blank uses the sudo user or root.", "deploy", &admin)), huh.NewGroup(textInput("SSH port", "Use 0 to detect current SSH ports, or enter the port you use.", "22", &ssh).Validate(func(s string) error {
+		return m.review(action{title: "Set up VPS", args: args, note: "Set Ubuntu's hostname, install server tools and prepare the TablePlus admin login. Enable security updates and key-only SSH. Then create/reuse and display the GitHub key, ask for Composer credentials and show the TablePlus MySQL login. Test your key login in a second session before continuing.", run: m.setupRunner(args), continueWith: m.setupComposerChoice})
+	}, huh.NewGroup(textInput("VPS name", "Sets Ubuntu's hostname and labels the GitHub key. Use lowercase letters, digits and hyphens.", "my-vps", &hostname).Validate(config.ValidateHostname)), huh.NewGroup(huh.NewSelect[bool]().Title("Advanced server settings?").Description("Defaults detect your SSH login and install all shared tools.\nExample: configure a specific SSH port.").Options(huh.NewOption("Skip (default)", false), huh.NewOption("Configure extras", true)).Value(&extra)), huh.NewGroup(textInput("SSH administrator (optional)", "Existing account with a tested SSH key. Blank uses the sudo user or root.", "deploy", &admin)).WithHideFunc(func() bool { return !extra }), huh.NewGroup(textInput("SSH port", "Use 0 to detect current SSH ports, or enter the port you use.", "22", &ssh).Validate(func(s string) error {
 		n, e := strconv.Atoi(s)
 		if e != nil || n < 0 || n > 65535 {
 			return errors.New("Enter 0 or a port from 1 to 65535")
 		}
 		return nil
-	})), huh.NewGroup(textInput("RoadRunner version", "Use latest for the current stable runtime, or choose a version.", "latest", &rr).Validate(required)),
-		huh.NewGroup(huh.NewMultiSelect[string]().Height(3).Title("Additional tools").Description("Included by default; deselect tools you do not need.\nExample: keep Redis for caching and queues.").Options(huh.NewOption("Redis", "redis"), huh.NewOption("Image-processing tools", "images"), huh.NewOption("Firewall · SSH and HTTPS", "firewall")).Value(&features)))
+	})).WithHideFunc(func() bool { return !extra }), huh.NewGroup(textInput("RoadRunner version", "Use latest for the current stable runtime, or choose a version.", "latest", &rr).Validate(required)).WithHideFunc(func() bool { return !extra }),
+		huh.NewGroup(huh.NewMultiSelect[string]().Height(8).Title("Additional tools").Description("Included by default; deselect tools you do not need.\nExample: keep Redis for caching and queues.").Options(huh.NewOption("Redis", "redis"), huh.NewOption("Image-processing tools", "images"), huh.NewOption("Firewall · SSH and HTTPS", "firewall")).Value(&features)).WithHideFunc(func() bool { return !extra }))
 }
 
 func (m *model) databaseBackupForm(name string) tea.Cmd {

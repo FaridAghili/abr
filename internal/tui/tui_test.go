@@ -220,7 +220,7 @@ func TestGuidedDefaults(t *testing.T) {
 	m.registerForm()
 	m.next()
 	args := strings.Join(m.current.args, " ")
-	if !strings.Contains(args, "--web-driver fpm") || !strings.Contains(args, "--queue-workers 0") || !strings.Contains(args, "--canonical-host as-entered") || strings.Contains(args, "--no-database") || strings.Contains(args, "--octane-workers") {
+	if !strings.Contains(args, "--web-driver fpm") || !strings.Contains(args, "--queue-workers 0") || !strings.Contains(args, "--canonical-host www") || strings.Contains(args, "--no-database") || strings.Contains(args, "--octane-workers") {
 		t.Fatalf("unexpected Laravel defaults: %s", args)
 	}
 	if m.page != "confirm" || m.approved {
@@ -393,6 +393,11 @@ func TestAdvancedRegistrationFieldsAreOptionalAndDiscardedWhenSkipped(t *testing
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m.form.NextGroup()
+	if !strings.Contains(m.View().Content, "Laravel components") || !strings.Contains(m.View().Content, "Scheduler") {
+		t.Fatalf("advanced components missing: %s", m.View().Content)
+	}
+	press(m, tea.KeySpace) // scheduler
+	m.form.NextGroup()
 	for _, input := range []struct{ title, value string }{
 		{"Redirect domains", "old.example.com"},
 		{"Extra serving domains", "shop.example.com"},
@@ -410,13 +415,13 @@ func TestAdvancedRegistrationFieldsAreOptionalAndDiscardedWhenSkipped(t *testing
 	}
 	// Go back and skip extras after entering them; stale values must not be sent.
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		m.form.PrevGroup()
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	m.next()
 	args := strings.Join(m.current.args, " ")
-	for _, flag := range []string{"--alias", "--serving-domain", "--health-check", "--config-only"} {
+	for _, flag := range []string{"--alias", "--serving-domain", "--health-check", "--config-only", "--scheduler"} {
 		if strings.Contains(args, flag) {
 			t.Fatalf("skipped extras retained %s", flag)
 		}
@@ -441,5 +446,24 @@ func TestDatabaseImportStillRequiresConfirmationAndSimpleMenusKeepActions(t *tes
 	m.toolsMenu()
 	if !strings.Contains(m.View().Content, "Reconcile ports") {
 		t.Fatal("maintenance action was removed")
+	}
+}
+
+func TestServerUpdateMenuReviewsScopeAndUsesCLI(t *testing.T) {
+	o := testOptions(t)
+	called := make(chan []string, 1)
+	o.RunCommand = func(args []string, _ io.Writer) error { called <- args; return nil }
+	m := newModel(o)
+	m.serverMenu()
+	press(m, tea.KeyDown)
+	m.next()
+	if m.page != "confirm" || m.current.title != "Update server" || !strings.Contains(m.current.note, "whole VPS") {
+		t.Fatal("server update did not show its scope for review")
+	}
+	press(m, 'y')
+	press(m, tea.KeyEnter)
+	receive(t, m)
+	if args := <-called; strings.Join(args, " ") != "update" {
+		t.Fatalf("server update used wrong CLI command: %v", args)
 	}
 }

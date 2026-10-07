@@ -1,6 +1,7 @@
 package host
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,20 @@ func (r nodeToolsRunner) Run(c Command) ([]byte, error) {
 	if c.Name == "/usr/bin/node" {
 		return []byte("24.1.0\n"), nil
 	}
+	if c.Name == "runuser" && slices.Contains(c.Args, "prefix") && slices.Contains(c.Args, "--global") {
+		return []byte("/usr\n"), nil
+	}
+	if c.Name == "runuser" && slices.Contains(c.Args, "--jsonUpgraded") {
+		return []byte(`{}`), nil
+	}
+	if c.Name == "runuser" && slices.Contains(c.Args, "list") && slices.Contains(c.Args, "--json") {
+		for _, arg := range c.Args {
+			if prefix, ok := strings.CutPrefix(arg, "NPM_CONFIG_PREFIX="); ok && strings.HasPrefix(filepath.Base(prefix), "release-") {
+				return os.ReadFile(filepath.Join(prefix, ".fake-packages.json"))
+			}
+		}
+		return []byte(`{"dependencies":{"npm":{"version":"12.0.0"}}}`), nil
+	}
 	index := slices.Index(c.Args, "--prefix")
 	if c.Name != "runuser" || index < 0 {
 		return data, nil
@@ -37,7 +52,31 @@ func (r nodeToolsRunner) Run(c Command) ([]byte, error) {
 	if err := os.MkdirAll(filepath.Join(stage, ".home/.npm"), 0700); err != nil {
 		return nil, err
 	}
-	for _, tool := range []string{"npm", "npx", "ncu", "npm-check-updates", "svgo"} {
+	inventory := struct {
+		Dependencies map[string]struct{ Version string } `json:"dependencies"`
+	}{Dependencies: map[string]struct{ Version string }{}}
+	tools := []string{}
+	for _, arg := range c.Args[slices.Index(c.Args, "--no-fund")+1:] {
+		at := strings.LastIndex(arg, "@")
+		name, version := arg[:at], arg[at+1:]
+		if version == "latest" {
+			version = map[string]string{"npm": "12.0.0", "npm-check-updates": "20.0.0", "svgo": "4.0.0"}[name]
+		}
+		inventory.Dependencies[name] = struct{ Version string }{version}
+		switch name {
+		case "npm":
+			tools = append(tools, "npm", "npx")
+		case "npm-check-updates":
+			tools = append(tools, "ncu", "npm-check-updates")
+		default:
+			tools = append(tools, filepath.Base(name))
+		}
+	}
+	data, _ = json.Marshal(inventory)
+	if err := os.WriteFile(filepath.Join(stage, ".fake-packages.json"), data, 0644); err != nil {
+		return nil, err
+	}
+	for _, tool := range tools {
 		path := filepath.Join(stage, "lib", tool+".js")
 		if err := os.WriteFile(path, []byte("#!/usr/bin/env node\n"), 0777); err != nil {
 			return nil, err
@@ -163,5 +202,127 @@ func TestNodeToolsRejectsPrivilegedInstallerAccount(t *testing.T) {
 				t.Fatal("modified files before validating installer", strings.Join(c.Args, " "))
 			}
 		}
+	}
+}
+
+func TestGlobalNodeUpgradeKeepsOptionalAndAdditionalPackages(t *testing.T) {
+	h, runner, _, _ := fixture(t)
+	runner.users["_apt"] = "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"
+	base := nodeToolsRunner{fakeRunner: runner}
+	h.Runner = base
+	if err := h.installNPM(true); err != nil {
+		t.Fatal(err)
+	}
+	previous, _ := h.nodeToolsDirectory()
+	h.Runner = transferRunner{func(c Command) ([]byte, error) {
+		managed := slices.Contains(c.Args, "NPM_CONFIG_PREFIX="+previous)
+		if c.Name == "runuser" && slices.Contains(c.Args, "--jsonUpgraded") {
+			if managed {
+				return []byte(`{"npm":"12.1.0","npm-check-updates":"21.0.0","svgo":"5.0.0"}`), nil
+			}
+			return []byte(`{"@example/tool":"2.0.0"}`), nil
+		}
+		if c.Name == "runuser" && !managed && slices.Contains(c.Args, "list") {
+			return []byte(`{"dependencies":{"npm":{"version":"11.0.0"},"@example/tool":{"version":"1.0.0"}}}`), nil
+		}
+		return base.Run(c)
+	}}
+	if err := h.updateNodeTools(); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := h.nodeToolsDirectory()
+	if current == previous {
+		t.Fatal("global upgrades did not publish a new installation")
+	}
+	data, err := os.ReadFile(filepath.Join(current, ".fake-packages.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"12.1.0", "21.0.0", "5.0.0", "2.0.0"} {
+		if !strings.Contains(string(data), version) {
+			t.Fatalf("global upgrade or package missing: %s", data)
+		}
+	}
+	if target, _ := os.Readlink(h.path("/usr/local/bin/tool")); !strings.HasPrefix(target, current+"/") {
+		t.Fatal("additional global tool was not published")
+	}
+	if _, err := os.Stat(previous); !os.IsNotExist(err) {
+		t.Fatal("recorded previous tree was not retired")
+	}
+}
+
+func TestGlobalNodeUpgradeFailureKeepsPublishedTools(t *testing.T) {
+	for _, failure := range []string{"check", "invalid-json", "unknown-package", "invalid-version", "install"} {
+		t.Run(failure, func(t *testing.T) {
+			h, runner, out, _ := fixture(t)
+			runner.users["_apt"] = "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"
+			base := nodeToolsRunner{fakeRunner: runner}
+			h.Runner = base
+			if err := h.installNPM(false); err != nil {
+				t.Fatal(err)
+			}
+			previous, _ := h.nodeToolsDirectory()
+			h.Runner = transferRunner{func(c Command) ([]byte, error) {
+				if slices.Contains(c.Args, "--jsonUpgraded") {
+					switch failure {
+					case "check":
+						return nil, testExit(1)
+					case "invalid-json":
+						return []byte("failed"), nil
+					case "unknown-package":
+						return []byte(`{"unexpected":"1.0.0"}`), nil
+					case "invalid-version":
+						return []byte(`{"npm":"https://example.invalid/package"}`), nil
+					default:
+						return []byte(`{"npm":"12.1.0"}`), nil
+					}
+				}
+				if failure == "install" && slices.Contains(c.Args, "--prefix") {
+					return nil, testExit(1)
+				}
+				return base.Run(c)
+			}}
+			out.Reset()
+			if err := h.updateNodeTools(); err == nil {
+				t.Fatal("failed global upgrade reported success")
+			}
+			current, _ := h.nodeToolsDirectory()
+			if current != previous || strings.Contains(out.String(), "up to date") {
+				t.Fatal("failed global upgrade changed tools or reported success")
+			}
+			if paths, _ := filepath.Glob(h.path(nodeToolsBase + "/.check-*")); len(paths) != 0 {
+				t.Fatal("global check cache retained")
+			}
+		})
+	}
+}
+
+func TestNodeSetupAppliesReportedGlobalUpgrades(t *testing.T) {
+	h, runner, _, _ := fixture(t)
+	runner.users["_apt"] = "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"
+	base := nodeToolsRunner{fakeRunner: runner}
+	checked := false
+	h.Runner = transferRunner{func(c Command) ([]byte, error) {
+		if slices.Contains(c.Args, "--jsonUpgraded") {
+			checked = true
+			// The freshly installed checker executes after publication.
+			if _, err := h.nodeToolsDirectory(); err != nil {
+				t.Fatal("ncu ran before the installation was recorded and published")
+			}
+			return []byte(`{"npm":"12.1.0","svgo":"5.0.0"}`), nil
+		}
+		return base.Run(c)
+	}}
+	if err := h.installNPM(true); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := h.nodeToolsDirectory()
+	data, err := os.ReadFile(filepath.Join(current, ".fake-packages.json"))
+	if err != nil || !checked || !strings.Contains(string(data), "12.1.0") || !strings.Contains(string(data), "5.0.0") {
+		t.Fatalf("Node setup did not apply global upgrades: %s %v", data, err)
+	}
+	builtin, err := os.ReadFile(filepath.Join(current, "lib/node_modules/npm/npmrc"))
+	if err != nil || !strings.Contains(string(builtin), "prefix="+h.path(nodeToolsBase+"/current")) {
+		t.Fatalf("ordinary global npm commands have the wrong prefix: %v", err)
 	}
 }

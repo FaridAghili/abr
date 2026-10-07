@@ -20,6 +20,26 @@ func invoke(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
+func TestEnvironmentCommandIsScriptableAndPreviewDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state"), "--apps-dir", filepath.Join(dir, "apps")}
+	if _, err := invoke(t, append(paths, "register", "--config-only", "--name", "app", "--type", "laravel", "--domain", "example.com")...); err != nil {
+		t.Fatal(err)
+	}
+	out, err := invoke(t, append(paths, "env", "app", "--dry-run")...)
+	if err != nil || !strings.Contains(out, "Would copy .env.example") {
+		t.Fatalf("environment preview: %s %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "apps", "app", ".env")); !os.IsNotExist(err) {
+		t.Fatal("preview created environment")
+	}
+	for _, args := range [][]string{{"env"}, {"env", "app", "extra"}} {
+		if _, err := invoke(t, append(paths, args...)...); err == nil || !strings.Contains(err.Error(), "use abr env APP") {
+			t.Fatal("environment command accepted invalid arguments")
+		}
+	}
+}
+
 func TestSetupHostnamePromptAndScriptableFlag(t *testing.T) {
 	var prompt bytes.Buffer
 	name, err := setupHostname(strings.NewReader("Invalid name\nmy-vps\n"), &prompt, "", true)
@@ -355,5 +375,25 @@ func TestDatabaseTransferCommandValidationAndPreview(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "backups")); !os.IsNotExist(err) {
 		t.Fatal("preview wrote backup files")
+	}
+}
+
+func TestServerUpdateIsScriptableAndPreviewDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state")
+	out, err := invoke(t, "update", "--dry-run", "--config", filepath.Join(dir, "config.toml"), "--state-dir", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []string{"full-upgrade", "autoremove", "autoclean", "composer self-update", "ncu -g", "no commands executed"} {
+		if !strings.Contains(out, operation) {
+			t.Fatalf("update preview missing %q: %s", operation, out)
+		}
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Fatal("update preview wrote state")
+	}
+	if _, err := invoke(t, "update", "extra", "--dry-run"); err == nil {
+		t.Fatal("update accepted an application argument")
 	}
 }

@@ -71,6 +71,13 @@ func verifySHA256(data []byte, digest string) error {
 }
 
 func (h Host) installNPM(images bool) error {
+	if err := h.verifyNode24(); err != nil {
+		return err
+	}
+	return h.installNodeTools(images)
+}
+
+func (h Host) verifyNode24() error {
 	out, err := h.run("Verify Node 24", Command{Name: "/usr/bin/node", Args: []string{"-p", "process.versions.node"}, Private: true})
 	if err != nil {
 		return err
@@ -78,7 +85,7 @@ func (h Host) installNPM(images bool) error {
 	if !h.DryRun && !strings.HasPrefix(strings.TrimSpace(string(out)), "24.") {
 		return fmt.Errorf("Node 24 is required")
 	}
-	return h.installNodeTools(images)
+	return nil
 }
 
 func (h Host) configureRedis() (result error) {

@@ -2,6 +2,7 @@ package services
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -146,6 +147,50 @@ func TestCanonicalRedirectsPreserveURIAndLeaveSubdomainAppsSeparate(t *testing.T
 					} else if !strings.Contains(text, "api.example.com {") || strings.Contains(text, "www.") || strings.Contains(text, "redir https://example.com") {
 						t.Fatalf("subdomain inherited another app's redirects: %s", text)
 					}
+				}
+			}
+		})
+	}
+}
+
+// Use Caddy's parser so syntactically invalid directives cannot pass just
+// because template rendering succeeded. Ubuntu CI runs this after host setup.
+func TestCaddyTemplatesAdapt(t *testing.T) {
+	caddy, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("Caddy is not installed")
+	}
+	for _, kind := range []string{"fpm", "octane", "nuxt"} {
+		t.Run(kind, func(t *testing.T) {
+			a := config.App{
+				Name: "app", User: "abr-app", Directory: filepath.Join(t.TempDir(), "app"),
+				Type: "laravel", Domain: "app.test", Aliases: []string{"old.test"}, Domains: []string{"extra.test"},
+			}
+			if kind == "nuxt" {
+				a.Type = kind
+			} else {
+				a.Web.Driver = kind
+			}
+			r := ports.Empty()
+			if err := r.Ensure(a, config.Default().Ports, nil, func(int) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := Render(a, r, "../../templates", t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, file := range plan.Files {
+				if !strings.HasSuffix(file.Path, ".caddy") {
+					continue
+				}
+				path := filepath.Join(t.TempDir(), "Caddyfile")
+				if err := os.WriteFile(path, file.Data, 0600); err != nil {
+					t.Fatal(err)
+				}
+				// Adapt only: never start a listener, request certificates or
+				// connect to PHP-FPM/application processes during this test.
+				if output, err := exec.Command(caddy, "adapt", "--config", path, "--adapter", "caddyfile").CombinedOutput(); err != nil {
+					t.Fatalf("Caddy rejected %s template: %v\n%s", kind, err, output)
 				}
 			}
 		})

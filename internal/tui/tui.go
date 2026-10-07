@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"unicode"
@@ -31,6 +32,7 @@ type Options struct {
 	Output                                               io.Writer
 	RunCommand                                           func([]string, io.Writer) error
 	ComposerAuth                                         func(string, string, string, io.Writer) error
+	EnvEditor                                            func(string) (*exec.Cmd, error)
 }
 
 func Run(o Options) error {
@@ -42,10 +44,12 @@ func Run(o Options) error {
 }
 
 type action struct {
-	title string
-	args  []string
-	note  string
-	run   func(io.Writer) error // Credential operations never put tokens in args.
+	title        string
+	args         []string
+	note         string
+	run          func(io.Writer) error // Credential operations never put tokens in args.
+	after        func() tea.Cmd        // Continue immediately after successful execution.
+	continueWith func() tea.Cmd        // Keep output visible until Enter continues the workflow.
 }
 type event struct {
 	text string
@@ -83,6 +87,17 @@ func colors(dark bool) palette {
 	return palette{style("#5145B5", "#8B9FFF").Bold(true), style("#59636F", "#9198A1"), style("#B4233C", "#FF838B").Bold(true), style("#187346", "#68D391").Bold(true)}
 }
 
+func formTheme(dark bool) *huh.Styles {
+	theme := huh.ThemeCharm(dark)
+	// The stock theme uses dark text for unselected options on dark terminals.
+	foreground := lipgloss.LightDark(dark)(lipgloss.Color("#25313D"), lipgloss.Color("#E2E8F0"))
+	for _, field := range []*huh.FieldStyles{&theme.Focused, &theme.Blurred} {
+		field.Option = field.Option.Foreground(foreground)
+		field.UnselectedOption = field.UnselectedOption.Foreground(foreground)
+	}
+	return theme
+}
+
 type model struct {
 	options              Options
 	dark                 bool
@@ -112,7 +127,7 @@ func newModel(o Options) *model {
 func (m *model) Init() tea.Cmd { return tea.Batch(m.form.Init(), tea.RequestBackgroundColor) }
 func (m *model) setForm(page, title string, next func() tea.Cmd, groups ...*huh.Group) tea.Cmd {
 	m.page, m.title, m.next = page, title, next
-	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(func(bool) *huh.Styles { return huh.ThemeCharm(m.dark) })).WithWidth(m.bodyWidth()).WithHeight(m.formHeight()).WithShowHelp(false)
+	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(func(bool) *huh.Styles { return formTheme(m.dark) })).WithWidth(m.bodyWidth()).WithHeight(m.formHeight()).WithShowHelp(false)
 	return m.form.Init()
 }
 func (m *model) bodyWidth() int  { return max(20, min(m.width-4, 96)) }
@@ -139,6 +154,7 @@ func (m *model) home() tea.Cmd {
 	m.reviewText = ""
 	m.viewport.SetContent("")
 	m.events = nil
+	m.next = nil
 	c, err := config.Load(m.options.ConfigPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -189,6 +205,8 @@ func (m *model) serverMenu() tea.Cmd {
 		switch selected {
 		case "setup":
 			return m.setupForm()
+		case "update":
+			return m.review(action{title: "Update server", args: []string{"update"}, note: "Upgrade apt packages, remove unused packages, clean the apt cache, self-update Composer and upgrade global npm tools. This updates the whole VPS."})
 		case "git":
 			return m.gitSetupForm()
 		case "composer":
@@ -197,8 +215,9 @@ func (m *model) serverMenu() tea.Cmd {
 			return m.start(action{title: "MySQL admin · TablePlus", args: []string{"database", "--admin", "--show"}})
 		}
 		return m.home()
-	}, huh.NewGroup(huh.NewSelect[string]().Title("Server actions").Description("For a new VPS: set up the server, then its GitHub key.").Options(
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Server actions").Description("Set up VPS guides you through GitHub, Composer and the TablePlus login.").Options(
 		huh.NewOption("Set up VPS", "setup"),
+		huh.NewOption("Update server", "update"),
 		huh.NewOption("GitHub key", "git"),
 		huh.NewOption("Composer credentials", "composer"),
 		huh.NewOption("MySQL admin · TablePlus", "mysql-admin"),
@@ -427,6 +446,11 @@ func (m *model) start(a action) tea.Cmd {
 }
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case editorFinished:
+		if msg.err != nil {
+			return m, m.workflowError("Edit .env: "+msg.name, msg.err)
+		}
+		return m, m.firstDeploy(msg.name)
 	case tea.BackgroundColorMsg:
 		m.dark = msg.IsDark()
 		m.spinner.Style = colors(m.dark).accent
@@ -449,9 +473,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.busy, m.result = false, msg.err
 			m.notice = ""
 			if msg.err != nil {
+				m.current.after, m.current.continueWith = nil, nil
 				m.appendOutput("\nError: " + clean(msg.err.Error()) + "\n")
 				m.viewport.GotoBottom()
 			} else if !m.options.DryRun {
+				if after := m.current.after; after != nil {
+					m.current.after = nil
+					return m, after()
+				}
+				if m.current.continueWith != nil {
+					m.viewport.GotoBottom()
+					return m, nil
+				}
 				if hint := nextStep(m.current.args); hint != "" {
 					m.appendOutput("\nNext: " + hint + "\n")
 					m.viewport.GotoBottom()
@@ -489,6 +522,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.page == "output" && !m.busy && key == "enter" {
+			if next := m.current.continueWith; next != nil && m.result == nil && !m.options.DryRun {
+				m.current.continueWith = nil
+				return m, next()
+			}
 			return m, m.home()
 		}
 		if m.page == "output" || m.page == "confirm" {
@@ -568,7 +605,11 @@ func (m *model) View() tea.View {
 		body = lipgloss.NewStyle().Width(width).Render(status) + "\n" + m.viewport.View()
 		footer = "↑/↓ scroll"
 		if !m.busy {
-			footer += " · Enter / Esc back"
+			if m.current.continueWith != nil && m.result == nil && !m.options.DryRun {
+				footer += " · Enter continue · Esc cancel"
+			} else {
+				footer += " · Enter / Esc back"
+			}
 		}
 		if len(m.current.args) > 0 && (m.current.args[0] == "logs" || m.current.args[0] == "doctor") {
 			footer += "\n" + ansi.Truncate(m.current.note, width, "…")
@@ -622,6 +663,8 @@ func nextStep(args []string) string {
 		return "Choose Deploy to apply saved settings. Database credentials and data are retained when a component is disabled."
 	case "setup":
 		return "Open Server & credentials to set up the GitHub key, then clone your project. MySQL admin shows your TablePlus login."
+	case "update":
+		return "Open an app’s Service status to check its services, then deploy when ready."
 	case "git":
 		return "Add the public key to GitHub Settings → SSH and GPG keys, then choose Clone application."
 	case "clone":

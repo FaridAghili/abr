@@ -60,7 +60,7 @@ func (h Host) Setup(o SetupOptions) error {
 		if err := h.command("apt-get", "-o", "APT::Update::Error-Mode=any", "update"); err != nil {
 			return err
 		}
-		packages := []string{"install", "-y", "ca-certificates", "curl", "gnupg", "git", "unzip", "xz-utils", "brotli", "acl", "build-essential", "openssh-server", "ufw", "fail2ban", "unattended-upgrades", "mysql-server", "ncdu", "libmagickcore-7.q16-10-extra", "librsvg2-bin"}
+		packages := []string{"install", "-y", "ca-certificates", "curl", "gnupg", "git", "unzip", "xz-utils", "brotli", "acl", "build-essential", "openssh-server", "ufw", "fail2ban", "unattended-upgrades", "mysql-server", "ncdu", "nano", "libmagickcore-7.q16-10-extra", "librsvg2-bin"}
 		for _, extension := range []string{"cli", "fpm", "bcmath", "curl", "gd", "imagick", "intl", "mbstring", "mysql", "redis", "xml", "zip", "excimer"} {
 			packages = append(packages, "php"+services.PHPVersion+"-"+extension)
 		}

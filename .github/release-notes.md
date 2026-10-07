@@ -5,6 +5,11 @@ Abr 1.0.0 is the initial release for fresh Ubuntu 26.04 LTS AMD64 servers.
 - Dedicated app users, managed services and ports, deployment preflight checks,
   database backup/import, and removal that preserves app data unless purged.
 - VPS setup with key-only SSH, UFW, Fail2ban and automatic security updates.
+- Continuous VPS setup through GitHub keys, optional Composer credentials and
+  the TablePlus MySQL login.
+- Clone-to-deploy workflow with framework detection, optional advanced settings,
+  automatic `.env` database values and an app-user editor.
+- Server updates for apt packages, Composer and shared global npm tools.
 
 Download `abr-linux-amd64` for standalone installation. The
 `abr_1.0.0_linux_amd64.tar.gz` bundle contains the same executable as `abr`, editable
