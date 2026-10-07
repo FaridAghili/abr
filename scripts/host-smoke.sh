@@ -33,7 +33,12 @@ sudo install -d -m 700 /root/.ssh
 sudo install -d -m 755 /run/sshd
 sudo ssh-keygen -t ed25519 -N '' -f /root/.ssh/sites-fixture-ssh >/dev/null
 sudo bash -c 'cat /root/.ssh/sites-fixture-ssh.pub >> /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys'
+sudo apt-get install -y redis-server
+sudo systemctl start redis-server
+sudo redis-cli SET sites-fixture-persist survives-setup >/dev/null
+sudo redis-cli SAVE >/dev/null
 sites_ci setup --no-firewall --ssh-port 22 --admin-user root
+sudo redis-cli GET sites-fixture-persist | grep -Fx survives-setup
 # Caddy administration is restricted to root and Caddy, not application users.
 sudo test -S /var/lib/caddy/sites-admin.sock
 if curl --silent --max-time 2 http://127.0.0.1:2019/config/ >/dev/null; then

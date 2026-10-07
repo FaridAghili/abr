@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"sites-manager/internal/services"
 )
@@ -94,6 +95,20 @@ func (h Host) configureRedis() (result error) {
 	old, err := h.read(path)
 	if err != nil && !h.DryRun {
 		return err
+	}
+	// Redis must build its AOF from the live dataset before an AOF-enabled restart.
+	// Merely changing appendonly in the file can discard an existing RDB dataset.
+	policy, err := h.read(filepath.Join(h.TemplatesDir, "redis-hardening.conf.tmpl"))
+	if err != nil && !h.DryRun {
+		return err
+	}
+	if h.DryRun || hasDirective(policy, "appendonly yes") {
+		if err := h.command("systemctl", "enable", "--now", "redis-server"); err != nil {
+			return err
+		}
+		if err := h.prepareRedisAOF(); err != nil {
+			return err
+		}
 	}
 	defer func() {
 		if result != nil && !h.DryRun {
@@ -239,4 +254,42 @@ func (h Host) configureCaddyAdmin() error {
 		return errors.Join(err, h.command("systemctl", "daemon-reload"), h.command("systemctl", "restart", "caddy"))
 	}
 	return err
+}
+
+// Do not stop Redis if a conversion/rewrite fails or has not finished.
+func (h Host) prepareRedisAOF() error {
+	out, err := h.run("Enable Redis AOF on the live dataset before restart", Command{Name: "redis-cli", Args: []string{"--raw", "CONFIG", "SET", "appendonly", "yes"}, Private: true})
+	if err != nil {
+		return err
+	}
+	if h.DryRun {
+		return nil
+	}
+	if strings.TrimSpace(string(out)) != "OK" {
+		return fmt.Errorf("Redis refused live AOF activation; no restart attempted")
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		out, err := h.run("Wait for durable Redis AOF conversion", Command{Name: "redis-cli", Args: []string{"--raw", "INFO", "persistence"}, Private: true})
+		if err != nil {
+			return err
+		}
+		values := map[string]string{}
+		for _, line := range strings.Split(string(out), "\n") {
+			key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+			if ok {
+				values[key] = value
+			}
+		}
+		if values["aof_enabled"] != "1" || values["aof_last_bgrewrite_status"] != "ok" || values["aof_last_write_status"] != "ok" {
+			return fmt.Errorf("Redis AOF persistence is not healthy; no restart attempted")
+		}
+		if values["aof_rewrite_in_progress"] == "0" && values["aof_rewrite_scheduled"] == "0" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("Redis AOF conversion is still running; retry setup after it finishes; no restart attempted")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

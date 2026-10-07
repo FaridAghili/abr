@@ -36,6 +36,12 @@ func (r *setupRunner) Run(c Command) ([]byte, error) {
 		return []byte(`{}`), nil
 	}
 	if c.Name == "redis-cli" {
+		if slices.Contains(c.Args, "SET") {
+			return []byte("OK\n"), nil
+		}
+		if slices.Contains(c.Args, "INFO") {
+			return []byte("aof_enabled:1\naof_rewrite_in_progress:0\naof_rewrite_scheduled:0\naof_last_bgrewrite_status:ok\naof_last_write_status:ok\n"), nil
+		}
 		return []byte(r.redis), nil
 	}
 	if c.Name == "mysql" {
@@ -281,5 +287,53 @@ func TestCaddyAdminUsesPrivateSocketAndRejectsFailedConfiguration(t *testing.T) 
 	after, _ := h.read(path)
 	if !bytes.Equal(data, after) {
 		t.Fatal("Caddy service config not restored")
+	}
+}
+
+func TestRedisConvertsLiveDatasetBeforeConfigAndRestart(t *testing.T) {
+	h, r := setupFixture(t)
+	if err := h.write("/etc/redis/redis.conf", []byte("bind 127.0.0.1\n"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	r.fail = func(c Command) error {
+		if c.Name == "redis-cli" && slices.Contains(c.Args, "SET") {
+			if _, err := os.Stat(h.path("/etc/redis/sites.conf")); !os.IsNotExist(err) {
+				t.Fatal("changed config before live conversion")
+			}
+		}
+		return nil
+	}
+	if err := h.configureRedis(); err != nil {
+		t.Fatal(err)
+	}
+	converted, persisted := false, false
+	for _, c := range r.calls {
+		if c.Name == "redis-cli" && slices.Contains(c.Args, "SET") {
+			converted = true
+		}
+		if c.Name == "redis-cli" && slices.Contains(c.Args, "INFO") {
+			persisted = converted
+		}
+		if c.Name == "systemctl" && slices.Contains(c.Args, "restart") && !persisted {
+			t.Fatal("restarted before durable AOF")
+		}
+	}
+	if !persisted {
+		t.Fatal("did not verify AOF persistence")
+	}
+	r.calls = nil
+	r.fail = func(c Command) error {
+		if c.Name == "redis-cli" && slices.Contains(c.Args, "INFO") {
+			return testExit(1)
+		}
+		return nil
+	}
+	if err := h.configureRedis(); err == nil {
+		t.Fatal("failed conversion reported success")
+	}
+	for _, c := range r.calls {
+		if c.Name == "systemctl" && slices.Contains(c.Args, "restart") {
+			t.Fatal("restarted despite failed AOF verification")
+		}
 	}
 }
