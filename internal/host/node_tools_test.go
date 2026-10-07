@@ -322,3 +322,31 @@ func TestNodeSetupAppliesReportedGlobalUpgrades(t *testing.T) {
 		t.Fatalf("ordinary global npm commands have the wrong prefix: %v", err)
 	}
 }
+
+func TestRepeatedNodeSetupKeepsVersionsWithoutNCUSuggestions(t *testing.T) {
+	h, runner, _, _ := fixture(t)
+	runner.users["_apt"] = "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"
+	h.Runner = nodeToolsRunner{fakeRunner: runner}
+	if err := h.installNodePackages([]string{"npm@12.1.0", "npm-check-updates@21.0.0", "svgo@5.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := h.nodeToolsDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(previous, ".fake-packages.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.installNPM(true); err != nil {
+		t.Fatal(err)
+	}
+	current, err := h.nodeToolsDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(filepath.Join(current, ".fake-packages.json"))
+	if err != nil || string(after) != string(before) {
+		t.Fatal("repeated setup changed versions without ncu suggestions", err)
+	}
+}

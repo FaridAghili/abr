@@ -32,9 +32,7 @@ func (h Host) installNodeTools(images bool) error {
 				return err
 			}
 			for name, version := range installed {
-				if _, selected := packages[name]; !selected {
-					packages[name] = version
-				}
+				packages[name] = version
 			}
 		}
 	}
