@@ -42,7 +42,7 @@ sudo redis-cli GET sites-fixture-persist | grep -Fx survives-setup
 fixture_default_headers=$(mktemp)
 fixture_default_body=$(mktemp)
 curl --silent --show-error http://127.0.0.1/ -D "$fixture_default_headers" -o "$fixture_default_body"
-grep -F '404' "$fixture_default_body"
+grep -E '^HTTP/[[:digit:].]+ 404' "$fixture_default_headers"
 if grep -Ei '^server:' "$fixture_default_headers"; then echo 'Default HTTP header leaked' >&2; exit 1; fi
 rm -f "$fixture_default_headers" "$fixture_default_body"
 # Caddy administration is restricted to root and Caddy, not application users.
