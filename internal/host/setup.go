@@ -87,11 +87,7 @@ func (h Host) Setup(o SetupOptions) error {
 					return err
 				}
 			}
-			keyPath := "/usr/share/keyrings/abr-" + repo.name + ".gpg"
-			if err := h.write(keyPath, key, 0644); err != nil {
-				return err
-			}
-			if err := h.write("/etc/apt/sources.list.d/abr-"+repo.name+".sources", []byte(repo.source+"Signed-By: "+keyPath+"\n"), 0644); err != nil {
+			if err := h.writeAPTRepository(repo.name, key, repo.source); err != nil {
 				return err
 			}
 		}
@@ -223,6 +219,16 @@ func (h Host) Setup(o SetupOptions) error {
 		}
 		return nil
 	})
+}
+
+func (h Host) writeAPTRepository(name string, key []byte, source string) error {
+	// Administrator-managed keys belong under /etc, separate from package keys
+	// in /usr/share. Keep our directory root-owned and readable by APT's _apt user.
+	keyPath := "/etc/apt/keyrings/abr/" + name + ".gpg"
+	if err := h.write(keyPath, key, 0644); err != nil {
+		return err
+	}
+	return h.write("/etc/apt/sources.list.d/abr-"+name+".sources", []byte(source+"Signed-By: "+keyPath+"\n"), 0644)
 }
 
 func fetch(url string, limit int64) ([]byte, error) {

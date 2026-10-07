@@ -46,6 +46,10 @@ fixture_redirect() {
 # GitHub runner images ship MySQL with this documented test password and other
 # inactive web servers. These adjustments belong only to the disposable fixture.
 if [[ ${GITHUB_ACTIONS:-false} == true ]]; then
+  # runner-images deliberately makes these paths world-writable for builds.
+  # Restore ordinary host directory permissions for Abr's root path checks.
+  # Keep this fixture adjustment out of production provisioning.
+  sudo chmod 755 /opt /usr/local/bin /usr/local/lib/node_modules
   sudo systemctl mask --now nginx apache2
   printf '[client]\nuser=root\npassword=root\n' | sudo tee /root/.my.cnf >/dev/null
   sudo chmod 600 /root/.my.cnf
@@ -61,6 +65,13 @@ sudo systemctl start redis-server
 sudo redis-cli SET abr-fixture-persist survives-setup >/dev/null
 sudo redis-cli SAVE >/dev/null
 abr_ci setup --no-firewall --ssh-port 22 --admin-user root
+for repository in caddy node; do
+  repository_key="/etc/apt/keyrings/abr/$repository.gpg"
+  test "$(stat -c '%u:%g:%a' /etc/apt/keyrings/abr)" = 0:0:755
+  test "$(stat -c '%u:%g:%a' "$repository_key")" = 0:0:644
+  sudo runuser -u _apt -- test -r "$repository_key"
+  grep -Fx "Signed-By: $repository_key" "/etc/apt/sources.list.d/abr-$repository.sources"
+done
 test ! -d "$abr_binary_directory/templates"
 sudo test -f /etc/abr/templates/caddy-site.caddy.tmpl
 sudo test -f /etc/abr/templates/scheduler.service.tmpl
