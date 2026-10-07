@@ -82,7 +82,6 @@ sites_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel 
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/sites-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 sites_ci deploy fixture-php --no-pull
 sudo runuser -u sites-fixture-php -- test ! -w /var/lib/caddy/sites-admin.sock
-sudo runuser -u sites-fixture-php -- test -r /var/lib/sites-ci/git/id_ed25519
 sudo runuser -u sites-fixture-php -- ssh-keygen -y -P '' -f /var/lib/sites-ci/git/id_ed25519 >/dev/null
 sites_ci git setup
 sudo runuser -u sites-fixture-php -- test ! -r /var/lib/sites-ci/credentials/fixture-php.env
