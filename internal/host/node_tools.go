@@ -378,7 +378,7 @@ func (h Host) globalNodePackages(prefix string) (map[string]string, error) {
 
 func (h Host) updateNodeTools() error {
 	if h.DryRun {
-		h.say("Would run ncu -g and install all available global npm upgrades, including npm, npm-check-updates and installed SVGO")
+		h.say("Would run ncu -g for shared global tools and apply only its suggested upgrades")
 		return nil
 	}
 	directory, err := h.nodeToolsDirectory()
@@ -394,59 +394,22 @@ func (h Host) updateNodeTools() error {
 			return fmt.Errorf("managed global npm package %s is missing", required)
 		}
 	}
-	// Include administrator-installed globals from Node's native prefix too.
-	// Abr's published versions take precedence for packages present in both.
-	output, err := h.nodeToolsQuery("", "/usr/bin/npm", "prefix", "--global")
+	// Match the shared prefix used by ordinary ncu -g. Only its reported
+	// upgrades may change versions; other installed globals stay pinned.
+	out, err := h.nodeToolsQuery(directory, filepath.Join(directory, "bin/ncu"), "-g", "--jsonUpgraded", "--install", "never")
 	if err != nil {
 		return err
 	}
-	nativePrefix := strings.TrimSpace(string(output))
-	if !filepath.IsAbs(nativePrefix) || nativePrefix == "/" || filepath.Clean(nativePrefix) != nativePrefix {
-		return fmt.Errorf("invalid native global npm prefix")
+	var upgrades map[string]string
+	if err := json.Unmarshal(out, &upgrades); err != nil {
+		return fmt.Errorf("invalid ncu global upgrade output: %w", err)
 	}
-	native, err := h.globalNodePackages(nativePrefix)
-	if err != nil {
-		return err
+	if upgrades == nil {
+		return fmt.Errorf("invalid ncu global upgrade output: expected a JSON object")
 	}
-	upgrades := map[string]string{}
-	for index, prefix := range []string{directory, nativePrefix} {
-		allowed := map[string]bool{}
-		for name := range installed {
-			allowed[name] = true
-		}
-		args := []string{"-g", "--jsonUpgraded", "--install", "never"}
-		if index == 1 {
-			allowed = map[string]bool{}
-			var extra []string
-			for name, version := range native {
-				if _, managed := installed[name]; !managed {
-					extra = append(extra, name)
-					allowed[name] = true
-					installed[name] = version
-				}
-			}
-			if len(extra) == 0 {
-				continue
-			}
-			slices.Sort(extra)
-			args = append(args, "--filter", strings.Join(extra, ","))
-		}
-		out, err := h.nodeToolsQuery(prefix, filepath.Join(directory, "bin/ncu"), args...)
-		if err != nil {
-			return err
-		}
-		var available map[string]string
-		if err := json.Unmarshal(out, &available); err != nil {
-			return fmt.Errorf("invalid ncu global upgrade output: %w", err)
-		}
-		if available == nil {
-			return fmt.Errorf("invalid ncu global upgrade output: expected a JSON object")
-		}
-		for name, version := range available {
-			if !allowed[name] || !validNodePackage(name, version) {
-				return fmt.Errorf("invalid global npm upgrade for %q", name)
-			}
-			upgrades[name] = version
+	for name, version := range upgrades {
+		if installed[name] == "" || !validNodePackage(name, version) {
+			return fmt.Errorf("invalid global npm upgrade for %q", name)
 		}
 	}
 	if len(upgrades) == 0 {

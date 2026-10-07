@@ -157,7 +157,7 @@ fi
 # Ordinary global npm/ncu commands must see the manager's shared installation.
 node_global_env=(env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent NPM_CONFIG_USERCONFIG=/nonexistent/user.npmrc NPM_CONFIG_GLOBALCONFIG=/nonexistent/global.npmrc)
 test "$("${node_global_env[@]}" /usr/local/bin/npm prefix --global)" = /opt/abr/node-tools/current
-# Force a real registry-backed SVGO upgrade and include an administrator global.
+# Force a real registry-backed SVGO upgrade; leave unrelated native globals alone.
 # Only disposable CI metadata is changed; no package installer runs as root.
 sudo cp /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin-before-update.json"
 node_native_root=$(sudo env -i PATH=/usr/bin:/bin HOME=/nonexistent NPM_CONFIG_USERCONFIG=/nonexistent/user.npmrc NPM_CONFIG_GLOBALCONFIG=/nonexistent/global.npmrc /usr/bin/npm root --global)
@@ -182,8 +182,12 @@ python3 - "$abr_binary_directory/updated-globals.json" <<'PYUPDATE'
 import json, sys
 packages = json.load(open(sys.argv[1]))['dependencies']
 assert packages['svgo']['version'] != '0.0.0'
-assert packages['is-number']['version'] == '7.0.0'
+assert 'is-number' not in packages
 assert 'npm' in packages and 'npm-check-updates' in packages
+PYUPDATE
+sudo python3 - "$node_native_root/is-number/package.json" <<'PYUPDATE'
+import json, sys
+assert json.load(open(sys.argv[1]))['version'] == '6.0.0'
 PYUPDATE
 # Read-only installed tools remain inaccessible to their installer after updating.
 # Installers must not retain write access to the published shared toolchain.

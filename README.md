@@ -90,10 +90,9 @@ sudo abr update --dry-run
 
 Update refreshes apt indexes, runs `full-upgrade`, `autoremove` and `autoclean`,
 self-updates Composer to its stable release, then runs `ncu -g` and installs all
-reported global npm upgrades, including npm, npm-check-updates and installed
-SVGO. Other installed global packages are preserved and included. Packages
-outside Abr's prefix are installed into the shared prefix when upgrades are
-published; their original files are retained. Package downloads and installs
+suggested upgrades for the shared global tools, usually npm and SVGO. Globals
+without an ncu suggestion retain their exact versions. Other global prefixes
+and app dependencies are left alone. Package downloads and installs
 still run as `_apt` with scripts disabled. Project dependency lockfiles and app
 code are handled by Deploy. Updates stop on failure; completed apt changes are
 not rolled back, and the server is not rebooted.

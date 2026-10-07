@@ -210,20 +210,16 @@ func TestGlobalNodeUpgradeKeepsOptionalAndAdditionalPackages(t *testing.T) {
 	runner.users["_apt"] = "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"
 	base := nodeToolsRunner{fakeRunner: runner}
 	h.Runner = base
-	if err := h.installNPM(true); err != nil {
+	if err := h.installNodePackages([]string{"npm@12.0.0", "npm-check-updates@20.0.0", "svgo@4.0.0", "@example/tool@1.0.0"}); err != nil {
 		t.Fatal(err)
 	}
 	previous, _ := h.nodeToolsDirectory()
 	h.Runner = transferRunner{func(c Command) ([]byte, error) {
-		managed := slices.Contains(c.Args, "NPM_CONFIG_PREFIX="+previous)
-		if c.Name == "runuser" && slices.Contains(c.Args, "--jsonUpgraded") {
-			if managed {
-				return []byte(`{"npm":"12.1.0","npm-check-updates":"21.0.0","svgo":"5.0.0"}`), nil
-			}
-			return []byte(`{"@example/tool":"2.0.0"}`), nil
+		if c.Name == "runuser" && (slices.Contains(c.Args, "--jsonUpgraded") || slices.Contains(c.Args, "list")) && !slices.Contains(c.Args, "NPM_CONFIG_PREFIX="+previous) {
+			t.Fatal("updater inspected another global prefix")
 		}
-		if c.Name == "runuser" && !managed && slices.Contains(c.Args, "list") {
-			return []byte(`{"dependencies":{"npm":{"version":"11.0.0"},"@example/tool":{"version":"1.0.0"}}}`), nil
+		if c.Name == "runuser" && slices.Contains(c.Args, "--jsonUpgraded") {
+			return []byte(`{"npm":"12.1.0","svgo":"5.0.0"}`), nil
 		}
 		return base.Run(c)
 	}}
@@ -238,7 +234,7 @@ func TestGlobalNodeUpgradeKeepsOptionalAndAdditionalPackages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, version := range []string{"12.1.0", "21.0.0", "5.0.0", "2.0.0"} {
+	for _, version := range []string{"12.1.0", "20.0.0", "5.0.0", "1.0.0"} {
 		if !strings.Contains(string(data), version) {
 			t.Fatalf("global upgrade or package missing: %s", data)
 		}
