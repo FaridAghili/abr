@@ -2,6 +2,7 @@ package host
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -25,6 +26,17 @@ type credentials struct {
 
 func databaseName(name string) string {
 	return strings.ReplaceAll(name, "-", "_")
+}
+
+// MySQL account names are limited to 32 characters, while database names can
+// use the full app name. Keep a hash suffix to distinguish long names.
+func databaseUser(name string) string {
+	database := databaseName(name)
+	if len(database) <= 32 {
+		return database
+	}
+	sum := sha256.Sum256([]byte(database))
+	return fmt.Sprintf("%s_%x", database[:23], sum[:4])
 }
 
 func (h Host) credentialsPath(name string) string {
@@ -54,12 +66,12 @@ func (h Host) database(a config.App, show bool) error {
 	}
 	path := h.credentialsPath(a.Name)
 	saved, err := h.read(path)
-	c := credentials{App: a.Name, Database: databaseName(a.Name), User: RuntimeUser(a.Name)}
+	c := credentials{App: a.Name, Database: databaseName(a.Name), User: databaseUser(a.Name)}
 	if err == nil {
 		if err := json.Unmarshal(saved, &c); err != nil {
 			return fmt.Errorf("corrupt database credentials: %w", err)
 		}
-		if c.App != a.Name || c.Database != databaseName(a.Name) || c.User != RuntimeUser(a.Name) || !regexp.MustCompile(`^[a-f0-9]{64}Aa1!$`).MatchString(c.Password) {
+		if c.App != a.Name || c.Database != databaseName(a.Name) || c.User != databaseUser(a.Name) || !regexp.MustCompile(`^[a-f0-9]{64}Aa1!$`).MatchString(c.Password) {
 			return fmt.Errorf("invalid database ownership record for %s", a.Name)
 		}
 	} else if os.IsNotExist(err) {

@@ -154,7 +154,7 @@ func TestPurgeDeletesOnlySelectedAppAndRecordedDatabase(t *testing.T) {
 		}
 		if cmd.Name == "mysql" {
 			drop = i
-			if !cmd.Private || string(cmd.Input) != "DROP DATABASE IF EXISTS `app`;\nDROP USER IF EXISTS 'abr-app'@'localhost';\nDROP USER IF EXISTS 'abr-app'@'127.0.0.1';\n" || strings.Contains(strings.Join(cmd.Args, " "), "DROP") {
+			if !cmd.Private || string(cmd.Input) != "DROP DATABASE IF EXISTS `app`;\nDROP USER IF EXISTS 'app'@'localhost';\nDROP USER IF EXISTS 'app'@'127.0.0.1';\n" || strings.Contains(strings.Join(cmd.Args, " "), "DROP") {
 				t.Fatal("unscoped or exposed deletion SQL")
 			}
 		}

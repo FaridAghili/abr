@@ -32,7 +32,7 @@ func (h Host) transferCredentials(a config.App) (credentials, error) {
 	if err := decoder.Decode(&c); err != nil {
 		return c, fmt.Errorf("corrupt database credentials: %w", err)
 	}
-	if decoder.Decode(new(any)) != io.EOF || !c.Ready || c.App != a.Name || c.Database != databaseName(a.Name) || c.User != RuntimeUser(a.Name) || !regexp.MustCompile(`^[a-f0-9]{64}Aa1!$`).MatchString(c.Password) {
+	if decoder.Decode(new(any)) != io.EOF || !c.Ready || c.App != a.Name || c.Database != databaseName(a.Name) || c.User != databaseUser(a.Name) || !regexp.MustCompile(`^[a-f0-9]{64}Aa1!$`).MatchString(c.Password) {
 		return c, fmt.Errorf("invalid or incomplete database ownership record for %s", a.Name)
 	}
 	return c, nil

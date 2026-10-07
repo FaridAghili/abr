@@ -74,7 +74,7 @@ func (h Host) planPurge(a config.App) (purgePlan, error) {
 	}
 	// Ready may be false after interrupted provisioning. Its recorded database
 	// and account still belong to this app, and DROP IF EXISTS is retryable.
-	if d.Decode(new(any)) != io.EOF || c.App != a.Name || c.Database != databaseName(a.Name) || c.User != RuntimeUser(a.Name) || !regexp.MustCompile(`^[a-f0-9]{64}Aa1!$`).MatchString(c.Password) {
+	if d.Decode(new(any)) != io.EOF || c.App != a.Name || c.Database != databaseName(a.Name) || c.User != databaseUser(a.Name) || !regexp.MustCompile(`^[a-f0-9]{64}Aa1!$`).MatchString(c.Password) {
 		return p, fmt.Errorf("invalid database ownership record for %s", a.Name)
 	}
 	p.database = &c

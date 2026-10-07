@@ -202,7 +202,7 @@ func TestRegisterDatabaseIsPrivateStableAndScoped(t *testing.T) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		t.Fatal(err)
 	}
-	if c.Database != "app" || c.User != a.User || !c.Ready || len(c.Password) != 68 || strings.Contains(out.String(), c.Password) {
+	if c.Database != "app" || c.User != "app" || !c.Ready || len(c.Password) != 68 || strings.Contains(out.String(), c.Password) {
 		t.Fatal("credential leak or invalid credentials")
 	}
 	info, err := os.Stat(h.credentialsEnvPath(a.Name))

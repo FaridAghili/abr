@@ -303,6 +303,12 @@ fixture_git() {
 }
 fixture_git /srv/apps/fixture-php
 abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost --serving-domain extra.fixture-php.localhost --canonical-host non-www --scheduler
+# Database identities use the database name, separately from Ubuntu app users.
+sudo grep -Fx 'DB_DATABASE=fixture_php' /var/lib/abr-ci/credentials/fixture-php.env
+sudo grep -Fx 'DB_USERNAME=fixture_php' /var/lib/abr-ci/credentials/fixture-php.env
+sudo mysql --protocol=socket --user=root --batch --skip-column-names <<'SQL' | grep -Fx 2
+SELECT COUNT(*) FROM mysql.user WHERE User='fixture_php' AND Host IN ('localhost','127.0.0.1');
+SQL
 # Fresh accounts must not access a foreign database whose name would match an
 # unescaped underscore in a database grant.
 sudo mysql --protocol=socket --user=root <<'SQL'
@@ -599,7 +605,7 @@ if abr_ci ports | grep -F fixture-php; then
   echo 'Fully removed app retained port reservations' >&2; exit 1
 fi
 sudo mysql --protocol=socket --user=root --batch --skip-column-names <<'SQL' | grep -Fx 0
-SELECT (SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME='fixture_php') + (SELECT COUNT(*) FROM mysql.user WHERE User='abr-fixture-php' AND Host IN ('localhost','127.0.0.1'));
+SELECT (SELECT COUNT(*) FROM information_schema.schemata WHERE SCHEMA_NAME='fixture_php') + (SELECT COUNT(*) FROM mysql.user WHERE User='fixture_php' AND Host IN ('localhost','127.0.0.1'));
 SQL
 # Ordinary removals and foreign databases must still retain their data.
 sudo test -f /srv/apps/fixture-octane/.env

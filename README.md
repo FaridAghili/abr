@@ -106,7 +106,9 @@ sudo abr status api
 
 Copy the displayed database credentials into `.env` and set your app secrets.
 Managed MySQL uses `DB_HOST=127.0.0.1` and port 3306. `DB_DATABASE` is the app
-name with hyphens replaced by underscores; Abr adds no database-name prefix.
+name with hyphens replaced by underscores. `DB_USERNAME` uses the same name up
+to 32 characters; longer usernames are shortened with a hash suffix. Abr adds no
+prefix to database names or usernames.
 Later, `sudo abr deploy api` fetches and fast-forwards to the checked upstream commit. Apps share the GitHub
 key's permissions; private Composer/npm dependencies may need separate credentials.
 Use `git setup --key /absolute/private-key` to import an existing unencrypted key.
