@@ -5,6 +5,7 @@
         Strict-Transport-Security "max-age=15768000"
         X-Frame-Options "SAMEORIGIN"
         X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
     }
     encode zstd gzip
     root * {{quote .AssetRoot}}
@@ -18,12 +19,21 @@
         path {{.AssetPath}}/*
         file {path}
     }
-    handle @assets {
-        # Only content-hashed build assets get immutable caching.
-        @versioned path_regexp versioned ^/(build/assets/.*[-.][A-Za-z0-9_-]{8,}|_nuxt/(.*[-.])?[A-Za-z0-9_-]{8,})\.(js|css|woff2?|ttf|otf|svg|png|webp|avif|jpe?g|gif|wasm)$
-        header @versioned Cache-Control "public, max-age=31536000, immutable"
-        file_server {
-            precompressed br zstd gzip
+    # Reserved build paths never fall through to application workers.
+    @buildAssets path {{.AssetPath}} {{.AssetPath}}/*
+    handle @buildAssets {
+        handle @assets {
+            # Only content-hashed build assets get immutable caching.
+            @versioned path_regexp versioned ^/(build/assets/.*[-.][A-Za-z0-9_-]{8,}|_nuxt/(.*[-.])?[A-Za-z0-9_-]{8,})\.(js|css|woff2?|ttf|otf|svg|png|webp|avif|jpe?g|gif|wasm)$
+            header @versioned Cache-Control "public, max-age=31536000, immutable" {
+                match status 200 206 304
+            }
+            file_server {
+                precompressed br zstd gzip
+            }
+        }
+        handle {
+            respond 404
         }
     }
     handle {
@@ -47,6 +57,7 @@
             Strict-Transport-Security "max-age=15768000"
             X-Frame-Options "SAMEORIGIN"
             X-Content-Type-Options "nosniff"
+            Referrer-Policy "strict-origin-when-cross-origin"
         }
         respond "{err.status_code}" {err.status_code}
     }
@@ -64,6 +75,7 @@
         Strict-Transport-Security "max-age=15768000"
         X-Frame-Options "SAMEORIGIN"
         X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
     }
     redir https://{{$.Domain}}{uri} 308
 }

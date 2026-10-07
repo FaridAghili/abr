@@ -224,6 +224,7 @@ policy; it does not force unrelated subdomains onto HTTPS or opt into preload.
 The templates set `X-Frame-Options: SAMEORIGIN` and
 `X-Content-Type-Options: nosniff`, following the
 [Laravel deployment guide](https://laravel.com/docs/13.x/deployment).
+They also set `Referrer-Policy: strict-origin-when-cross-origin` on HTTPS responses.
 These headers are applied when responses are written, overriding upstream values.
 
 Caddy strips Server/X-Powered-By headers, compresses dynamic responses with
@@ -231,6 +232,9 @@ Caddy strips Server/X-Powered-By headers, compresses dynamic responses with
 [precompressed Brotli](https://caddyserver.com/docs/caddyfile/directives/file_server)
 for built assets generated during deploy. Versioned Vite/Nuxt assets get immutable
 browser caching; HTML/API/SSR responses keep the application's cache policy.
+Missing files in `/build/assets/` (Laravel) and `/_nuxt/` (Nuxt) return a direct
+Caddy 404 without calling application workers. Only successful versioned asset
+responses receive the immutable cache policy.
 The packaged welcome page is replaced with a generic 404. Identifying text in
 application bodies must be removed in the application itself.
 Default site templates also return 404 for `.env`, `.env.*`, and `.git` paths.

@@ -33,7 +33,25 @@ fixture_security_headers() {
   tr -d '\r' < "$1" | grep -Fix 'Strict-Transport-Security: max-age=15768000'
   tr -d '\r' < "$1" | grep -Fix 'X-Frame-Options: SAMEORIGIN'
   tr -d '\r' < "$1" | grep -Fix 'X-Content-Type-Options: nosniff'
+  tr -d '\r' < "$1" | grep -Fix 'Referrer-Policy: strict-origin-when-cross-origin'
   if grep -Ei '^(server|x-powered-by):' "$1"; then echo 'Identifying response header leaked' >&2; exit 1; fi
+}
+fixture_missing_assets() {
+  # Verify the reserved namespace directly, also with the upstream stopped.
+  local method uri status
+  for method in GET HEAD POST; do
+    for uri in "$2" "$2/missing.css" "$2/missing-AbCd1234.js" "$2/nested/missing.json"; do
+      local request=(--request "$method")
+      if [[ $method == HEAD ]]; then request=(--head); fi
+      status=$(curl --silent --show-error --max-time 10 --insecure --resolve "$1:443:127.0.0.1" \
+        "${request[@]}" -D "$fixture_source/missing-headers" -o /dev/null --write-out '%{http_code}' "https://$1$uri")
+      test "$status" = 404
+      fixture_security_headers "$fixture_source/missing-headers"
+      if grep -Ei '^cache-control:.*(immutable|max-age=31536000)' "$fixture_source/missing-headers"; then
+        echo 'Missing asset received immutable caching' >&2; exit 1
+      fi
+    done
+  done
 }
 fixture_redirect() {
   # Both HTTP and HTTPS must preserve path/query and return method-preserving 308.
@@ -196,7 +214,7 @@ sudo tee /srv/apps/fixture-php/routes/web.php >/dev/null <<'PHP'
 <?php
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
-Route::get('/', fn () => response('Laravel fixture database='.DB::select('SELECT 1 AS ok')[0]->ok)->withHeaders(['X-Powered-By' => 'fixture-runtime', 'Strict-Transport-Security' => 'max-age=0', 'X-Frame-Options' => 'DENY', 'X-Content-Type-Options' => 'fixture-invalid']));
+Route::get('/', fn () => response('Laravel fixture database='.DB::select('SELECT 1 AS ok')[0]->ok)->withHeaders(['X-Powered-By' => 'fixture-runtime', 'Strict-Transport-Security' => 'max-age=0', 'X-Frame-Options' => 'DENY', 'X-Content-Type-Options' => 'fixture-invalid', 'Referrer-Policy' => 'unsafe-url']));
 Route::get('/php-config', fn () => response()->json(['expose_php' => ini_get('expose_php'), 'display_errors' => ini_get('display_errors'), 'opcache' => ini_get('opcache.enable'), 'unprivileged' => posix_geteuid() !== 0, 'no_new_privs' => (bool) preg_match('/^NoNewPrivs:\s+1$/m', file_get_contents('/proc/self/status'))]));
 PHP
 
@@ -281,6 +299,7 @@ sudo test ! -e /var/lib/abr-ci/import-shell-executed
 abr_ci enable fixture-php
 fixture_https fixture-php.localhost --dump-header "$fixture_source/headers" >/dev/null
 fixture_security_headers "$fixture_source/headers"
+fixture_missing_assets fixture-php.localhost /build/assets
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"opcache":"1"'
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"unprivileged":true,"no_new_privs":true'
 # A generated hashed asset is served with Brotli and immutable caching.
@@ -294,6 +313,14 @@ grep -Ei '^content-encoding: br' "$fixture_source/asset-headers"
 grep -Fi 'Cache-Control: public, max-age=31536000, immutable' "$fixture_source/asset-headers"
 fixture_security_headers "$fixture_source/asset-headers"
 brotli --decompress --stdout "$fixture_source/asset.br" | sudo cmp - "$asset_path"
+# A stable filename can change on the next deploy and must not be immutable.
+printf 'body { color: black; }\n' | sudo tee /srv/apps/fixture-php/public/build/assets/plain.css >/dev/null
+curl --fail --silent --show-error --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
+  -D "$fixture_source/plain-headers" https://fixture-php.localhost/build/assets/plain.css -o /dev/null
+fixture_security_headers "$fixture_source/plain-headers"
+if grep -Ei '^cache-control:.*(immutable|max-age=31536000)' "$fixture_source/plain-headers"; then
+  echo 'Unversioned asset received immutable caching' >&2; exit 1
+fi
 for encoding in zstd gzip; do
   curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
     -H "Accept-Encoding: $encoding" --dump-header "$fixture_source/$encoding-headers" \
@@ -328,6 +355,7 @@ error_status=$(curl --silent --show-error --insecure --resolve www.fixture-octan
   -D "$fixture_source/error-headers" -o /dev/null --write-out '%{http_code}' https://www.fixture-octane.localhost/)
 test "$error_status" = 502
 fixture_security_headers "$fixture_source/error-headers"
+fixture_missing_assets www.fixture-octane.localhost /build/assets
 sudo systemctl start abr-fixture-octane-octane.service
 abr_ci database backup fixture-php fixture-octane --output-dir /var/lib/abr-ci/selected-backups
 sudo test "$(sudo find /var/lib/abr-ci/selected-backups -name '*.sql' | wc -l)" = 2
@@ -374,6 +402,9 @@ JSON
   grep -Fi 'Cache-Control: public, max-age=31536000, immutable' "$fixture_source/nuxt-headers"
   fixture_security_headers "$fixture_source/nuxt-headers"
   brotli --decompress --stdout "$fixture_source/nuxt.br" | sudo cmp - "$nuxt_asset"
+  sudo systemctl stop "abr-$app-nuxt.service"
+  fixture_missing_assets "$app_domain" /_nuxt
+  sudo systemctl start "abr-$app-nuxt.service"
   abr_ci restart "$app" web
 done
 abr_ci ports

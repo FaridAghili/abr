@@ -4,6 +4,8 @@
 
 - Redirect every managed HTTP domain to HTTPS and set six-month HSTS plus
   Laravel's recommended frame and content-type headers on HTTPS responses.
+- Set an explicit referrer policy and return direct 404s for missing build
+  assets; restrict immutable caching to successful versioned asset responses.
 - Install shared npm tools without root privileges, freeze the published files,
   and clean staging caches and recorded unused previous installations.
 - Clone repositories without root privileges using a temporary SSH identity;
