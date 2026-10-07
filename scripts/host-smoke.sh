@@ -103,10 +103,15 @@ sudo /usr/sbin/sshd -T | grep -Fx 'authenticationmethods publickey'
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \
   -e 'SELECT @@bind_address, @@local_infile;' | grep -Fx $'127.0.0.1\t0'
 sudo redis-cli CONFIG GET bind | grep -Fx '127.0.0.1 -::1'
-test "$(stat -c '%u:%a' /etc/redis)" = 0:750
-sudo runuser -u redis -- test -r /etc/redis/redis.conf
-sudo runuser -u redis -- test -r /etc/redis/abr.conf
-fixture_denied redis test -w /etc/redis
+stat -c '%U:%G %a %n' /etc/redis
+# chmod preserves the packaged directory's setgid bit for group inheritance.
+case "$(stat -c '%u:%G:%a' /etc/redis)" in
+  0:redis:750|0:redis:2750) ;;
+  *) echo 'Unsafe Redis configuration directory permissions' >&2; exit 1 ;;
+esac
+sudo runuser -u redis -- head -c 1 /etc/redis/redis.conf >/dev/null
+sudo runuser -u redis -- head -c 1 /etc/redis/abr.conf >/dev/null
+fixture_denied redis touch /etc/redis/.abr-ci-write-probe
 sudo redis-cli CONFIG GET appendonly | grep -Fx yes
 sudo redis-cli CONFIG GET maxmemory-policy | grep -Fx noeviction
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \
