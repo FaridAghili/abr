@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"sites-manager/internal/config"
+	"abr/internal/config"
 )
 
 // Published by GitHub, not learned from an unauthenticated ssh-keyscan.
@@ -44,7 +44,7 @@ func (h Host) GitSetup(source string) error {
 			defer os.RemoveAll(tmp)
 			candidate := filepath.Join(tmp, "identity")
 			if source == "" {
-				if _, err := h.run("Generate shared VPS SSH key", Command{Name: "ssh-keygen", Args: []string{"-t", "ed25519", "-N", "", "-C", "sites VPS", "-f", candidate}, Private: true}); err != nil {
+				if _, err := h.run("Generate shared VPS SSH key", Command{Name: "ssh-keygen", Args: []string{"-t", "ed25519", "-N", "", "-C", "abr VPS", "-f", candidate}, Private: true}); err != nil {
 					return err
 				}
 			} else {
@@ -226,7 +226,7 @@ func (h Host) Clone(repository, directory string) error {
 			return err
 		}
 		if !configured {
-			return fmt.Errorf("run sites git setup and add its public key to GitHub first")
+			return fmt.Errorf("run abr git setup and add its public key to GitHub first")
 		}
 		if _, err := os.Lstat(h.path(directory)); !os.IsNotExist(err) {
 			return fmt.Errorf("clone destination must not exist: %s", directory)

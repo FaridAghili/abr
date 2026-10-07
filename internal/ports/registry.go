@@ -10,8 +10,8 @@ import (
 	"os"
 	"sort"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/storage"
+	"abr/internal/config"
+	"abr/internal/storage"
 )
 
 type Assignment struct {

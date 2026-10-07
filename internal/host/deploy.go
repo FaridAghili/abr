@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/ports"
-	"sites-manager/internal/services"
-	"sites-manager/internal/storage"
+	"abr/internal/config"
+	"abr/internal/ports"
+	"abr/internal/services"
+	"abr/internal/storage"
 )
 
 type DeployOptions struct{ All, NoPull bool }
@@ -80,7 +80,7 @@ func (h Host) asUser(a config.App, environment map[string]string, private bool, 
 			environment["GIT_TERMINAL_PROMPT"] = "0"
 		}
 	}
-	command := []string{"--user", a.User, "--", "env", "-i", "HOME=/var/lib/sites-users/" + a.User, "USER=" + a.User, "LOGNAME=" + a.User, "LANG=C.UTF-8", "PATH=/usr/local/bin:/usr/bin:/bin"}
+	command := []string{"--user", a.User, "--", "env", "-i", "HOME=/var/lib/abr-users/" + a.User, "USER=" + a.User, "LOGNAME=" + a.User, "LANG=C.UTF-8", "PATH=/usr/local/bin:/usr/bin:/bin"}
 	keys := make([]string, 0, len(environment))
 	for key := range environment {
 		if key != "PATH" {

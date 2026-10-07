@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"sites-manager/internal/config"
+	"abr/internal/config"
 )
 
 // Build-time Brotli keeps the official Caddy binary and avoids response-time CPU cost.

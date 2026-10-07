@@ -7,7 +7,7 @@ last = 19999
 [[apps]]
 name = "api"
 directory = "/srv/apps/api"
-user = "sites-api"
+user = "abr-api"
 type = "laravel"
 domain = "api.example.com"
 aliases = ["www.api.example.com"]
@@ -30,7 +30,7 @@ enabled = false
 [[apps]]
 name = "portal"
 directory = "/srv/apps/portal"
-user = "sites-portal"
+user = "abr-portal"
 type = "laravel"
 domain = "portal.example.com"
 [apps.database]
@@ -45,6 +45,6 @@ enabled = true
 [[apps]]
 name = "frontend"
 directory = "/srv/apps/frontend"
-user = "sites-frontend"
+user = "abr-frontend"
 type = "nuxt"
 domain = "frontend.example.com"

@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
+	"abr/internal/config"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
-	"sites-manager/internal/config"
 )
 
 func required(s string) error {
@@ -110,7 +110,7 @@ func (m *model) registerForm() tea.Cmd {
 				return nil
 			}),
 			huh.NewInput().Title("Primary domain").Placeholder("example.com").Value(&domain).Validate(func(s string) error {
-				a := config.App{Name: "test", Directory: "/srv/test", User: "sites-test", Type: "nuxt", Domain: s}
+				a := config.App{Name: "test", Directory: "/srv/test", User: "abr-test", Type: "nuxt", Domain: s}
 				return a.Validate()
 			})),
 		huh.NewGroup(huh.NewSelect[string]().Title("Laravel web driver").Options(huh.NewOption("PHP-FPM · Unix socket", "fpm"), huh.NewOption("Octane · shared RoadRunner", "octane")).Value(&driver)).WithHideFunc(func() bool { return kind != "laravel" }),

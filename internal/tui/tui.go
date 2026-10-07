@@ -18,7 +18,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"sites-manager/internal/config"
+	"abr/internal/config"
 )
 
 // Options supplies paths and a command runner shared with the noninteractive CLI.
@@ -270,7 +270,7 @@ func (m *model) serviceForm(app config.App, command string) tea.Cmd {
 		}
 		a := action{title: command + " / " + app.Name, args: args}
 		if command == "logs" {
-			a.note = "Recent journal snapshot. For live streaming, use sites logs APP --follow outside the menu."
+			a.note = "Recent journal snapshot. For live streaming, use abr logs APP --follow outside the menu."
 			return m.start(a)
 		}
 		return m.review(a)
@@ -302,7 +302,7 @@ func (m *model) review(a action) tea.Cmd {
 	if description != "" {
 		description += "\n\n"
 	}
-	description += "sites " + displayArgs(a.args) + "\n\nConfig: " + clean(m.options.ConfigPath) + "\nState: " + clean(m.options.StateDir) + "\nTemplates: " + clean(m.options.TemplatesDir) + "\nApps: " + clean(m.options.AppsDir)
+	description += "abr " + displayArgs(a.args) + "\n\nConfig: " + clean(m.options.ConfigPath) + "\nState: " + clean(m.options.StateDir) + "\nTemplates: " + clean(m.options.TemplatesDir) + "\nApps: " + clean(m.options.AppsDir)
 	if m.options.DryRun {
 		description += "\n\nDRY RUN: preview only. The command can reject unsupported previews."
 	}
@@ -453,7 +453,7 @@ func (m *model) View() tea.View {
 	if m.options.DryRun {
 		mode = "DRY RUN · preview host operations"
 	}
-	header := accent.Render("SITES") + muted.Render("  "+m.options.Version+"  /  "+mode)
+	header := accent.Render("Abr") + muted.Render("  "+m.options.Version+"  /  "+mode)
 	header += "\n" + muted.Render(ansi.Truncate(clean(m.options.ConfigPath)+"  ·  "+clean(m.options.StateDir), width, "…"))
 	var body, footer string
 	if m.width < 48 || m.height < 16 {

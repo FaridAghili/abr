@@ -9,9 +9,9 @@ import (
 	"sync"
 	"testing"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/ports"
-	"sites-manager/internal/storage"
+	"abr/internal/config"
+	"abr/internal/ports"
+	"abr/internal/storage"
 )
 
 func testManager(t *testing.T) Manager {

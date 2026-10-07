@@ -24,7 +24,7 @@ func lock(f *os.File) error {
 			return err
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out after 10s waiting for another sites process")
+			return fmt.Errorf("timed out after 10s waiting for another abr process")
 		}
 		time.Sleep(25 * time.Millisecond)
 	}

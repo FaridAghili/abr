@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"sites-manager/internal/services"
+	"abr/internal/services"
 )
 
 func (h Host) installComposer() error {
@@ -90,7 +90,7 @@ func (h Host) installNPM(images bool) error {
 }
 
 func (h Host) configureRedis() (result error) {
-	const include = "include /etc/redis/sites.conf"
+	const include = "include /etc/redis/abr.conf"
 	path := "/etc/redis/redis.conf"
 	old, err := h.read(path)
 	if err != nil && !h.DryRun {
@@ -115,9 +115,9 @@ func (h Host) configureRedis() (result error) {
 			result = errors.Join(result, h.write(path, old, 0640), h.command("chown", "root:redis", path), h.command("systemctl", "restart", "redis-server"))
 		}
 	}()
-	return h.setupConfig("redis-hardening.conf.tmpl", "/etc/redis/sites.conf", func() error {
+	return h.setupConfig("redis-hardening.conf.tmpl", "/etc/redis/abr.conf", func() error {
 		if !hasDirective(old, include) {
-			if err := h.write(path, append(append([]byte(nil), old...), []byte("\n# Sites local Redis configuration\n"+include+"\n")...), 0640); err != nil {
+			if err := h.write(path, append(append([]byte(nil), old...), []byte("\n# Abr local Redis configuration\n"+include+"\n")...), 0640); err != nil {
 				return err
 			}
 			// The packaged config belongs to redis; atomic replacement creates a
@@ -168,10 +168,10 @@ echo "PHP 8.5 extensions and Imagick SVG conversion verified\n";`
 
 func (h Host) configurePHP() error {
 	base := "/etc/php/" + services.PHPVersion
-	if err := h.setupConfig("php-cli.ini.tmpl", filepath.Join(base, "cli/conf.d/99-sites.ini"), h.verifyPHP); err != nil {
+	if err := h.setupConfig("php-cli.ini.tmpl", filepath.Join(base, "cli/conf.d/99-abr.ini"), h.verifyPHP); err != nil {
 		return err
 	}
-	return h.setupConfig("php-fpm.ini.tmpl", filepath.Join(base, "fpm/conf.d/99-sites.ini"), func() error {
+	return h.setupConfig("php-fpm.ini.tmpl", filepath.Join(base, "fpm/conf.d/99-abr.ini"), func() error {
 		if err := h.command("/usr/sbin/php-fpm"+services.PHPVersion, "--test"); err != nil {
 			return err
 		}
@@ -201,7 +201,7 @@ func hasDirective(data []byte, directive string) bool {
 
 func (h Host) configureCaddyImport() error {
 	const path = "/etc/caddy/Caddyfile"
-	const directive = "import /etc/caddy/sites.d/sites-*.caddy"
+	const directive = "import /etc/caddy/abr.d/abr-*.caddy"
 	old, err := h.read(path)
 	if err != nil && !h.DryRun {
 		return err
@@ -224,7 +224,7 @@ func (h Host) configureCaddyImport() error {
 				return err
 			}
 		}
-		data := append(append([]byte(nil), base...), []byte("\n# Sites application configuration\n"+directive+"\n")...)
+		data := append(append([]byte(nil), base...), []byte("\n# Abr application configuration\n"+directive+"\n")...)
 		if err := h.write(path, data, 0644); err != nil {
 			return err
 		}
@@ -241,7 +241,7 @@ func (h Host) configureCaddyImport() error {
 // App users must not be able to reconfigure every site through the default
 // unauthenticated loopback API. The packaged service can use a private socket.
 func (h Host) configureCaddyAdmin() error {
-	const address = "unix//var/lib/caddy/sites-admin.sock"
+	const address = "unix//var/lib/caddy/abr-admin.sock"
 	out, err := h.run("Check Caddy administration endpoint", Command{Name: "caddy", Args: []string{"adapt", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"}, Env: []string{"CADDY_ADMIN=" + address}, Private: true})
 	if err != nil {
 		return err
@@ -260,7 +260,7 @@ func (h Host) configureCaddyAdmin() error {
 			return fmt.Errorf("Caddyfile overrides the private admin socket; remove its admin option before setup")
 		}
 	}
-	err = h.setupConfig("caddy-admin.service.conf.tmpl", "/etc/systemd/system/caddy.service.d/sites-admin.conf", func() error {
+	err = h.setupConfig("caddy-admin.service.conf.tmpl", "/etc/systemd/system/caddy.service.d/abr-admin.conf", func() error {
 		if err := h.command("systemctl", "daemon-reload"); err != nil {
 			return err
 		}

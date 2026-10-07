@@ -1,7 +1,7 @@
 # Standalone templates
 
 Distributions include these runtime files. Setup copies missing files into
-`/etc/sites/templates` and preserves edits. `--templates-dir` selects another
+`/etc/abr/templates` and preserves edits. `--templates-dir` selects another
 installed template directory. App template changes apply on the next
 `enable`/`deploy`; shared setup configuration changes apply on the next `setup`.
 Edit the source templates, which are trusted root configuration, and validate

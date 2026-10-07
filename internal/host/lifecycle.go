@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/ports"
-	"sites-manager/internal/services"
+	"abr/internal/config"
+	"abr/internal/ports"
+	"abr/internal/services"
 )
 
 type manifest struct {
@@ -55,17 +55,17 @@ func (h Host) application(name string) (config.App, ports.Registry, error) {
 }
 
 func unitAllowed(name, unit string) bool {
-	return regexp.MustCompile(`^sites-` + regexp.QuoteMeta(name) + `-((octane|nuxt|queue@[1-9][0-9]*|nightwatch|inertia-ssr|scheduler)\.service|scheduler\.timer)$`).MatchString(unit)
+	return regexp.MustCompile(`^abr-` + regexp.QuoteMeta(name) + `-((octane|nuxt|queue@[1-9][0-9]*|nightwatch|inertia-ssr|scheduler)\.service|scheduler\.timer)$`).MatchString(unit)
 }
 
 func (h Host) fileAllowed(a config.App, path string) bool {
 	if path != filepath.Clean(path) {
 		return false
 	}
-	if path == filepath.Join(h.Manager.StateDir, "env", a.Name+".env") || path == "/etc/caddy/sites.d/sites-"+a.Name+".caddy" || path == "/etc/php/"+services.PHPVersion+"/fpm/pool.d/sites-"+a.Name+".conf" {
+	if path == filepath.Join(h.Manager.StateDir, "env", a.Name+".env") || path == "/etc/caddy/abr.d/abr-"+a.Name+".caddy" || path == "/etc/php/"+services.PHPVersion+"/fpm/pool.d/abr-"+a.Name+".conf" {
 		return true
 	}
-	return filepath.Dir(path) == "/etc/systemd/system" && (unitAllowed(a.Name, filepath.Base(path)) || filepath.Base(path) == "sites-"+a.Name+"-queue@.service")
+	return filepath.Dir(path) == "/etc/systemd/system" && (unitAllowed(a.Name, filepath.Base(path)) || filepath.Base(path) == "abr-"+a.Name+"-queue@.service")
 }
 
 func (h Host) loadManifest(a config.App) (manifest, bool, error) {
@@ -165,7 +165,7 @@ func (h Host) enable(a config.App, r ports.Registry) error {
 		if a.Web.Driver == "octane" {
 			info, err := os.Stat(h.path("/usr/local/bin/rr"))
 			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
-				return fmt.Errorf("shared RoadRunner is missing or not executable; run sites setup before enabling Octane")
+				return fmt.Errorf("shared RoadRunner is missing or not executable; run abr setup before enabling Octane")
 			}
 			local := h.path(filepath.Join(a.Directory, "rr"))
 			if _, err := os.Lstat(local); err == nil {
@@ -184,7 +184,7 @@ func (h Host) enable(a config.App, r ports.Registry) error {
 		}
 		for _, path := range required {
 			if _, err := os.Stat(h.path(filepath.Join(a.Directory, path))); err != nil {
-				return fmt.Errorf("%s: missing %s; run sites deploy first: %w", a.Name, path, err)
+				return fmt.Errorf("%s: missing %s; run abr deploy first: %w", a.Name, path, err)
 			}
 		}
 	}
@@ -395,7 +395,7 @@ func (h Host) ready(a config.App, r ports.Registry, m manifest) error {
 	deadline := time.Now().Add(15 * time.Second)
 	if m.FPM {
 		for {
-			connection, err := net.DialTimeout("unix", h.path("/run/php/sites-"+a.Name+".sock"), 250*time.Millisecond)
+			connection, err := net.DialTimeout("unix", h.path("/run/php/abr-"+a.Name+".sock"), 250*time.Millisecond)
 			if err == nil {
 				connection.Close()
 				break
@@ -415,7 +415,7 @@ func (h Host) ready(a config.App, r ports.Registry, m manifest) error {
 				break
 			}
 			if time.Now().After(deadline) {
-				return fmt.Errorf("%s/%s did not listen at 127.0.0.1:%d; inspect sites logs", a.Name, purpose, port)
+				return fmt.Errorf("%s/%s did not listen at 127.0.0.1:%d; inspect abr logs", a.Name, purpose, port)
 			}
 			time.Sleep(200 * time.Millisecond)
 		}
@@ -604,7 +604,7 @@ func (h Host) removeUser(a config.App) error {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return err
 	}
-	if record.App != a.Name || record.User != a.User || record.Home != "/var/lib/sites-users/"+a.User || record.UID == "" {
+	if record.App != a.Name || record.User != a.User || record.Home != "/var/lib/abr-users/"+a.User || record.UID == "" {
 		return fmt.Errorf("invalid Ubuntu account ownership record")
 	}
 	entry, exists, err := h.passwd(a.User)
@@ -613,7 +613,7 @@ func (h Host) removeUser(a config.App) error {
 	}
 	if exists {
 		parts := strings.Split(entry, ":")
-		if len(parts) != 7 || parts[2] != record.UID || parts[4] != "sites-"+a.Name || parts[5] != record.Home {
+		if len(parts) != 7 || parts[2] != record.UID || parts[4] != "abr-"+a.Name || parts[5] != record.Home {
 			return fmt.Errorf("refusing to delete changed Ubuntu account %s", a.User)
 		}
 		output, err := h.run("Verify no remaining processes for "+a.User, Command{Name: "pgrep", Args: []string{"-u", record.UID}, Private: true})
@@ -705,7 +705,7 @@ func selectedUnits(a config.App, m manifest, service string) ([]string, error) {
 	}
 	var units []string
 	for _, unit := range m.Units {
-		short := strings.TrimPrefix(unit, "sites-"+a.Name+"-")
+		short := strings.TrimPrefix(unit, "abr-"+a.Name+"-")
 		short = strings.TrimSuffix(strings.TrimSuffix(short, ".service"), ".timer")
 		if service == "" || service == short || (service == "queue" && strings.HasPrefix(short, "queue@")) || (service == "web" && (short == "nuxt" || short == "octane")) {
 			units = append(units, unit)

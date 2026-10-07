@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"sites-manager/internal/config"
+	"abr/internal/config"
 )
 
 type credentials struct {

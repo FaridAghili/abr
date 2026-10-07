@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"sites-manager/internal/config"
+	"abr/internal/config"
 )
 
 // Transfers use only existing, recorded managed databases; they never provision one.
@@ -128,7 +128,7 @@ func (h Host) BackupDatabases(names []string, all bool, directory string) error 
 }
 
 func (h Host) dumpDatabase(c credentials, path string) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".sites-dump-*")
+	f, err := os.CreateTemp(filepath.Dir(path), ".abr-dump-*")
 	if err != nil {
 		return err
 	}
@@ -194,7 +194,7 @@ func (h Host) ImportDatabase(name, path string, yes bool) error {
 			return fmt.Errorf("SQL import must be a nonempty regular file")
 		}
 		// Private temporary defaults file keeps passwords out of process arguments/environment.
-		defaults, err := os.CreateTemp(h.Manager.StateDir, ".sites-mysql-*")
+		defaults, err := os.CreateTemp(h.Manager.StateDir, ".abr-mysql-*")
 		if err != nil {
 			return err
 		}

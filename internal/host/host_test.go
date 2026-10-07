@@ -15,10 +15,10 @@ import (
 	"strings"
 	"testing"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/manager"
-	"sites-manager/internal/ports"
-	"sites-manager/internal/services"
+	"abr/internal/config"
+	"abr/internal/manager"
+	"abr/internal/ports"
+	"abr/internal/services"
 )
 
 type testExit int
@@ -102,7 +102,7 @@ func fixture(t *testing.T) (Host, *fakeRunner, *bytes.Buffer, config.App) {
 	runner := &fakeRunner{users: map[string]string{}}
 	var out bytes.Buffer
 	h := Host{Manager: manager.Manager{ConfigPath: filepath.Join(root, "state/config.toml"), StateDir: filepath.Join(root, "state"), Probe: func(int) error { return nil }}, TemplatesDir: "../../templates", AppsDir: filepath.Join(root, "apps"), Output: &out, Runner: runner, root: root, check: func() error { return nil }}
-	a := config.App{Name: "app", User: "sites-app", Directory: filepath.Join(h.AppsDir, "app"), Type: "laravel", Domain: "app.localhost", Web: config.Web{Driver: "fpm"}}
+	a := config.App{Name: "app", User: "abr-app", Directory: filepath.Join(h.AppsDir, "app"), Type: "laravel", Domain: "app.localhost", Web: config.Web{Driver: "fpm"}}
 	for _, dir := range []string{"public", "storage/app/public", "bootstrap/cache", "vendor"} {
 		if err := os.MkdirAll(filepath.Join(a.Directory, dir), 0755); err != nil {
 			t.Fatal(err)
@@ -149,7 +149,7 @@ func TestRegisterDatabaseIsPrivateStableAndScoped(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(sql, "ON `sites_app`.*") || strings.Contains(sql, "*.*") || strings.Contains(sql, "GRANT OPTION") {
+	if !strings.Contains(sql, "ON `abr_app`.*") || strings.Contains(sql, "*.*") || strings.Contains(sql, "GRANT OPTION") {
 		t.Fatal(sql)
 	}
 	if err := h.Database(a.Name, false); err != nil {
@@ -200,7 +200,7 @@ func TestRefuseExistingAccountAndDatabase(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			h, r, _, a := fixture(t)
 			if kind == "user" {
-				r.users[a.User] = "sites-app:x:1000:1000:unrelated:/home/owner:/bin/bash"
+				r.users[a.User] = "abr-app:x:1000:1000:unrelated:/home/owner:/bin/bash"
 			} else {
 				a.Database.Enabled = true
 				r.database = true
@@ -274,7 +274,7 @@ func TestUnmanagedFilesAndCorruptManifestRefused(t *testing.T) {
 	if err := h.apply(a, registry, p); err == nil {
 		t.Fatal("overwrote unmanaged config")
 	}
-	if err := h.write(h.manifestPath(a.Name), []byte(`{"Version":1,"App":"app","User":"sites-app","Files":["/etc/passwd"]}`), 0600); err != nil {
+	if err := h.write(h.manifestPath(a.Name), []byte(`{"Version":1,"App":"app","User":"abr-app","Files":["/etc/passwd"]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.Remove(a.Name); err == nil {
@@ -288,8 +288,8 @@ func TestRemovalStopsBeforeUserDeletionAndPreservesData(t *testing.T) {
 	if _, err := h.Register(a, nil); err != nil {
 		t.Fatal(err)
 	}
-	unit := "sites-app-queue@1.service"
-	path := "/etc/systemd/system/sites-app-queue@.service"
+	unit := "abr-app-queue@1.service"
+	path := "/etc/systemd/system/abr-app-queue@.service"
 	if err := h.write(path, []byte(services.Marker+"[Service]\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +454,7 @@ func TestStopUnitSkipsNeverStartedService(t *testing.T) {
 		return nil
 	}
 	h.Runner = inactiveRunner{r}
-	if err := h.stopUnit("sites-app-scheduler.service"); err != nil {
+	if err := h.stopUnit("abr-app-scheduler.service"); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range r.calls {
@@ -465,8 +465,8 @@ func TestStopUnitSkipsNeverStartedService(t *testing.T) {
 }
 
 func TestSchedulerTimerStopsBeforeItsJob(t *testing.T) {
-	units := stopUnits([]string{"sites-app-scheduler.timer", "sites-app-queue@1.service"})
-	if len(units) != 3 || units[0] != "sites-app-scheduler.timer" {
+	units := stopUnits([]string{"abr-app-scheduler.timer", "abr-app-queue@1.service"})
+	if len(units) != 3 || units[0] != "abr-app-scheduler.timer" {
 		t.Fatalf("timer can start a job during shutdown: %v", units)
 	}
 }
@@ -607,14 +607,14 @@ func TestRoadRunnerDigestAndArchiveEntryValidation(t *testing.T) {
 
 func TestFPMReadyChecksActualSocket(t *testing.T) {
 	h, _, _, a := fixture(t)
-	short, err := os.MkdirTemp("", "sites-socket-")
+	short, err := os.MkdirTemp("", "abr-socket-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(short)
 	// Unix socket paths have a small platform-dependent maximum length.
 	h.root = short
-	path := h.path("/run/php/sites-app.sock")
+	path := h.path("/run/php/abr-app.sock")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}

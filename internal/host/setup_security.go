@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"sites-manager/internal/config"
+	"abr/internal/config"
 )
 
 type sshAdmin struct {
@@ -120,7 +120,7 @@ func (h Host) setupConfig(source, target string, apply func() error) (result err
 	}
 	if existed {
 		info, err := os.Lstat(h.path(target))
-		if err != nil || !info.Mode().IsRegular() || (!bytes.HasPrefix(old, []byte("# Managed by sites")) && !bytes.HasPrefix(old, []byte("; Managed by sites")) && !bytes.HasPrefix(old, []byte("// Managed by sites"))) {
+		if err != nil || !info.Mode().IsRegular() || (!bytes.HasPrefix(old, []byte("# Managed by abr")) && !bytes.HasPrefix(old, []byte("; Managed by abr")) && !bytes.HasPrefix(old, []byte("// Managed by abr"))) {
 			return fmt.Errorf("refusing to replace unmanaged setup file %s", target)
 		}
 	}
@@ -147,7 +147,7 @@ func (h Host) hardenSSH(admin sshAdmin) error {
 	if err := h.command("install", "-d", "-m", "0755", "-o", "root", "-g", "root", "/run/sshd"); err != nil {
 		return err
 	}
-	const path = "/etc/ssh/sshd_config.d/00-sites-hardening.conf"
+	const path = "/etc/ssh/sshd_config.d/00-abr-hardening.conf"
 	err := h.setupConfig("ssh-hardening.conf.tmpl", path, func() error {
 		if err := h.command("/usr/sbin/sshd", "-t"); err != nil {
 			return err
@@ -246,7 +246,7 @@ func (h Host) hardenMySQL() error {
 	if _, err := h.mysql([]byte("ALTER USER 'root'@'localhost' IDENTIFIED WITH auth_socket;\n")); err != nil {
 		return err
 	}
-	if err := h.setupConfig("mysql-hardening.cnf.tmpl", "/etc/mysql/mysql.conf.d/zz-sites.cnf", func() error {
+	if err := h.setupConfig("mysql-hardening.cnf.tmpl", "/etc/mysql/mysql.conf.d/zz-abr.cnf", func() error {
 		if err := h.command("/usr/sbin/mysqld", "--validate-config", "--user=mysql"); err != nil {
 			return err
 		}

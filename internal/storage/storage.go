@@ -36,7 +36,7 @@ func AtomicWriteMode(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".sites-*")
+	f, err := os.CreateTemp(dir, ".abr-*")
 	if err != nil {
 		return err
 	}

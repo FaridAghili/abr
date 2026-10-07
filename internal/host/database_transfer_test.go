@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"sites-manager/internal/config"
+	"abr/internal/config"
 )
 
 type transferRunner struct{ run func(Command) ([]byte, error) }
@@ -91,7 +91,7 @@ func TestBackupSelectionAndPrivateAtomicFiles(t *testing.T) {
 
 func TestBackupAllFiltersAndRejectsUnmanagedDatabase(t *testing.T) {
 	h, _ := transferFixture(t)
-	a := config.App{Name: "web", Directory: "/srv/apps/web", User: "sites-web", Type: "nuxt", Domain: "web.test"}
+	a := config.App{Name: "web", Directory: "/srv/apps/web", User: "abr-web", Type: "nuxt", Domain: "web.test"}
 	if _, err := h.Manager.Register(a, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestImportIsScopedPrivateStreamingAndConfirmed(t *testing.T) {
 	if err := h.ImportDatabase("app", path, true); err == nil || !strings.Contains(err.Error(), "partially") {
 		t.Fatal("failure not reported", err)
 	}
-	files, _ := filepath.Glob(filepath.Join(h.Manager.StateDir, ".sites-mysql-*"))
+	files, _ := filepath.Glob(filepath.Join(h.Manager.StateDir, ".abr-mysql-*"))
 	if len(files) != 0 {
 		t.Fatal("credentials not cleaned after failure")
 	}

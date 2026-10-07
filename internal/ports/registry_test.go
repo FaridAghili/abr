@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"sites-manager/internal/config"
+	"abr/internal/config"
 )
 
 func app() config.App {

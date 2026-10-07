@@ -14,23 +14,23 @@ import (
 
 	"golang.org/x/term"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/host"
-	"sites-manager/internal/manager"
-	"sites-manager/internal/ports"
-	"sites-manager/internal/tui"
+	"abr/internal/config"
+	"abr/internal/host"
+	"abr/internal/manager"
+	"abr/internal/ports"
+	"abr/internal/tui"
 )
 
 const version = "0.1.0"
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "sites:", err)
+		fmt.Fprintln(os.Stderr, "abr:", err)
 		os.Exit(1)
 	}
 }
 
-const usage = `Usage: sites [FLAGS] COMMAND [FLAGS] [APP...]
+const usage = `Usage: abr [FLAGS] COMMAND [FLAGS] [APP...]
 
 Commands:
   tui              Interactive application and server menu (default in a terminal)
@@ -57,8 +57,8 @@ Commands:
   deploy APP...    Pull, install dependencies, build, migrate, enable
   deploy --all     Deploy sequentially
 
-Paths: --config /etc/sites/config.toml --state-dir /var/lib/sites
-       --templates-dir /etc/sites/templates --apps-dir /srv/apps
+Paths: --config /etc/abr/config.toml --state-dir /var/lib/abr
+       --templates-dir /etc/abr/templates --apps-dir /srv/apps
 Host commands require root on Ubuntu 26.04 AMD64; --dry-run previews on macOS.
 Portable registration uses --config-only. Without a terminal, no arguments prints help.
 `
@@ -66,10 +66,10 @@ Portable registration uses --config-only. Without a terminal, no arguments print
 func run(args []string, out, stderr io.Writer) error {
 	m := manager.Manager{}
 	h := host.Host{Output: out}
-	root := flag.NewFlagSet("sites", flag.ContinueOnError)
+	root := flag.NewFlagSet("abr", flag.ContinueOnError)
 	root.SetOutput(stderr)
-	pathFlags(root, &m, "/etc/sites/config.toml", "/var/lib/sites")
-	hostFlags(root, &h, "/etc/sites/templates", "/srv/apps", false)
+	pathFlags(root, &m, "/etc/abr/config.toml", "/var/lib/abr")
+	hostFlags(root, &h, "/etc/abr/templates", "/srv/apps", false)
 	root.Usage = func() { fmt.Fprint(stderr, usage) }
 	if err := root.Parse(args); err != nil {
 		return helpError(err)
@@ -85,13 +85,13 @@ func run(args []string, out, stderr io.Writer) error {
 	command, args := args[0], args[1:]
 	if command == "config" {
 		if len(args) == 0 || args[0] != "validate" {
-			return fmt.Errorf("use sites config validate")
+			return fmt.Errorf("use abr config validate")
 		}
 		command, args = "config validate", args[1:]
 	}
 	if command == "git" {
 		if len(args) == 0 || args[0] != "setup" {
-			return fmt.Errorf("use sites git setup [--key PATH]")
+			return fmt.Errorf("use abr git setup [--key PATH]")
 		}
 		command, args = "git setup", args[1:]
 	}
@@ -101,7 +101,7 @@ func run(args []string, out, stderr io.Writer) error {
 	switch command {
 	case "tui", "version", "config validate", "list", "register", "ports", "doctor", "setup", "git setup", "clone", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
 	default:
-		return fmt.Errorf("unknown command %q; use sites help", command)
+		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -122,7 +122,7 @@ func run(args []string, out, stderr io.Writer) error {
 	case "register":
 		fs.StringVar(&app.Name, "name", "", "unique application name (required)")
 		fs.StringVar(&app.Directory, "dir", "", "absolute cloned project directory (required)")
-		fs.StringVar(&app.User, "user", "", "dedicated runtime user (default: sites-NAME)")
+		fs.StringVar(&app.User, "user", "", "dedicated runtime user (default: abr-NAME)")
 		fs.StringVar(&app.Type, "type", "", "laravel or nuxt (required)")
 		fs.StringVar(&app.Domain, "domain", "", "main domain (required)")
 		fs.Var((*stringsFlag)(&app.Aliases), "alias", "redirect domain (repeatable)")
@@ -164,27 +164,27 @@ func run(args []string, out, stderr io.Writer) error {
 	switch command {
 	case "database backup":
 		if backupAll == (len(positional) > 0) || backupDirectory == "" {
-			return fmt.Errorf("use sites database backup APP... --output-dir DIR, or --all --output-dir DIR")
+			return fmt.Errorf("use abr database backup APP... --output-dir DIR, or --all --output-dir DIR")
 		}
 	case "database import":
 		if len(positional) != 2 {
-			return fmt.Errorf("use sites database import APP FILE.sql --yes")
+			return fmt.Errorf("use abr database import APP FILE.sql --yes")
 		}
 	case "clone":
 		if len(positional) != 2 {
-			return fmt.Errorf("use sites clone git@github.com:OWNER/REPO.git /srv/apps/APP")
+			return fmt.Errorf("use abr clone git@github.com:OWNER/REPO.git /srv/apps/APP")
 		}
 	case "enable", "disable", "remove", "database":
 		if len(positional) != 1 {
-			return fmt.Errorf("use sites %s APP", command)
+			return fmt.Errorf("use abr %s APP", command)
 		}
 	case "restart", "logs":
 		if len(positional) < 1 || len(positional) > 2 {
-			return fmt.Errorf("use sites %s APP [SERVICE]", command)
+			return fmt.Errorf("use abr %s APP [SERVICE]", command)
 		}
 	case "status":
 		if len(positional) > 1 {
-			return fmt.Errorf("use sites status [APP]")
+			return fmt.Errorf("use abr status [APP]")
 		}
 	case "deploy":
 	default:
@@ -210,7 +210,7 @@ func run(args []string, out, stderr io.Writer) error {
 		return h.Clone(positional[0], positional[1])
 	case "tui":
 		if !terminalAvailable(out) {
-			return fmt.Errorf("tui requires terminal input and output; use sites help for scriptable commands")
+			return fmt.Errorf("tui requires terminal input and output; use abr help for scriptable commands")
 		}
 		base := []string{"--config", m.ConfigPath, "--state-dir", m.StateDir,
 			"--templates-dir", h.TemplatesDir, "--apps-dir", h.AppsDir,
@@ -224,7 +224,7 @@ func run(args []string, out, stderr io.Writer) error {
 			},
 		})
 	case "version":
-		fmt.Fprintf(out, "sites %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
+		fmt.Fprintf(out, "abr %s (%s/%s)\n", version, runtime.GOOS, runtime.GOARCH)
 	case "config validate":
 		c, err := config.Load(m.ConfigPath)
 		if err != nil {
@@ -439,7 +439,7 @@ func (p *portFlags) String() string { return "ENDPOINT=PORT" }
 func (p *portFlags) Set(value string) error {
 	parts := strings.Split(value, "=")
 	if len(parts) != 2 || !ports.ValidPurpose(parts[0]) {
-		return fmt.Errorf("expected ENDPOINT=PORT; see README for endpoint names")
+		return fmt.Errorf("expected ENDPOINT=PORT (octane-http, roadrunner-rpc, nuxt-http, inertia-ssr, nightwatch-ingest)")
 	}
 	port, err := strconv.Atoi(parts[1])
 	if err != nil || port < 1024 || port > 65535 {

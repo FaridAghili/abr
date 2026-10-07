@@ -1,4 +1,4 @@
-module sites-manager
+module abr
 
 go 1.27.1
 

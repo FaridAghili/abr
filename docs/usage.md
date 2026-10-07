@@ -1,27 +1,4 @@
-# abr
-
-A Go CLI and interactive menu for a clean **Ubuntu 26.04 LTS AMD64** VPS.
-Laravel uses PHP-FPM or shared RoadRunner/Octane; Nuxt uses Node for SSR or SPA.
-Caddy serves direct HTTPS. Users, databases, services and ports are managed per app.
-Version remains **0.1.0** during stabilization; development supports macOS ARM64.
-
-Before setup, update/upgrade Ubuntu, install your SSH public key for your existing
-root/sudo account, and **test key login in a second session**. Keep it open. Allow
-SSH, TCP 80/443 and UDP 443 in your provider firewall and point DNS at the VPS.
-
-Download the archive/checksum from a successful main-branch GitHub Actions run
-and extract the artifact ZIP. The original v0.1.0 release predates host management.
-
-```sh
-sha256sum -c abr-linux-amd64.tar.gz.sha256
-mkdir abr-distribution
-tar -xzf abr-linux-amd64.tar.gz -C abr-distribution
-cd abr-distribution
-./abr setup --dry-run
-sudo ./abr setup
-sudo install -m 755 abr /usr/local/bin/abr
-sudo abr
-```
+# Using Abr
 
 Keep `templates/` beside the executable during initial setup. Setup installs PHP
 8.5/extensions (including Imagick SVG support and Excimer), Node 24, latest compatible
@@ -132,7 +109,7 @@ go test ./...
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/abr-linux-amd64 ./cmd/abr
 ```
 
-[config.example.toml](config.example.toml) documents the configuration. `abr help`
+[config.example.toml](../config.example.toml) documents the configuration. `abr help`
 lists commands; `abr doctor` checks portable config/registry/port availability.
 CI checks formatting/vet/tests, packages binary/templates/example/checksum, and
 runs actual setup/deployment/backup/restore tests on a disposable Ubuntu host.

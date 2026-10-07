@@ -106,8 +106,8 @@ func TestSSHHardeningValidatesEffectiveSettingsAndRestoresOnFailure(t *testing.T
 	for _, failure := range []string{"override", "syntax", "reload"} {
 		t.Run(failure, func(t *testing.T) {
 			h, r := setupFixture(t)
-			const path = "/etc/ssh/sshd_config.d/00-sites-hardening.conf"
-			old := []byte("# Managed by sites\nPasswordAuthentication yes\n")
+			const path = "/etc/ssh/sshd_config.d/00-abr-hardening.conf"
+			old := []byte("# Managed by abr\nPasswordAuthentication yes\n")
 			if err := h.write(path, old, 0644); err != nil {
 				t.Fatal(err)
 			}
@@ -189,7 +189,7 @@ func TestRedisValidationFailureRestoresOriginalConfigs(t *testing.T) {
 	if err != nil || !bytes.Equal(old, after) {
 		t.Fatal("Redis main config not restored")
 	}
-	if _, err := os.Stat(h.path("/etc/redis/sites.conf")); !os.IsNotExist(err) {
+	if _, err := os.Stat(h.path("/etc/redis/abr.conf")); !os.IsNotExist(err) {
 		t.Fatal("failed Redis drop-in remained")
 	}
 }
@@ -216,8 +216,8 @@ func TestSetupRejectsMissingTemplatesAndDownloadCorruption(t *testing.T) {
 
 func TestCaddyImportRecognizesActiveLinesAndRestoresOnFailure(t *testing.T) {
 	const path = "/etc/caddy/Caddyfile"
-	const directive = "import /etc/caddy/sites.d/sites-*.caddy"
-	for _, existing := range []string{"# " + directive + "\n:80 { respond ok }\n", "  import   /etc/caddy/sites.d/sites-*.caddy # managed\n"} {
+	const directive = "import /etc/caddy/abr.d/abr-*.caddy"
+	for _, existing := range []string{"# " + directive + "\n:80 { respond ok }\n", "  import   /etc/caddy/abr.d/abr-*.caddy # managed\n"} {
 		h, r := setupFixture(t)
 		if err := h.write(path, []byte(existing), 0644); err != nil {
 			t.Fatal(err)
@@ -253,14 +253,14 @@ func TestCaddyImportRecognizesActiveLinesAndRestoresOnFailure(t *testing.T) {
 
 func TestRedisCommentedIncludeDoesNotSkipHardening(t *testing.T) {
 	h, _ := setupFixture(t)
-	if err := h.write("/etc/redis/redis.conf", []byte("# include /etc/redis/sites.conf\n"), 0640); err != nil {
+	if err := h.write("/etc/redis/redis.conf", []byte("# include /etc/redis/abr.conf\n"), 0640); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.configureRedis(); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := h.read("/etc/redis/redis.conf")
-	if !hasDirective(data, "include /etc/redis/sites.conf") {
+	if !hasDirective(data, "include /etc/redis/abr.conf") {
 		t.Fatal("comment prevented Redis hardening")
 	}
 }
@@ -270,9 +270,9 @@ func TestCaddyAdminUsesPrivateSocketAndRejectsFailedConfiguration(t *testing.T) 
 	if err := h.configureCaddyAdmin(); err != nil {
 		t.Fatal(err)
 	}
-	const path = "/etc/systemd/system/caddy.service.d/sites-admin.conf"
+	const path = "/etc/systemd/system/caddy.service.d/abr-admin.conf"
 	data, err := h.read(path)
-	if err != nil || !bytes.Contains(data, []byte("unix//var/lib/caddy/sites-admin.sock")) {
+	if err != nil || !bytes.Contains(data, []byte("unix//var/lib/caddy/abr-admin.sock")) {
 		t.Fatal("private Caddy administration socket missing")
 	}
 	r.fail = func(c Command) error {
@@ -297,7 +297,7 @@ func TestRedisConvertsLiveDatasetBeforeConfigAndRestart(t *testing.T) {
 	}
 	r.fail = func(c Command) error {
 		if c.Name == "redis-cli" && slices.Contains(c.Args, "SET") {
-			if _, err := os.Stat(h.path("/etc/redis/sites.conf")); !os.IsNotExist(err) {
+			if _, err := os.Stat(h.path("/etc/redis/abr.conf")); !os.IsNotExist(err) {
 				t.Fatal("changed config before live conversion")
 			}
 		}

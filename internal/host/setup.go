@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/services"
+	"abr/internal/config"
+	"abr/internal/services"
 )
 
 const DefaultRoadRunnerVersion = "latest"
@@ -82,15 +82,15 @@ func (h Host) Setup(o SetupOptions) error {
 					return err
 				}
 			}
-			keyPath := "/usr/share/keyrings/sites-" + repo.name + ".gpg"
+			keyPath := "/usr/share/keyrings/abr-" + repo.name + ".gpg"
 			if err := h.write(keyPath, key, 0644); err != nil {
 				return err
 			}
-			if err := h.write("/etc/apt/sources.list.d/sites-"+repo.name+".sources", []byte(repo.source+"Signed-By: "+keyPath+"\n"), 0644); err != nil {
+			if err := h.write("/etc/apt/sources.list.d/abr-"+repo.name+".sources", []byte(repo.source+"Signed-By: "+keyPath+"\n"), 0644); err != nil {
 				return err
 			}
 		}
-		if err := h.write("/etc/apt/preferences.d/sites-node", []byte("Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n"), 0644); err != nil {
+		if err := h.write("/etc/apt/preferences.d/abr-node", []byte("Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n"), 0644); err != nil {
 			return err
 		}
 		if err := h.command("apt-get", "-o", "APT::Update::Error-Mode=any", "update"); err != nil {
@@ -109,7 +109,7 @@ func (h Host) Setup(o SetupOptions) error {
 			return err
 		}
 		if !h.DryRun {
-			for _, dir := range []string{h.AppsDir, "/etc/caddy/sites.d", h.TemplatesDir} {
+			for _, dir := range []string{h.AppsDir, "/etc/caddy/abr.d", h.TemplatesDir} {
 				if err := os.MkdirAll(h.path(dir), 0755); err != nil {
 					return err
 				}
@@ -178,7 +178,7 @@ func (h Host) Setup(o SetupOptions) error {
 			}
 		}
 		jail := "[sshd]\nenabled = true\nbackend = systemd\nport = " + strings.Join(sshPorts, ",") + "\n"
-		if err := h.write("/etc/fail2ban/jail.d/sites-sshd.local", []byte(jail), 0644); err != nil {
+		if err := h.write("/etc/fail2ban/jail.d/abr-sshd.local", []byte(jail), 0644); err != nil {
 			return err
 		}
 		if err := h.command("systemctl", "enable", "--now", "fail2ban"); err != nil {
@@ -203,7 +203,7 @@ func (h Host) Setup(o SetupOptions) error {
 		if err := h.command("fail2ban-client", "status", "sshd"); err != nil {
 			return err
 		}
-		if err := h.setupConfig("automatic-updates.conf.tmpl", "/etc/apt/apt.conf.d/99-sites-updates", func() error {
+		if err := h.setupConfig("automatic-updates.conf.tmpl", "/etc/apt/apt.conf.d/99-abr-updates", func() error {
 			return h.command("systemctl", "enable", "--now", "apt-daily.timer", "apt-daily-upgrade.timer")
 		}); err != nil {
 			return err
@@ -234,7 +234,7 @@ func fetch(url string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("User-Agent", "sites/0.1.0")
+	request.Header.Set("User-Agent", "abr/0.1.0")
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", url, err)
@@ -312,7 +312,7 @@ func (h Host) installRoadRunner(version string) error {
 		if info, err := os.Lstat(link); err == nil && info.Mode()&os.ModeSymlink == 0 {
 			return fmt.Errorf("%s is not a symlink; relocate the existing binary before setup", link)
 		}
-		tmpDir, err := os.MkdirTemp(filepath.Dir(link), ".sites-rr-")
+		tmpDir, err := os.MkdirTemp(filepath.Dir(link), ".abr-rr-")
 		if err != nil {
 			return err
 		}

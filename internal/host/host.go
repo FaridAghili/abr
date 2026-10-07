@@ -12,8 +12,8 @@ import (
 	"runtime"
 	"strings"
 
-	"sites-manager/internal/manager"
-	"sites-manager/internal/storage"
+	"abr/internal/manager"
+	"abr/internal/storage"
 )
 
 type Command struct {

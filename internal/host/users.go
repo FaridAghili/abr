@@ -11,19 +11,19 @@ import (
 	"strings"
 	"syscall"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/ports"
-	"sites-manager/internal/services"
+	"abr/internal/config"
+	"abr/internal/ports"
+	"abr/internal/services"
 )
 
 type userRecord struct{ App, User, UID, Home string }
 
 func RuntimeUser(name string) string {
 	if len(name) <= 26 {
-		return "sites-" + name
+		return "abr-" + name
 	}
 	sum := sha256.Sum256([]byte(name))
-	return fmt.Sprintf("sites-%s-%x", name[:17], sum[:4])
+	return fmt.Sprintf("abr-%s-%x", name[:17], sum[:4])
 }
 
 func (h Host) userPath(a config.App) string {
@@ -77,13 +77,13 @@ func (h Host) ensureUser(a config.App) error {
 		h.say("Would create/verify managed Ubuntu user %s and own %s", a.User, a.Directory)
 		return nil
 	}
-	record := userRecord{App: a.Name, User: a.User, Home: "/var/lib/sites-users/" + a.User}
+	record := userRecord{App: a.Name, User: a.User, Home: "/var/lib/abr-users/" + a.User}
 	saved, err := h.read(h.userPath(a))
 	if err == nil {
 		if err := json.Unmarshal(saved, &record); err != nil {
 			return fmt.Errorf("corrupt managed user record: %w", err)
 		}
-		if record.App != a.Name || record.User != a.User || record.Home != "/var/lib/sites-users/"+a.User {
+		if record.App != a.Name || record.User != a.User || record.Home != "/var/lib/abr-users/"+a.User {
 			return fmt.Errorf("Ubuntu user %s is managed for another application", a.User)
 		}
 	} else if !os.IsNotExist(err) {
@@ -95,7 +95,7 @@ func (h Host) ensureUser(a config.App) error {
 	}
 	if exists {
 		parts := strings.Split(entry, ":")
-		if saved == nil || len(parts) != 7 || parts[4] != "sites-"+a.Name || parts[5] != record.Home || (record.UID != "" && record.UID != parts[2]) {
+		if saved == nil || len(parts) != 7 || parts[4] != "abr-"+a.Name || parts[5] != record.Home || (record.UID != "" && record.UID != parts[2]) {
 			return fmt.Errorf("refusing to adopt existing Ubuntu user %s; choose a new dedicated user", a.User)
 		}
 		if record.UID == "" {
@@ -110,10 +110,10 @@ func (h Host) ensureUser(a config.App) error {
 	if err := h.write(h.userPath(a), data, 0600); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(h.path("/var/lib/sites-users"), 0755); err != nil {
+	if err := os.MkdirAll(h.path("/var/lib/abr-users"), 0755); err != nil {
 		return err
 	}
-	if err := h.command("useradd", "--system", "--user-group", "--create-home", "--home-dir", record.Home, "--shell", "/usr/sbin/nologin", "--comment", "sites-"+a.Name, a.User); err != nil {
+	if err := h.command("useradd", "--system", "--user-group", "--create-home", "--home-dir", record.Home, "--shell", "/usr/sbin/nologin", "--comment", "abr-"+a.Name, a.User); err != nil {
 		return err
 	}
 	entry, exists, err = h.passwd(a.User)

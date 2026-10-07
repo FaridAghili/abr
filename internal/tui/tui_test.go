@@ -11,9 +11,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"abr/internal/config"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"sites-manager/internal/config"
 )
 
 func testOptions(t *testing.T) Options {
@@ -191,7 +191,7 @@ func TestGuidedDefaults(t *testing.T) {
 func TestAppMenuFitsSmallTerminal(t *testing.T) {
 	m := newModel(testOptions(t))
 	m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
-	m.appMenu(config.App{Name: "example", Directory: "/srv/apps/example", User: "sites-example", Type: "laravel", Domain: "example.com", Web: config.Web{Driver: "octane"}, Database: config.Database{Enabled: true}})
+	m.appMenu(config.App{Name: "example", Directory: "/srv/apps/example", User: "abr-example", Type: "laravel", Domain: "example.com", Web: config.Web{Driver: "octane"}, Database: config.Database{Enabled: true}})
 	if view := m.View().Content; !strings.Contains(view, "Esc back") {
 		t.Fatalf("app navigation clipped: %q", view)
 	}

@@ -11,11 +11,11 @@ import (
 	"strings"
 	"text/template"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/ports"
+	"abr/internal/config"
+	"abr/internal/ports"
 )
 
-const Marker = "# Managed by sites; edit the source template instead.\n"
+const Marker = "# Managed by abr; edit the source template instead.\n"
 const PHPVersion = "8.5"
 
 type File struct {
@@ -58,7 +58,7 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 	d := data{Name: a.Name, User: a.User, Directory: a.Directory, Type: a.Type, WebDriver: a.Web.Driver,
 		Domain: a.Domain, SiteDomains: strings.Join(append([]string{a.Domain}, a.Domains...), ", "), Aliases: a.Aliases,
 		PHPBinary: "/usr/bin/php" + PHPVersion, NodeBinary: "/usr/bin/node", OctaneWorkers: a.Web.Workers, QueueWorkers: a.Queue.Workers,
-		ManagedEnvironmentFile: filepath.Join(state, "env", a.Name+".env"), FPMSocket: "/run/php/sites-" + a.Name + ".sock",
+		ManagedEnvironmentFile: filepath.Join(state, "env", a.Name+".env"), FPMSocket: "/run/php/abr-" + a.Name + ".sock",
 	}
 	d.AssetRoot, d.AssetPath = filepath.Join(a.Directory, "public"), "/build/assets"
 	if a.Type == "nuxt" {
@@ -75,7 +75,7 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 	for _, purpose := range a.Endpoints() {
 		port, ok := r.Lookup(a.Name, purpose)
 		if !ok {
-			return Plan{}, fmt.Errorf("%s: missing %s reservation; run sites ports --allocate", a.Name, purpose)
+			return Plan{}, fmt.Errorf("%s: missing %s reservation; run abr ports --allocate", a.Name, purpose)
 		}
 		switch purpose {
 		case "octane-http":
@@ -134,7 +134,7 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 		return nil
 	}
 	unit := func(source, suffix string, enable bool) error {
-		name := "sites-" + a.Name + "-" + suffix
+		name := "abr-" + a.Name + "-" + suffix
 		if err := add(source, filepath.Join("/etc/systemd/system", name)); err != nil {
 			return err
 		}
@@ -143,11 +143,11 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 		}
 		return nil
 	}
-	if err := add("caddy-site.caddy.tmpl", "/etc/caddy/sites.d/sites-"+a.Name+".caddy"); err != nil {
+	if err := add("caddy-site.caddy.tmpl", "/etc/caddy/abr.d/abr-"+a.Name+".caddy"); err != nil {
 		return Plan{}, err
 	}
 	if p.FPM {
-		if err := add("php-fpm-pool.conf.tmpl", "/etc/php/"+PHPVersion+"/fpm/pool.d/sites-"+a.Name+".conf"); err != nil {
+		if err := add("php-fpm-pool.conf.tmpl", "/etc/php/"+PHPVersion+"/fpm/pool.d/abr-"+a.Name+".conf"); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -166,7 +166,7 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 			return Plan{}, err
 		}
 		for i := 1; i <= a.Queue.Workers; i++ {
-			p.Units = append(p.Units, fmt.Sprintf("sites-%s-queue@%d.service", a.Name, i))
+			p.Units = append(p.Units, fmt.Sprintf("abr-%s-queue@%d.service", a.Name, i))
 		}
 	}
 	for _, v := range []struct {

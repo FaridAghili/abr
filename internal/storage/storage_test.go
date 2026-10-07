@@ -13,7 +13,7 @@ import (
 )
 
 func TestLockAcrossProcesses(t *testing.T) {
-	if dir := os.Getenv("SITES_LOCK_TEST_DIR"); dir != "" {
+	if dir := os.Getenv("ABR_LOCK_TEST_DIR"); dir != "" {
 		for i := 0; i < 3; i++ {
 			err := WithLock(filepath.Join(dir, "counter.lock"), func() error {
 				data, err := os.ReadFile(filepath.Join(dir, "counter"))
@@ -46,7 +46,7 @@ func TestLockAcrossProcesses(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestLockAcrossProcesses$")
-			cmd.Env = append(os.Environ(), "SITES_LOCK_TEST_DIR="+dir)
+			cmd.Env = append(os.Environ(), "ABR_LOCK_TEST_DIR="+dir)
 			output, err := cmd.CombinedOutput()
 			if err != nil {
 				results <- fmt.Errorf("subprocess: %w: %s", err, output)
@@ -88,7 +88,7 @@ func TestAtomicWrite(t *testing.T) {
 	if err := AtomicWrite(dir, []byte("cannot replace directory")); err == nil {
 		t.Fatal("expected rename failure")
 	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(dir), ".sites-*"))
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(dir), ".abr-*"))
 	if err != nil || len(matches) != 0 {
 		t.Fatalf("temp files left: %v %v", matches, err)
 	}

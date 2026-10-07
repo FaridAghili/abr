@@ -6,17 +6,17 @@ import (
 	"strings"
 	"testing"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/ports"
+	"abr/internal/config"
+	"abr/internal/ports"
 )
 
 func TestRenderAllComponents(t *testing.T) {
-	a := config.App{Name: "app", User: "sites-app", Directory: "/srv/apps/my app%", Type: "laravel", Domain: "app.test", Aliases: []string{"old.test"}, Domains: []string{"extra.test"}, Web: config.Web{Driver: "octane"}, Queue: config.Queue{Workers: 2}, Scheduler: config.Component{Enabled: true}, Nightwatch: config.Component{Enabled: true}, InertiaSSR: config.Component{Enabled: true}}
+	a := config.App{Name: "app", User: "abr-app", Directory: "/srv/apps/my app%", Type: "laravel", Domain: "app.test", Aliases: []string{"old.test"}, Domains: []string{"extra.test"}, Web: config.Web{Driver: "octane"}, Queue: config.Queue{Workers: 2}, Scheduler: config.Component{Enabled: true}, Nightwatch: config.Component{Enabled: true}, InertiaSSR: config.Component{Enabled: true}}
 	r := ports.Empty()
 	if err := r.Ensure(a, config.Default().Ports, nil, func(int) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	p, err := Render(a, r, "../../templates", "/var/lib/sites")
+	p, err := Render(a, r, "../../templates", "/var/lib/abr")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestRenderAllComponents(t *testing.T) {
 				}
 			}
 		}
-		if strings.HasSuffix(f.Path, "octane.service") && (!strings.Contains(text, "WorkingDirectory=/srv/apps/my app%%\n") || !strings.Contains(text, "EnvironmentFile=/var/lib/sites/env/app.env\n") || !strings.Contains(text, "--rpc-host=127.0.0.1 --rpc-port=10001")) {
+		if strings.HasSuffix(f.Path, "octane.service") && (!strings.Contains(text, "WorkingDirectory=/srv/apps/my app%%\n") || !strings.Contains(text, "EnvironmentFile=/var/lib/abr/env/app.env\n") || !strings.Contains(text, "--rpc-host=127.0.0.1 --rpc-port=10001")) {
 			t.Fatal(text)
 		}
 	}
@@ -46,7 +46,7 @@ func TestRenderAllComponents(t *testing.T) {
 
 func TestNuxtAndFPMTemplates(t *testing.T) {
 	for _, kind := range []string{"nuxt", "laravel"} {
-		a := config.App{Name: "app", User: "sites-app", Directory: "/srv/apps/app", Type: kind, Domain: "app.test"}
+		a := config.App{Name: "app", User: "abr-app", Directory: "/srv/apps/app", Type: kind, Domain: "app.test"}
 		if kind == "laravel" {
 			a.Web.Driver = "fpm"
 		}
@@ -54,7 +54,7 @@ func TestNuxtAndFPMTemplates(t *testing.T) {
 		if err := r.Ensure(a, config.Default().Ports, nil, func(int) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
-		p, err := Render(a, r, "../../templates", "/var/lib/sites")
+		p, err := Render(a, r, "../../templates", "/var/lib/abr")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -68,7 +68,7 @@ func TestNuxtAndFPMTemplates(t *testing.T) {
 			if strings.HasSuffix(f.Path, "nuxt.service") && !strings.Contains(string(f.Data), "--env-file-if-exists=.env .output/server/index.mjs") {
 				t.Fatal(string(f.Data))
 			}
-			if strings.HasSuffix(f.Path, ".conf") && !strings.HasPrefix(string(f.Data), "; Managed by sites") {
+			if strings.HasSuffix(f.Path, ".conf") && !strings.HasPrefix(string(f.Data), "; Managed by abr") {
 				t.Fatal(string(f.Data))
 			}
 		}
@@ -76,7 +76,7 @@ func TestNuxtAndFPMTemplates(t *testing.T) {
 }
 
 func TestTemplatesAreRequiredAndEditable(t *testing.T) {
-	a := config.App{Name: "app", User: "sites-app", Directory: "/srv/apps/app", Type: "nuxt", Domain: "app.test"}
+	a := config.App{Name: "app", User: "abr-app", Directory: "/srv/apps/app", Type: "nuxt", Domain: "app.test"}
 	r := ports.Empty()
 	_ = r.Ensure(a, config.Default().Ports, nil, func(int) error { return nil })
 	dir := t.TempDir()

@@ -1,10 +1,10 @@
 [Unit]
-Description=Sites {{.Name}} scheduler timer
+Description=Abr {{.Name}} scheduler timer
 
 [Timer]
 OnCalendar=*-*-* *:*:00
 AccuracySec=1s
-Unit=sites-{{.Name}}-scheduler.service
+Unit=abr-{{.Name}}-scheduler.service
 
 [Install]
 WantedBy=timers.target

@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"sort"
 
-	"sites-manager/internal/config"
-	"sites-manager/internal/ports"
-	"sites-manager/internal/storage"
+	"abr/internal/config"
+	"abr/internal/ports"
+	"abr/internal/storage"
 )
 
 type Manager struct {
@@ -200,7 +200,7 @@ func (m Manager) Doctor() error {
 		for _, p := range a.Endpoints() {
 			port, ok := r.Lookup(a.Name, p)
 			if !ok {
-				issues = append(issues, fmt.Errorf("%s/%s has no reservation; run sites ports --allocate", a.Name, p))
+				issues = append(issues, fmt.Errorf("%s/%s has no reservation; run abr ports --allocate", a.Name, p))
 				continue
 			}
 			if err := m.probe()(port); err != nil {
