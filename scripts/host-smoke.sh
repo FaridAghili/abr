@@ -127,7 +127,7 @@ fixture_https fixture-php.localhost --dump-header "$fixture_source/headers" >/de
 if grep -Ei '^(server|x-powered-by):' "$fixture_source/headers"; then echo 'Identifying response header leaked' >&2; exit 1; fi
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"opcache":"1"'
 # A generated hashed asset is served with Brotli and immutable caching.
-asset_path=$(sudo find /srv/apps/fixture-php/public/build/assets -name '*.js' -print -quit)
+asset_path=$(sudo find /srv/apps/fixture-php/public/build/assets -name 'app-*.css' -print -quit)
 sudo test -f "$asset_path.br"
 asset_uri=${asset_path#/srv/apps/fixture-php/public}
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 \

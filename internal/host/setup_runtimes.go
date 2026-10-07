@@ -98,7 +98,7 @@ func (h Host) configureRedis() (result error) {
 	}
 	// Redis must build its AOF from the live dataset before an AOF-enabled restart.
 	// Merely changing appendonly in the file can discard an existing RDB dataset.
-	policy, err := h.read(filepath.Join(h.TemplatesDir, "redis-hardening.conf.tmpl"))
+	policy, err := os.ReadFile(filepath.Join(h.TemplatesDir, "redis-hardening.conf.tmpl"))
 	if err != nil && !h.DryRun {
 		return err
 	}
