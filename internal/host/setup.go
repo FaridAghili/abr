@@ -239,7 +239,7 @@ func fetch(url string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("User-Agent", "abr/0.1.0")
+	request.Header.Set("User-Agent", "abr/"+abr.Version)
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", url, err)

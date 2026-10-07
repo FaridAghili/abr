@@ -181,6 +181,8 @@ automatically replaced by new defaults.
 apply on `abr setup`; app templates on `abr enable APP` or `abr deploy APP`.
 Templates are trusted root configuration; validate edits on a disposable Ubuntu
 host. App templates use Go text/template with validated values and escaped paths.
+Host configuration, state, templates and project parents must be root-owned and
+not writable by other users. App users own only their own project and home.
 Generated files carry ownership markers. Caddy/FPM configurations are validated
 before reload and restored on ordinary configuration failures. Shared
 SSH/MySQL/Redis/PHP/update templates are copied as native configuration.
@@ -204,6 +206,19 @@ for built assets generated during deploy. Versioned Vite/Nuxt assets get immutab
 browser caching; HTML/API/SSR responses keep the application's cache policy.
 The packaged welcome page is replaced with a generic 404. Identifying text in
 application bodies must be removed in the application itself.
+Default site templates also return 404 for `.env`, `.env.*`, and `.git` paths.
+
+Managed MySQL grants are reconciled on `abr database APP` and deployment. This
+removes older wildcard grants and limits each recorded account to its exact
+database, including when MySQL's `partial_revokes` setting is enabled. Account
+passwords and database contents are preserved. Upgraded hosts should run
+`sudo abr database APP` for every managed database before re-enabling apps, and
+copy the private-file `handle` block from the current Caddy site template into
+their installed template before enabling or deploying.
+
+Artisan and Composer command output stays private because exception messages can
+contain SQL bindings and database passwords. Deployment history records command
+failures; inspect application logs privately when investigating PHP failures.
 
 ## Development
 
@@ -228,7 +243,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/abr-linux-amd64 ./cmd/abr
 [config.example.toml](config.example.toml) documents the configuration;
 `abr config example` prints the embedded copy without changing live settings.
 `abr help` lists commands; `abr doctor` checks portable config/registry/port availability.
-CI checks formatting/vet/tests, builds the standalone binary and checksum, and
+CI checks formatting/vet/race tests on Linux and macOS ARM64, scans reachable Go
+dependency vulnerabilities, builds the standalone binary and checksum, and
 runs actual setup/deployment/backup/restore tests on a disposable Ubuntu host
 from an isolated binary. Pushing a `v*` tag publishes those two assets to GitHub
 Releases only after both CI jobs pass. GitHub also includes its standard source

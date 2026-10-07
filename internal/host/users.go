@@ -56,7 +56,42 @@ func (h Host) project(a config.App) error {
 	if !info.IsDir() {
 		return fmt.Errorf("project is not a directory")
 	}
-	return nil
+	// App users own their project, but must never be able to rename its parent
+	// while root is changing ownership or permissions beneath it.
+	return h.trustedDirectory(filepath.Dir(h.path(a.Directory)))
+}
+
+// A private path under a sticky administrator-owned /tmp is safe for tests and
+// backups. Other writable or foreign-owned ancestors allow path replacement.
+func (h Host) trustedDirectory(path string) error {
+	for {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !info.IsDir() || !ok || int(stat.Uid) != os.Geteuid() || (info.Mode().Perm()&0022 != 0 && info.Mode()&os.ModeSticky == 0) {
+			return fmt.Errorf("directory must have trusted ownership and permissions, without symlinks: %s", path)
+		}
+		parent := filepath.Dir(path)
+		if parent == path || path == h.root {
+			return nil
+		}
+		path = parent
+	}
+}
+
+func (h Host) trustedAncestor(path string) error {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	for {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			return h.trustedDirectory(path)
+		}
+		path = filepath.Dir(path)
+	}
 }
 
 func (h Host) passwd(user string) (string, bool, error) {
@@ -133,6 +168,13 @@ func (h Host) ensureUser(a config.App) error {
 func (h Host) prepareHome(user, home string) error {
 	// Removal retains the home as root-owned data. Re-registration (including
 	// retry after interrupted useradd) must restore access for the new UID.
+	if err := h.trustedDirectory(filepath.Dir(h.path(home))); err != nil {
+		return err
+	}
+	info, err := os.Lstat(h.path(home))
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("managed home must be a directory without symlinks: %s", home)
+	}
 	if err := h.command("chown", "-hR", user+":"+user, "--", home); err != nil {
 		return err
 	}
@@ -212,16 +254,16 @@ func (h Host) permissions(a config.App) error {
 					return fmt.Errorf("public asset directory must not be a symlink: %s", dir)
 				}
 			}
-			if err := h.command("setfacl", "-R", "-P", "-m", "u:caddy:rX", "--", dir); err != nil {
+			if _, err := h.asUser(a, nil, false, "setfacl", "-R", "-P", "-m", "u:caddy:rX", "--", dir); err != nil {
 				return err
 			}
-			if err := h.command("find", "-P", dir, "-type", "d", "-exec", "setfacl", "-m", "d:u:caddy:rx", "--", "{}", "+"); err != nil {
+			if _, err := h.asUser(a, nil, false, "find", "-P", dir, "-type", "d", "-exec", "setfacl", "-m", "d:u:caddy:rx", "--", "{}", "+"); err != nil {
 				return err
 			}
 		}
 		// Caddy needs traversal to Laravel's public storage symlink target.
 		for _, suffix := range []string{"storage", "storage/app"} {
-			if err := h.command("setfacl", "-m", "u:caddy:--x", "--", filepath.Join(a.Directory, suffix)); err != nil {
+			if _, err := h.asUser(a, nil, false, "setfacl", "-m", "u:caddy:--x", "--", filepath.Join(a.Directory, suffix)); err != nil {
 				return err
 			}
 		}
@@ -246,7 +288,7 @@ func (h Host) permissions(a config.App) error {
 			if suffix == ".output/public" {
 				flags = []string{"-R", "-P", "-m", "u:caddy:rX", "--", dir}
 			}
-			if err := h.command("setfacl", flags...); err != nil {
+			if _, err := h.asUser(a, nil, false, "setfacl", flags...); err != nil {
 				return err
 			}
 		}

@@ -154,8 +154,8 @@ func (a App) Validate() error {
 	}
 	if a.HealthCheck != "" {
 		u, err := url.Parse(a.HealthCheck)
-		if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf("health_check must be an http(s) URL")
+		if err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("health_check must be an http(s) URL without embedded credentials")
 		}
 	}
 	if a.Queue.Workers < 0 || a.Queue.Workers > 256 || a.Web.Workers < 0 || a.Web.Workers > 256 {

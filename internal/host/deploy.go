@@ -93,7 +93,7 @@ func (h Host) asUser(a config.App, environment map[string]string, private bool, 
 	}
 	command = append(command, name)
 	command = append(command, args...)
-	return h.run(fmt.Sprintf("Run %s as %s", strings.Join(append([]string{name}, args...), " "), a.User), Command{Name: "runuser", Args: command, Dir: a.Directory, Private: private})
+	return h.run(fmt.Sprintf("Run %s as %s", strings.Join(append([]string{name}, args...), " "), a.User), Command{Name: "runuser", Args: command, Dir: a.Directory, Private: private, Stream: !private || name != "git"})
 }
 
 func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result error) {
@@ -187,7 +187,9 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	}
 	php := "/usr/bin/php" + services.PHPVersion
 	run := func(name string, args ...string) error {
-		_, err := h.asUser(a, plan.Environment, false, name, args...)
+		// Artisan/Composer scripts can include SQL bindings and database passwords
+		// in exception output. Keep those commands out of terminal/deployment logs.
+		_, err := h.asUser(a, plan.Environment, name == php || name == "composer", name, args...)
 		return err
 	}
 	// Build frontend assets before installing PHP dependencies or running Artisan.

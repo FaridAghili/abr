@@ -9,11 +9,32 @@ permissions:
   contents: read
 
 jobs:
+  macos-checks:
+    name: macOS ARM64 checks
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Check development platform
+        run: test "$(go env GOOS)/$(go env GOARCH)" = darwin/arm64
+      - name: Vet and test
+        run: |
+          go vet ./...
+          go test -race ./...
+
   build:
     runs-on: ubuntu-26.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -28,7 +49,11 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
+      - name: Verify dependencies and scan reachable vulnerabilities
+        run: |
+          go mod verify
+          go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: Build Linux AMD64
         env:
           GOOS: linux
@@ -37,12 +62,17 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath -ldflags '-s -w' -o dist/abr-linux-amd64 ./cmd/abr
+      - name: Verify release tag matches executable version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(dist/abr-linux-amd64 version)" = "abr ${GITHUB_REF_NAME#v} (linux/amd64)"
       - name: Checksum
         run: |
           cd dist
           sha256sum abr-linux-amd64 > abr-linux-amd64.sha256
       - name: Upload distribution
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: abr-linux-amd64
           path: |
@@ -52,20 +82,26 @@ jobs:
 
   host-smoke:
     name: Disposable Ubuntu host test
+    needs: build
     runs-on: ubuntu-26.04
     timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Build native production executable
+          persist-credentials: false
+      - name: Download checked production executable
         env:
-          CGO_ENABLED: '0'
-        run: go build -o bin/abr ./cmd/abr
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name abr-linux-amd64 --dir dist
+          cd dist
+          sha256sum -c abr-linux-amd64.sha256
+          chmod 755 abr-linux-amd64
       - name: Setup from a standalone binary and deploy Laravel and Nuxt
-        run: bash scripts/host-smoke.sh bin/abr
+        run: bash scripts/host-smoke.sh dist/abr-linux-amd64
       - name: Host diagnostics on failure
         if: failure()
         run: |
@@ -80,7 +116,7 @@ jobs:
   release:
     name: Publish binary release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [build, host-smoke]
+    needs: [build, macos-checks, host-smoke]
     runs-on: ubuntu-26.04
     permissions:
       actions: read

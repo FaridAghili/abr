@@ -67,6 +67,9 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 		}
 		return nil, testExit(1)
 	case "mysql":
+		if string(c.Input) == "SELECT @@partial_revokes;\n" {
+			return []byte("0\n"), nil
+		}
 		if strings.HasPrefix(string(c.Input), "SELECT") {
 			if r.database {
 				return []byte("2\n"), nil
@@ -103,6 +106,9 @@ func fixture(t *testing.T) (Host, *fakeRunner, *bytes.Buffer, config.App) {
 	var out bytes.Buffer
 	h := Host{Manager: manager.Manager{ConfigPath: filepath.Join(root, "state/config.toml"), StateDir: filepath.Join(root, "state"), Probe: func(int) error { return nil }}, TemplatesDir: "../../templates", AppsDir: filepath.Join(root, "apps"), Output: &out, Runner: runner, root: root, check: func() error { return nil }}
 	a := config.App{Name: "app", User: "abr-app", Directory: filepath.Join(h.AppsDir, "app"), Type: "laravel", Domain: "app.localhost", Web: config.Web{Driver: "fpm"}}
+	if err := os.MkdirAll(h.path("/var/lib/abr-users/"+a.User), 0700); err != nil {
+		t.Fatal(err)
+	}
 	for _, dir := range []string{"public", "storage/app/public", "bootstrap/cache", "vendor"} {
 		if err := os.MkdirAll(filepath.Join(a.Directory, dir), 0755); err != nil {
 			t.Fatal(err)
@@ -149,7 +155,7 @@ func TestRegisterDatabaseIsPrivateStableAndScoped(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(sql, "ON `abr_app`.*") || strings.Contains(sql, "*.*") || strings.Contains(sql, "GRANT OPTION") {
+	if !strings.Contains(sql, "ON `abr\\_app`.*") || strings.Contains(sql, "*.*") || !strings.Contains(sql, "REVOKE ALL PRIVILEGES, GRANT OPTION FROM") {
 		t.Fatal(sql)
 	}
 	if err := h.Database(a.Name, false); err != nil {

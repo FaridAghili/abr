@@ -22,7 +22,7 @@ import (
 	"abr/internal/tui"
 )
 
-const version = "0.1.0"
+const version = abr.Version
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {

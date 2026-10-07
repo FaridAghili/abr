@@ -65,6 +65,9 @@ func TestNuxtAndFPMTemplates(t *testing.T) {
 			t.Fatalf("bad FPM plan: %+v", p)
 		}
 		for _, f := range p.Files {
+			if strings.HasSuffix(f.Path, ".caddy") && (!strings.Contains(string(f.Data), "@private path /.env /.env.* /.git /.git/*") || !strings.Contains(string(f.Data), "handle @private {\n        respond 404")) {
+				t.Fatal("private static files are not blocked", f.Path)
+			}
 			if strings.HasSuffix(f.Path, "nuxt.service") && !strings.Contains(string(f.Data), "--env-file-if-exists=.env .output/server/index.mjs") {
 				t.Fatal(string(f.Data))
 			}

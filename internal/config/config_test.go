@@ -81,6 +81,7 @@ func TestDuplicateAndInvalidApps(t *testing.T) {
 		{"domain", func(a *App) { a.Domain = "https://example.com" }},
 		{"wildcard", func(a *App) { a.Domain = "*.example.com" }},
 		{"negative workers", func(a *App) { a.Queue.Workers = -1 }},
+		{"health check credentials", func(a *App) { a.HealthCheck = "https://user:secret@example.com/health" }},
 		{"nuxt laravel", func(a *App) { a.Type = "nuxt"; a.Database.Enabled = true }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

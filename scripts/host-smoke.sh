@@ -128,6 +128,26 @@ fixture_git() {
 }
 fixture_git /srv/apps/fixture-php
 abr_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --domain fixture-php.localhost --canonical-host non-www --scheduler
+# Repair the unescaped grants used by older Abr versions. A matching foreign
+# database must remain inaccessible after reconciling an already-ready account.
+sudo mysql --protocol=socket --user=root <<'SQL'
+CREATE DATABASE abrXfixtureXphp;
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'abr-fixture-php'@'localhost';
+GRANT ALL PRIVILEGES ON `abr_fixture_php`.* TO 'abr-fixture-php'@'localhost';
+SQL
+abr_ci database fixture-php
+printf 'USE abrXfixtureXphp; CREATE TABLE forbidden (id INT);\n' | sudo tee /var/lib/abr-ci/foreign.sql >/dev/null
+if abr_ci database import fixture-php /var/lib/abr-ci/foreign.sql --yes; then
+  echo 'Wildcard database grant exposed another database' >&2; exit 1
+fi
+# The same literal grant works with partial revokes enabled too.
+sudo mysql --protocol=socket --user=root -e 'SET GLOBAL partial_revokes=ON;'
+abr_ci database fixture-php
+if abr_ci database import fixture-php /var/lib/abr-ci/foreign.sql --yes; then
+  echo 'Literal grant exposed another database' >&2; exit 1
+fi
+sudo mysql --protocol=socket --user=root -e 'SET GLOBAL partial_revokes=OFF;'
+abr_ci database fixture-php
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/abr-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 abr_ci deploy fixture-php --no-pull
 fixture_denied abr-fixture-php curl --fail --silent --max-time 2 \
@@ -138,6 +158,18 @@ abr_ci git setup
 fixture_denied abr-fixture-php head -c 1 /var/lib/abr-ci/credentials/fixture-php.env
 fixture_denied nobody head -c 1 /var/lib/abr-ci/git/id_ed25519
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+for private_uri in /.env /.env.production /.git/config; do
+  sudo mkdir -p "/srv/apps/fixture-php/public$(dirname "$private_uri")"
+  printf 'private fixture data' | sudo tee "/srv/apps/fixture-php/public$private_uri" >/dev/null
+  private_status=$(curl --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
+    --write-out '%{http_code}' --output "$fixture_source/private-response" "https://fixture-php.localhost$private_uri")
+  test "$private_status" = 404
+  if grep -F 'private fixture data' "$fixture_source/private-response"; then
+    echo 'Private static file was exposed' >&2; exit 1
+  fi
+  sudo rm "/srv/apps/fixture-php/public$private_uri"
+done
+sudo rmdir /srv/apps/fixture-php/public/.git
 fixture_redirect www.fixture-php.localhost fixture-php.localhost
 sudo test -S /run/php/abr-fixture-php.sock
 sudo test "$(sudo stat -c '%a' /srv/apps/fixture-php/.env)" = 600

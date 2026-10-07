@@ -5,6 +5,11 @@
     }
     encode zstd gzip
     root * {{quote .AssetRoot}}
+    # Secrets and repository metadata must never be served as static files.
+    @private path /.env /.env.* /.git /.git/*
+    handle @private {
+        respond 404
+    }
     @assets {
         method GET HEAD
         path {{.AssetPath}}/*

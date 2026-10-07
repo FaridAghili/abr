@@ -24,12 +24,33 @@ type Command struct {
 	Input   []byte
 	Stdin   io.Reader // Stream SQL imports without retaining them in memory.
 	Stdout  io.Writer // Stream dumps directly to a private file, never logs.
+	Stream  bool      // Commands whose return output is unused must not accumulate it.
 	Private bool      // Never display SQL or its error output, which can contain credentials.
 }
 
 type Runner interface{ Run(Command) ([]byte, error) }
 
 type ExecRunner struct{ Output io.Writer }
+
+const maxCommandOutput = 1 << 20
+
+type commandOutput struct {
+	buffer    bytes.Buffer
+	truncated bool
+}
+
+func (w *commandOutput) Bytes() []byte { return w.buffer.Bytes() }
+
+func (w *commandOutput) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := maxCommandOutput - w.buffer.Len()
+	if len(p) > remaining {
+		p = p[:remaining]
+		w.truncated = true
+	}
+	_, _ = w.buffer.Write(p)
+	return n, nil
+}
 
 func (r ExecRunner) Run(c Command) ([]byte, error) {
 	cmd := exec.Command(c.Name, c.Args...)
@@ -39,12 +60,18 @@ func (r ExecRunner) Run(c Command) ([]byte, error) {
 	if c.Stdin != nil {
 		cmd.Stdin = c.Stdin
 	}
-	var output bytes.Buffer
+	var output commandOutput
 	var w io.Writer = &output
 	if !c.Private && r.Output != nil {
 		w = io.MultiWriter(w, r.Output)
 	}
 	cmd.Stdout = w
+	if c.Stream {
+		cmd.Stdout = io.Discard
+		if !c.Private && r.Output != nil {
+			cmd.Stdout = r.Output
+		}
+	}
 	if c.Stdout != nil {
 		cmd.Stdout = c.Stdout
 	}
@@ -55,6 +82,9 @@ func (r ExecRunner) Run(c Command) ([]byte, error) {
 	if err := cmd.Run(); err != nil {
 		// Output is streamed/logged for ordinary commands; never put it in errors.
 		return output.Bytes(), fmt.Errorf("%s failed: %w", c.Name, err)
+	}
+	if output.truncated {
+		return nil, fmt.Errorf("%s exceeded the command output capture limit", c.Name)
 	}
 	return output.Bytes(), nil
 }
@@ -102,7 +132,17 @@ func (h Host) guard() error {
 	if h.check != nil {
 		return h.check()
 	}
-	return Require()
+	if err := Require(); err != nil {
+		return err
+	}
+	// Root-managed state/configuration must never live beneath directories an
+	// application (or another unprivileged user) can replace.
+	for _, dir := range []string{h.Manager.StateDir, filepath.Dir(h.Manager.ConfigPath), h.TemplatesDir, h.AppsDir} {
+		if err := h.trustedAncestor(dir); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h Host) locked(fn func() error) error {
@@ -145,7 +185,7 @@ func (h Host) run(label string, c Command) ([]byte, error) {
 }
 
 func (h Host) command(name string, args ...string) error {
-	_, err := h.run(strings.Join(append([]string{name}, args...), " "), Command{Name: name, Args: args})
+	_, err := h.run(strings.Join(append([]string{name}, args...), " "), Command{Name: name, Args: args, Stream: true})
 	return err
 }
 

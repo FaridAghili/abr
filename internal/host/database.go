@@ -80,8 +80,11 @@ func (h Host) database(a config.App, show bool) error {
 		return err
 	}
 	if !c.Ready {
-		sql := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\nCREATE USER IF NOT EXISTS '%s'@'localhost' IDENTIFIED BY '%s';\nGRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'localhost';\n", c.Database, c.User, c.Password, c.Database, c.User)
+		sql := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;\nCREATE USER IF NOT EXISTS '%s'@'localhost' IDENTIFIED BY '%s';\n", c.Database, c.User, c.Password)
 		if _, err := h.mysql([]byte(sql)); err != nil {
+			return err
+		}
+		if err := h.databaseGrants(c); err != nil {
 			return err
 		}
 		c.Ready = true
@@ -98,6 +101,9 @@ func (h Host) database(a config.App, show bool) error {
 		if strings.TrimSpace(string(result)) != "2" {
 			return fmt.Errorf("recorded MySQL database/account is missing; restore it before deploying %s", a.Name)
 		}
+		if err := h.databaseGrants(c); err != nil {
+			return err
+		}
 	}
 	env := fmt.Sprintf("DB_CONNECTION=mysql\nDB_HOST=localhost\nDB_PORT=3306\nDB_DATABASE=%s\nDB_USERNAME=%s\nDB_PASSWORD=%s\n", c.Database, c.User, c.Password)
 	if err := h.write(h.credentialsEnvPath(a.Name), []byte(env), 0600); err != nil {
@@ -109,6 +115,28 @@ func (h Host) database(a config.App, show bool) error {
 		h.say("MySQL ready for %s; copy credentials from %s into the project's .env", a.Name, h.credentialsEnvPath(a.Name))
 	}
 	return nil
+}
+
+// Database-level grants interpret underscores as wildcards unless partial_revokes
+// is enabled. Reconcile recorded accounts too, removing grants from older versions.
+func (h Host) databaseGrants(c credentials) error {
+	out, err := h.mysql([]byte("SELECT @@partial_revokes;\n"))
+	if err != nil {
+		return err
+	}
+	database := c.Database
+	switch strings.TrimSpace(string(out)) {
+	case "0":
+		database = strings.NewReplacer("_", `\_`, "%", `\%`).Replace(database)
+	case "1":
+	default:
+		return fmt.Errorf("unexpected MySQL partial_revokes setting")
+	}
+	// Only recorded dedicated accounts reach this operation. A failure after
+	// revocation leaves access denied and is recoverable by retrying database APP.
+	sql := fmt.Sprintf("REVOKE ALL PRIVILEGES, GRANT OPTION FROM '%s'@'localhost';\nGRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'localhost';\n", c.User, database, c.User)
+	_, err = h.mysql([]byte(sql))
+	return err
 }
 
 func (h Host) mysql(sql []byte) ([]byte, error) {

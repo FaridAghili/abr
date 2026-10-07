@@ -234,6 +234,9 @@ func (h Host) Clone(repository, directory string) error {
 		if err := os.MkdirAll(h.path(h.AppsDir), 0755); err != nil {
 			return err
 		}
+		if err := h.trustedDirectory(h.path(h.AppsDir)); err != nil {
+			return err
+		}
 		resolved, err := filepath.EvalSymlinks(h.path(h.AppsDir))
 		if err != nil || resolved != filepath.Clean(h.path(h.AppsDir)) {
 			return fmt.Errorf("apps directory and its parents must not be symlinks")

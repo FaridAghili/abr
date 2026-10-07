@@ -105,6 +105,9 @@ func (h Host) BackupDatabases(names []string, all bool, directory string) error 
 		if resolved != directory {
 			return fmt.Errorf("backup directory must not contain symlinks")
 		}
+		if err := h.trustedDirectory(directory); err != nil {
+			return err
+		}
 		info, err := os.Stat(directory)
 		if err != nil {
 			return err
