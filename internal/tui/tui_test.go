@@ -13,6 +13,7 @@ import (
 
 	"abr/internal/config"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -188,6 +189,42 @@ func TestGuidedDefaults(t *testing.T) {
 	}
 }
 
+func TestComposerTokenIsMaskedAndExcludedFromReviewAndCommandArguments(t *testing.T) {
+	o := testOptions(t)
+	called := false
+	o.RunCommand = func([]string, io.Writer) error { t.Error("token operation used CLI argument runner"); return nil }
+	o.ComposerAuth = func(repository, username, password string, output io.Writer) error {
+		called = true
+		if repository != "nova.laravel.com" || username != "fixture@example.invalid" || password != "fixture-private-token" {
+			return errors.New("credential fields were not passed to the backend")
+		}
+		return nil
+	}
+	m := newModel(o)
+	m.composerAuthForm()
+	m.form.NextGroup()
+	m.Update(tea.PasteMsg{Content: "fixture@example.invalid"})
+	m.form.NextGroup()
+	m.Update(tea.PasteMsg{Content: "fixture-private-token"})
+	if strings.Contains(m.View().Content, "fixture-private-token") {
+		t.Fatal("token input was not masked")
+	}
+	m.next()
+	if m.page != "confirm" || strings.Contains(m.View().Content+strings.Join(m.current.args, " "), "fixture-private-token") {
+		t.Fatal("token leaked into review or arguments")
+	}
+	press(m, 'y')
+	press(m, tea.KeyEnter)
+	receive(t, m)
+	if !called || m.result != nil || m.current.run != nil || m.next != nil {
+		t.Fatal("credential operation failed or retained its secret callback")
+	}
+	press(m, tea.KeyEscape)
+	if strings.Contains(m.View().Content, "fixture-private-token") {
+		t.Fatal("token retained on dashboard")
+	}
+}
+
 func TestAppMenuFitsSmallTerminal(t *testing.T) {
 	m := newModel(testOptions(t))
 	m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
@@ -212,5 +249,130 @@ func TestTerminalThemePersistsAcrossForms(t *testing.T) {
 		if got, want := m.spinner.Style.GetForeground(), colors(dark).accent.GetForeground(); got != want {
 			t.Fatal("spinner ignored terminal theme")
 		}
+	}
+}
+
+func TestGuidedFieldsFitSmallTerminalAndShowExamples(t *testing.T) {
+	app := config.App{Name: "example", Directory: "/srv/apps/example", User: "abr-example", Type: "laravel", Domain: "example.com", Web: config.Web{Driver: "fpm"}, Database: config.Database{Enabled: true}}
+	forms := map[string]func(*model){
+		"composer": func(m *model) { m.composerAuthForm() },
+		"git":      func(m *model) { m.gitSetupForm() },
+		"clone":    func(m *model) { m.cloneForm() },
+		"register": func(m *model) { m.registerForm() },
+		"setup":    func(m *model) { m.setupForm() },
+		"backup":   func(m *model) { m.databaseBackupForm(app.Name) },
+		"import":   func(m *model) { m.databaseImportForm(app.Name) },
+		"deploy":   func(m *model) { m.deployForm(app.Name) },
+		"service":  func(m *model) { m.serviceForm(app, "restart") },
+	}
+	for name, open := range forms {
+		t.Run(name, func(t *testing.T) {
+			o := testOptions(t)
+			c := config.Default()
+			c.Apps = []config.App{app}
+			data, err := config.Encode(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(o.ConfigPath, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			m := newModel(o)
+			m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
+			open(m)
+			for step := 0; m.form.State == huh.StateNormal; step++ {
+				if step > 30 {
+					t.Fatal("form cannot advance")
+				}
+				view := m.View().Content
+				if !strings.Contains(view, "Example:") || !strings.Contains(view, "Esc cancel") || lipgloss.Height(view) > 16 || lipgloss.Width(view) > 48 {
+					t.Fatalf("guidance or controls clipped at step %d:\n%s", step, view)
+				}
+				m.form.NextGroup()
+			}
+		})
+	}
+}
+
+func TestNextStepsFollowSuccessfulWorkOnly(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		err    error
+		dryRun bool
+	}{{name: "success"}, {name: "failure", err: errors.New("clone failed")}, {name: "preview", dryRun: true}} {
+		t.Run(scenario.name, func(t *testing.T) {
+			o := testOptions(t)
+			o.DryRun = scenario.dryRun
+			o.RunCommand = func([]string, io.Writer) error { return scenario.err }
+			m := newModel(o)
+			m.start(action{title: "Clone", args: []string{"clone", "git@github.com:owner/app.git", "/srv/apps/app"}})
+			receive(t, m)
+			if got, want := strings.Contains(m.output, "Next: Choose Register application"), scenario.err == nil && !scenario.dryRun; got != want {
+				t.Fatalf("incorrect completion guidance: %s", m.output)
+			}
+		})
+	}
+}
+
+func TestAdvancedRegistrationFieldsAreOptionalAndDiscardedWhenSkipped(t *testing.T) {
+	m := newModel(testOptions(t))
+	m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
+	m.registerForm()
+	for step := 0; !strings.Contains(m.View().Content, "Advanced settings?"); step++ {
+		if step > 20 || m.form.State != huh.StateNormal {
+			t.Fatal("advanced settings choice is inaccessible")
+		}
+		m.form.NextGroup()
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.form.NextGroup()
+	for _, input := range []struct{ title, value string }{
+		{"Redirect domains", "old.example.com"},
+		{"Extra serving domains", "shop.example.com"},
+		{"Health check URL", "https://example.com/up"},
+	} {
+		view := m.View().Content
+		if !strings.Contains(view, input.title) || !strings.Contains(view, "Example:") || !strings.Contains(view, "Esc cancel") {
+			t.Fatalf("optional field lacks guidance: %s", view)
+		}
+		m.Update(tea.PasteMsg{Content: input.value})
+		m.form.NextGroup()
+	}
+	if !strings.Contains(m.View().Content, "Registration mode") {
+		t.Fatal("portable registration setting is inaccessible")
+	}
+	// Go back and skip extras after entering them; stale values must not be sent.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	for i := 0; i < 4; i++ {
+		m.form.PrevGroup()
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m.next()
+	args := strings.Join(m.current.args, " ")
+	for _, flag := range []string{"--alias", "--serving-domain", "--health-check", "--config-only"} {
+		if strings.Contains(args, flag) {
+			t.Fatalf("skipped extras retained %s", flag)
+		}
+	}
+}
+
+func TestDatabaseImportStillRequiresConfirmationAndSimpleMenusKeepActions(t *testing.T) {
+	m := newModel(testOptions(t))
+	m.databaseImportForm("example")
+	m.next()
+	if m.page != "confirm" || m.approved || !strings.Contains(m.reviewText, "overwrite data") || !strings.Contains(strings.Join(m.current.args, " "), "--yes") {
+		t.Fatal("SQL import lost its explicit destructive confirmation")
+	}
+	m.home()
+	if view := m.View().Content; !strings.Contains(view, "Server & credentials") || strings.Contains(view, "Reconcile ports") || strings.Contains(view, m.options.StateDir) {
+		t.Fatal("home menu exposes maintenance clutter")
+	}
+	m.serverMenu()
+	if !strings.Contains(m.View().Content, "Composer credentials") {
+		t.Fatal("shared Composer setup is inaccessible")
+	}
+	m.toolsMenu()
+	if !strings.Contains(m.View().Content, "Reconcile ports") {
+		t.Fatal("maintenance action was removed")
 	}
 }

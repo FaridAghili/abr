@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -30,6 +30,7 @@ type Options struct {
 	Input                                                io.Reader
 	Output                                               io.Writer
 	RunCommand                                           func([]string, io.Writer) error
+	ComposerAuth                                         func(string, string, string, io.Writer) error
 }
 
 func Run(o Options) error {
@@ -44,6 +45,7 @@ type action struct {
 	title string
 	args  []string
 	note  string
+	run   func(io.Writer) error // Credential operations never put tokens in args.
 }
 type event struct {
 	text string
@@ -110,14 +112,14 @@ func newModel(o Options) *model {
 func (m *model) Init() tea.Cmd { return tea.Batch(m.form.Init(), tea.RequestBackgroundColor) }
 func (m *model) setForm(page, title string, next func() tea.Cmd, groups ...*huh.Group) tea.Cmd {
 	m.page, m.title, m.next = page, title, next
-	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(func(bool) *huh.Styles { return huh.ThemeCharm(m.dark) })).WithWidth(m.bodyWidth()).WithHeight(m.formHeight()).WithShowHelp(true)
+	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(func(bool) *huh.Styles { return huh.ThemeCharm(m.dark) })).WithWidth(m.bodyWidth()).WithHeight(m.formHeight()).WithShowHelp(false)
 	return m.form.Init()
 }
 func (m *model) bodyWidth() int  { return max(20, min(m.width-4, 96)) }
-func (m *model) bodyHeight() int { return max(6, m.height-10) }
+func (m *model) bodyHeight() int { return max(6, m.height-8) }
 func (m *model) formHeight() int {
 	if m.page == "app" {
-		return max(3, m.bodyHeight()-3)
+		return max(3, m.bodyHeight()-2)
 	}
 	return m.bodyHeight()
 }
@@ -150,16 +152,10 @@ func (m *model) home() tea.Cmd {
 		choices = append(choices, huh.NewOption(clean(app.Name+"  ·  "+app.Type+"  ·  "+app.Domain), "app:"+app.Name))
 	}
 	choices = append(choices,
-		huh.NewOption("+ Register application", "register"),
-		huh.NewOption("Set up this VPS", "setup"),
-		huh.NewOption("Set up shared GitHub key", "git-setup"),
 		huh.NewOption("Clone application", "clone"),
-		huh.NewOption("Port reservations", "ports"),
-		huh.NewOption("Validate configuration", "validate"),
-		huh.NewOption("Doctor / port checks", "doctor"),
-		huh.NewOption("Deploy all applications", "deploy-all"),
-		huh.NewOption("Back up databases", "database-backup"),
-		huh.NewOption("Reconcile port reservations", "allocate"),
+		huh.NewOption("Register application", "register"),
+		huh.NewOption("Server & credentials", "server"),
+		huh.NewOption("Tools", "tools"),
 		huh.NewOption("Quit", "quit"))
 	var selected string
 	return m.setForm("home", "Applications", func() tea.Cmd {
@@ -175,72 +171,145 @@ func (m *model) home() tea.Cmd {
 			return tea.Quit
 		case "register":
 			return m.registerForm()
-		case "setup":
-			return m.setupForm()
-		case "git-setup":
-			return m.gitSetupForm()
 		case "clone":
 			return m.cloneForm()
+		case "server":
+			return m.serverMenu()
+		case "tools":
+			return m.toolsMenu()
+		}
+		return m.home()
+	}, huh.NewGroup(huh.NewSelect[string]().Title(fmt.Sprintf("%d configured applications", len(c.Apps))).Description("Choose an app, or clone and register a new project.").Options(choices...).Value(&selected)))
+}
+
+func (m *model) serverMenu() tea.Cmd {
+	m.notice, m.context = "", ""
+	var selected string
+	return m.setForm("menu", "Server & credentials", func() tea.Cmd {
+		switch selected {
+		case "setup":
+			return m.setupForm()
+		case "git":
+			return m.gitSetupForm()
+		case "composer":
+			return m.composerAuthForm()
+		}
+		return m.home()
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Server actions").Description("For a new VPS: set up the server, then its GitHub key.").Options(
+		huh.NewOption("Set up VPS", "setup"),
+		huh.NewOption("GitHub key", "git"),
+		huh.NewOption("Composer credentials", "composer"),
+		huh.NewOption("Back", "back")).Value(&selected)))
+}
+
+func (m *model) toolsMenu() tea.Cmd {
+	m.notice, m.context = "", ""
+	var selected string
+	return m.setForm("menu", "Tools", func() tea.Cmd {
+		switch selected {
+		case "deploy":
+			return m.deployForm("")
+		case "backup":
+			return m.databaseBackupForm("")
 		case "ports":
 			return m.start(action{title: "Port reservations", args: []string{"ports"}})
 		case "validate":
 			return m.start(action{title: "Validate configuration", args: []string{"config", "validate"}})
 		case "doctor":
-			return m.start(action{title: "Doctor", args: []string{"doctor"}, note: "Occupied ports can belong to running managed services."})
-		case "database-backup":
-			return m.databaseBackupForm("")
-		case "deploy-all":
-			return m.deployForm("")
+			return m.start(action{title: "Check configuration and ports", args: []string{"doctor"}, note: "Running app services may already occupy their reserved ports."})
 		case "allocate":
-			return m.review(action{title: "Reconcile port reservations", args: []string{"ports", "--allocate"}, note: "Writes missing reservations. Existing assignments stay stable. Dry-run is unsupported for this command."})
+			return m.review(action{title: "Reconcile ports", args: []string{"ports", "--allocate"}, note: "Reserve missing ports after configuration edits. Existing assignments stay fixed. Preview is unavailable."})
 		}
 		return m.home()
-	}, huh.NewGroup(huh.NewSelect[string]().Title(fmt.Sprintf("%d configured applications", len(c.Apps))).Description("Select an app or an operation. Press / to search.").Options(choices...).Value(&selected)))
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Maintenance").Options(
+		huh.NewOption("Deploy all applications", "deploy"),
+		huh.NewOption("Back up databases", "backup"),
+		huh.NewOption("Port reservations", "ports"),
+		huh.NewOption("Validate configuration", "validate"),
+		huh.NewOption("Check configuration and ports", "doctor"),
+		huh.NewOption("Reconcile ports", "allocate"),
+		huh.NewOption("Back", "back")).Value(&selected)))
 }
 
 func (m *model) appMenu(app config.App) tea.Cmd {
 	m.notice = ""
-	web := app.Web.Driver
-	if app.Type == "nuxt" {
-		web = "Node"
-	}
-	m.context = clean(fmt.Sprintf("%s · %s · %s · %s\n%s", app.Type, web, app.Domain, app.User, app.Directory))
+	m.context = clean(app.Domain)
 	choices := []huh.Option[string]{
-		huh.NewOption("Service status", "status"), huh.NewOption("Deploy", "deploy"),
-		huh.NewOption("Enable services", "enable"), huh.NewOption("Restart services", "restart"),
-		huh.NewOption("View recent logs", "logs"), huh.NewOption("Disable services", "disable"),
+		huh.NewOption("Deploy", "deploy"), huh.NewOption("Service status", "status"),
+		huh.NewOption("Restart services", "restart"), huh.NewOption("Recent logs", "logs"),
 	}
 	if app.Database.Enabled {
-		choices = append(choices, huh.NewOption("Create / verify database", "database"), huh.NewOption("Reveal database credentials", "credentials"), huh.NewOption("Back up database", "database-backup"), huh.NewOption("Import SQL into database", "database-import"))
+		choices = append(choices, huh.NewOption("Database", "database-menu"))
 	}
-	choices = append(choices, huh.NewOption("Remove application", "remove"), huh.NewOption("Back", "back"))
+	choices = append(choices, huh.NewOption("More actions", "more"), huh.NewOption("Back", "back"))
 	var selected string
 	return m.setForm("app", app.Name, func() tea.Cmd {
-		args := []string{selected, app.Name}
-		switch selected {
-		case "back":
-			return m.home()
-		case "deploy":
-			return m.deployForm(app.Name)
-		case "restart", "logs":
-			return m.serviceForm(app, selected)
-		case "status":
-			return m.start(action{title: app.Name + " / status", args: args})
-		case "database-backup":
-			return m.databaseBackupForm(app.Name)
-		case "database-import":
-			return m.databaseImportForm(app.Name)
-		case "credentials":
-			return m.review(action{title: "Reveal credentials: " + app.Name, args: []string{"database", app.Name, "--show"}, note: "Shows private database credentials on this terminal. The database is created or verified first. Output is discarded when you leave this screen."})
-		case "remove":
-			return m.review(action{title: "Remove " + app.Name, args: args, note: "Stops services, removes generated files and the managed Ubuntu account, and releases ports. Project files, secrets, home and database are preserved, with project/home ownership transferred to root."})
-		case "disable":
-			return m.review(action{title: "Disable " + app.Name, args: args, note: "Stops services and removes routing. The application will be unavailable. Users, databases and reserved ports are retained."})
-		default:
-			return m.review(action{title: selected + " / " + app.Name, args: args})
-		}
+		return m.appAction(app, selected)
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Application actions").Options(choices...).Value(&selected)))
 }
+
+func (m *model) databaseMenu(app config.App) tea.Cmd {
+	var selected string
+	return m.setForm("app", app.Name+" / Database", func() tea.Cmd {
+		if selected == "back" {
+			return m.appMenu(app)
+		}
+		return m.appAction(app, selected)
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Database actions").Options(
+		huh.NewOption("Show credentials", "credentials"),
+		huh.NewOption("Back up", "database-backup"),
+		huh.NewOption("Import SQL", "database-import"),
+		huh.NewOption("Create / verify", "database"),
+		huh.NewOption("Back", "back")).Value(&selected)))
+}
+
+func (m *model) moreAppMenu(app config.App) tea.Cmd {
+	var selected string
+	return m.setForm("app", app.Name+" / More actions", func() tea.Cmd {
+		if selected == "back" {
+			return m.appMenu(app)
+		}
+		return m.appAction(app, selected)
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Manage application").Options(
+		huh.NewOption("Enable services", "enable"),
+		huh.NewOption("Disable services", "disable"),
+		huh.NewOption("Remove application", "remove"),
+		huh.NewOption("Back", "back")).Value(&selected)))
+}
+
+func (m *model) appAction(app config.App, selected string) tea.Cmd {
+	args := []string{selected, app.Name}
+	switch selected {
+	case "back":
+		return m.home()
+	case "database-menu":
+		return m.databaseMenu(app)
+	case "more":
+		return m.moreAppMenu(app)
+	case "deploy":
+		return m.deployForm(app.Name)
+	case "restart", "logs":
+		return m.serviceForm(app, selected)
+	case "status":
+		return m.start(action{title: app.Name + " / status", args: args})
+	case "database-backup":
+		return m.databaseBackupForm(app.Name)
+	case "database-import":
+		return m.databaseImportForm(app.Name)
+	case "credentials":
+		return m.review(action{title: "Show credentials: " + app.Name, args: []string{"database", app.Name, "--show"}, note: "Shows database passwords on this terminal. Copy them to the project's .env. Output clears when you leave."})
+	case "remove":
+		return m.review(action{title: "Remove " + app.Name, args: args, note: "Stops this app and removes managed services and its user. Projects, secrets, uploads and databases are kept."})
+	case "disable":
+		return m.review(action{title: "Disable " + app.Name, args: args, note: "Stops services and routing; the app becomes unavailable. Its files, database and ports are kept."})
+	case "enable":
+		return m.review(action{title: "Enable " + app.Name, args: args, note: "Start this app's configured services and enable its HTTPS site."})
+	case "database":
+		return m.review(action{title: "Verify database: " + app.Name, args: args, note: "Create or verify the managed database. Existing data and passwords are kept."})
+	}
+	return m.appMenu(app)
+}
+
 func (m *model) serviceForm(app config.App, command string) tea.Cmd {
 	choices := []huh.Option[string]{huh.NewOption("All services", "")}
 	web := "web"
@@ -274,7 +343,7 @@ func (m *model) serviceForm(app config.App, command string) tea.Cmd {
 			return m.start(a)
 		}
 		return m.review(a)
-	}, huh.NewGroup(huh.NewSelect[string]().Title("Which services?").Options(choices...).Value(&selected)))
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Which services?").Description("Choose one service, or all services for this app.\nExample: queue workers for background jobs.").Options(choices...).Value(&selected)))
 }
 func (m *model) deployForm(name string) tea.Cmd {
 	var noPull bool
@@ -292,37 +361,31 @@ func (m *model) deployForm(name string) tea.Cmd {
 		if noPull {
 			args = append(args, "--no-pull")
 		}
-		return m.review(action{title: title, args: args, note: "Deployment has downtime: stop services, install locked dependencies, build assets, migrate Laravel, then enable services. A failure leaves the app disabled. Database and code changes are not automatically rolled back."})
-	}, huh.NewGroup(huh.NewSelect[bool]().Title("Source code").Options(huh.NewOption("Pull current branch (--ff-only)", false), huh.NewOption("Use current checkout (--no-pull)", true)).Value(&noPull)))
+		return m.review(action{title: title, args: args, note: "The app has downtime while dependencies, assets and database migrations run. Failures are reported; code and database changes are not automatically rolled back."})
+	}, huh.NewGroup(huh.NewSelect[bool]().Title("Source code").Description("Pull your latest committed code, or deploy the current files.\nExample: current checkout for a first deployment after cloning.").Options(huh.NewOption("Pull latest code", false), huh.NewOption("Use current checkout", true)).Value(&noPull)))
 }
 func (m *model) review(a action) tea.Cmd {
 	m.current = a
 	m.page, m.title, m.form, m.approved, m.notice = "confirm", "Review · "+a.title, nil, false, ""
 	description := a.note
-	if description != "" {
-		description += "\n\n"
+	if description == "" {
+		description = "Run this action?"
 	}
-	description += "abr " + displayArgs(a.args) + "\n\nConfig: " + clean(m.options.ConfigPath) + "\nState: " + clean(m.options.StateDir) + "\nTemplates: " + clean(m.options.TemplatesDir) + "\nApps: " + clean(m.options.AppsDir)
 	if m.options.DryRun {
-		description += "\n\nDRY RUN: preview only. The command can reject unsupported previews."
+		description += "\n\nPreview only; no host changes."
 	}
-	m.reviewText = description
-	m.viewport.SetContent(ansi.Wrap(description, m.bodyWidth(), ""))
+	m.reviewText = clean(description)
+	m.viewport.SetContent(ansi.Wrap(m.reviewText, m.bodyWidth(), ""))
 	m.viewport.SetHeight(max(3, m.bodyHeight()-2))
 	m.viewport.GotoTop()
 	return nil
 }
-func displayArgs(args []string) string {
-	parts := make([]string, len(args))
-	for i, arg := range args {
-		parts[i] = strconv.Quote(clean(arg))
-	}
-	return strings.Join(parts, " ")
-}
 func (m *model) start(a action) tea.Cmd {
 	a.args = append([]string(nil), a.args...)
 	m.current = a
+	m.current.run = nil
 	m.page, m.title, m.form, m.output, m.result, m.busy = "output", a.title, nil, "", nil, true
+	m.next = nil
 	m.lineLength = 0
 	m.notice, m.context = "", ""
 	m.events = make(chan event, 32)
@@ -330,7 +393,15 @@ func (m *model) start(a action) tea.Cmd {
 	m.viewport.SetContent("")
 	runner, ch, args := m.options.RunCommand, m.events, a.args
 	// Only one operation is active. Completion is sent after all output, in order.
-	go func() { err := runner(args, streamWriter{ch}); ch <- event{done: true, err: err} }()
+	go func() {
+		var err error
+		if a.run != nil {
+			err = a.run(streamWriter{ch})
+		} else {
+			err = runner(args, streamWriter{ch})
+		}
+		ch <- event{done: true, err: err}
+	}()
 	return tea.Batch(waitEvent(ch), m.spinner.Tick)
 }
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -359,6 +430,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.err != nil {
 				m.appendOutput("\nError: " + clean(msg.err.Error()) + "\n")
 				m.viewport.GotoBottom()
+			} else if !m.options.DryRun {
+				if hint := nextStep(m.current.args); hint != "" {
+					m.appendOutput("\nNext: " + hint + "\n")
+					m.viewport.GotoBottom()
+				}
 			}
 			return m, nil
 		}
@@ -449,17 +525,16 @@ func (m *model) View() tea.View {
 	palette := colors(m.dark)
 	accent, muted, danger, success := palette.accent, palette.muted, palette.danger, palette.success
 	width := m.bodyWidth()
-	mode := "LIVE · host operations require Ubuntu 26.04 AMD64 / root"
+	mode := ""
 	if m.options.DryRun {
-		mode = "DRY RUN · preview host operations"
+		mode = " · Preview"
 	}
-	header := accent.Render("Abr") + muted.Render("  "+m.options.Version+"  /  "+mode)
-	header += "\n" + muted.Render(ansi.Truncate(clean(m.options.ConfigPath)+"  ·  "+clean(m.options.StateDir), width, "…"))
+	header := accent.Render("Abr") + muted.Render("  "+m.options.Version+mode)
 	var body, footer string
 	if m.width < 48 || m.height < 16 {
 		body = "Resize the terminal to at least 48 × 16.\nEsc / Ctrl+C goes back or quits when idle."
 	} else if m.page == "output" {
-		status := m.spinner.View() + " Running · leaving is disabled until completion"
+		status := m.spinner.View() + " Running"
 		if !m.busy {
 			if m.result != nil {
 				status = danger.Render("Command failed · error shown below")
@@ -470,9 +545,9 @@ func (m *model) View() tea.View {
 			}
 		}
 		body = lipgloss.NewStyle().Width(width).Render(status) + "\n" + m.viewport.View()
-		footer = "↑/↓ scroll · pgup/pgdown page · home/end"
+		footer = "↑/↓ scroll"
 		if !m.busy {
-			footer += " · enter/esc back"
+			footer += " · Enter / Esc back"
 		}
 		if len(m.current.args) > 0 && (m.current.args[0] == "logs" || m.current.args[0] == "doctor") {
 			footer += "\n" + ansi.Truncate(m.current.note, width, "…")
@@ -485,10 +560,19 @@ func (m *model) View() tea.View {
 			cancel = accent.Render("[ Cancel ]")
 		}
 		body = m.viewport.View() + "\n\n" + cancel + "    " + run
-		footer = "←/→ choose · enter confirm · esc cancel · ↑/↓ scroll"
+		footer = "←/→ choose · enter confirm · esc cancel"
 	} else {
 		body = m.form.View()
-		footer = "Esc back · Ctrl+C back / quit · menu / search"
+		footer = "↑/↓ select · Enter open · Esc back"
+		if m.page == "form" {
+			footer = "Enter next · Shift+Tab back · Esc cancel"
+			switch m.form.GetFocusedField().(type) {
+			case *huh.MultiSelect[string]:
+				footer = "Space toggle · Enter next · Esc cancel"
+			case *huh.Select[string], *huh.Select[bool]:
+				footer = "↑/↓ choose · Enter next · Esc cancel"
+			}
+		}
 	}
 	if m.notice != "" {
 		body = muted.Render(ansi.Truncate(m.notice, width, "…")) + "\n" + body
@@ -506,6 +590,40 @@ func (m *model) View() tea.View {
 	v := tea.NewView(lipgloss.NewStyle().Padding(1, 2).Render(content))
 	v.AltScreen = true
 	return v
+}
+
+func nextStep(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	switch args[0] {
+	case "setup":
+		return "Open Server & credentials to set up the GitHub key, then clone your project."
+	case "git":
+		return "Add the public key to GitHub Settings → SSH and GPG keys, then choose Clone application."
+	case "clone":
+		return "Choose Register application and enter the directory you just cloned."
+	case "register":
+		if slices.Contains(args, "--config-only") {
+			return "Register on the VPS before deploying; this saved local configuration only."
+		}
+		kind := slices.Index(args, "--type")
+		if (kind >= 0 && kind+1 < len(args) && args[kind+1] == "nuxt") || slices.Contains(args, "--no-database") {
+			return "Prepare the project's .env, then choose Deploy from its app menu."
+		}
+		return "Prepare the project's .env. Copy database values from the app's Database menu, then choose Deploy."
+	case "composer":
+		return "Choose Deploy for your app. Saved credentials are reused automatically."
+	case "database":
+		if len(args) > 1 && args[1] == "backup" {
+			return "Copy the SQL backups to storage outside this VPS."
+		}
+		if len(args) > 1 && args[1] == "import" {
+			return "Check the restored data, then enable the app's services."
+		}
+		return "Copy the database values into the project's .env before deploying."
+	}
+	return ""
 }
 
 func (m *model) appendOutput(s string) {

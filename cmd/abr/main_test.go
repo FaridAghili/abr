@@ -195,6 +195,40 @@ func TestSharedGitCommandsAndPortablePreviews(t *testing.T) {
 	}
 }
 
+func TestComposerAuthenticationPreviewAndPrivateStdin(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	out, err := invoke(t, "composer", "auth", "--state-dir", state, "--dry-run")
+	if err != nil || !strings.Contains(out, "Would save shared Composer credentials") {
+		t.Fatalf("credential preview: %s %v", out, err)
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Fatal("preview saved credentials")
+	}
+	for _, args := range [][]string{{"composer"}, {"composer", "unknown"}, {"composer", "auth", "extra"}, {"composer", "auth", "--token", "secret"}} {
+		if _, err := invoke(t, args...); err == nil {
+			t.Fatalf("invalid credential command accepted: %v", args)
+		}
+	}
+	var prompts bytes.Buffer
+	for _, token := range []string{"fixture-token", "fixture-token\n", "fixture-token\r\n"} {
+		username, password, err := composerLogin(strings.NewReader(token), &prompts, "fixture", true, false)
+		if err != nil || username != "fixture" || password != "fixture-token" || prompts.Len() != 0 {
+			t.Fatal("stdin token not read privately")
+		}
+	}
+	for _, token := range []string{"", "token\nextra", strings.Repeat("x", 4097)} {
+		if _, _, err := composerLogin(strings.NewReader(token), &prompts, "fixture", true, false); err == nil {
+			t.Fatal("invalid stdin token accepted")
+		}
+	}
+	if _, _, err := composerLogin(strings.NewReader("token"), &prompts, "", true, false); err == nil {
+		t.Fatal("stdin read without username")
+	}
+	if _, _, err := composerLogin(strings.NewReader("token"), &prompts, "fixture", false, false); err == nil {
+		t.Fatal("nonterminal token prompt allowed")
+	}
+}
+
 func TestDatabaseTransferCommandValidationAndPreview(t *testing.T) {
 	dir := t.TempDir()
 	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state")}

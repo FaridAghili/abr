@@ -69,6 +69,20 @@ func (h Host) asUser(a config.App, environment map[string]string, private bool, 
 	if a.User == "" || a.User == "root" {
 		return nil, fmt.Errorf("application commands require a dedicated non-root user")
 	}
+	if name == "composer" {
+		_, configured, err := h.sharedComposer()
+		if err != nil {
+			return nil, err
+		}
+		if configured {
+			if err := h.composerAccess(a, false); err != nil {
+				return nil, err
+			}
+			environment = copyEnvironment(environment)
+			environment["COMPOSER_HOME"] = h.composerDir()
+			environment["COMPOSER_CACHE_DIR"] = "/var/lib/abr-users/" + a.User + "/.cache/composer"
+		}
+	}
 	if name == "git" {
 		configured, err := h.sharedGit()
 		if err != nil {
@@ -202,7 +216,14 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		// PHP and npm scripts can read .env and include SQL bindings/passwords in
 		// exception output. Keep their output out of terminal/deployment logs.
 		_, err := h.asUser(a, plan.Environment, name == php || name == "composer" || name == "npm", name, args...)
-		return err
+		if err == nil {
+			return nil
+		}
+		var exit interface{ ExitCode() int }
+		if name == "composer" && errors.As(err, &exit) && exit.ExitCode() == 100 {
+			err = fmt.Errorf("package download failed; for private repositories save credentials with abr composer auth --host HOST: %w", err)
+		}
+		return fmt.Errorf("%s as %s: %w", strings.Join(append([]string{name}, args...), " "), a.User, err)
 	}
 	// Build frontend assets before installing PHP dependencies or running Artisan.
 	_, packageErr := os.Stat(h.path(filepath.Join(a.Directory, "package.json")))

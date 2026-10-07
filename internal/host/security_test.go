@@ -133,6 +133,7 @@ func TestDatabaseGrantsScopeNewAccountsToLiteralNames(t *testing.T) {
 	for _, partial := range []string{"0", "1", "unexpected"} {
 		t.Run(partial, func(t *testing.T) {
 			h, runner, _, a := fixture(t)
+			a.Name = "test-app"
 			a.Database.Enabled = true
 			h.Runner = transferRunner{func(c Command) ([]byte, error) {
 				if string(c.Input) == "SELECT @@partial_revokes;\n" {
@@ -150,9 +151,9 @@ func TestDatabaseGrantsScopeNewAccountsToLiteralNames(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "abr_app"
+			want := "test_app"
 			if partial == "0" {
-				want = `abr\_app`
+				want = `test\_app`
 			}
 			for _, c := range runner.calls {
 				if strings.Contains(string(c.Input), "GRANT ALL") {

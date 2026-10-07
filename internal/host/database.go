@@ -21,6 +21,10 @@ type credentials struct {
 	Ready    bool   `json:"ready"`
 }
 
+func databaseName(name string) string {
+	return strings.ReplaceAll(name, "-", "_")
+}
+
 func (h Host) credentialsPath(name string) string {
 	return filepath.Join(h.Manager.StateDir, "databases", name+".json")
 }
@@ -48,12 +52,12 @@ func (h Host) database(a config.App, show bool) error {
 	}
 	path := h.credentialsPath(a.Name)
 	saved, err := h.read(path)
-	c := credentials{App: a.Name, Database: strings.ReplaceAll(RuntimeUser(a.Name), "-", "_"), User: RuntimeUser(a.Name)}
+	c := credentials{App: a.Name, Database: databaseName(a.Name), User: RuntimeUser(a.Name)}
 	if err == nil {
 		if err := json.Unmarshal(saved, &c); err != nil {
 			return fmt.Errorf("corrupt database credentials: %w", err)
 		}
-		if c.App != a.Name || c.Database != strings.ReplaceAll(RuntimeUser(a.Name), "-", "_") || c.User != RuntimeUser(a.Name) || !regexp.MustCompile(`^[a-f0-9]{64}Aa1!$`).MatchString(c.Password) {
+		if c.App != a.Name || c.Database != databaseName(a.Name) || c.User != RuntimeUser(a.Name) || !regexp.MustCompile(`^[a-f0-9]{64}Aa1!$`).MatchString(c.Password) {
 			return fmt.Errorf("invalid database ownership record for %s", a.Name)
 		}
 	} else if os.IsNotExist(err) {

@@ -183,6 +183,11 @@ test -z "$(sudo find /srv/apps -maxdepth 1 -name '.abr-clone-*' -print)"
 sudo rm /usr/local/bin/git
 fixture_git_shim=0
 
+# Save one account for all subsequent app installs and repeated deployments.
+printf '%s\n' 'fixture-private-token' | abr_ci composer auth --host packages.example.invalid --username fixture --password-stdin
+sudo test "$(sudo stat -c '%U:%a' /var/lib/abr-ci/composer/auth.json)" = root:600
+fixture_denied nobody cat /var/lib/abr-ci/composer/auth.json
+
 fixture_source=$(mktemp -d)
 composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel:^13.0' "$fixture_source/laravel"
 (
@@ -196,6 +201,16 @@ composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel
 <?php
 if (posix_geteuid() === 0 || !preg_match('/^NoNewPrivs:\s+1$/m', file_get_contents('/proc/self/status'))) {
     fwrite(STDERR, "Composer script has unsafe privileges\n");
+    exit(1);
+}
+$home = getenv('COMPOSER_HOME');
+$auth = $home ? json_decode(file_get_contents($home.'/auth.json'), true) : null;
+if ($home !== '/var/lib/abr-ci/composer'
+    || ($auth['http-basic']['packages.example.invalid']['username'] ?? '') !== 'fixture'
+    || ($auth['http-basic']['packages.example.invalid']['password'] ?? '') !== 'fixture-private-token'
+    || is_writable($home) || is_writable($home.'/auth.json')
+    || getenv('COMPOSER_CACHE_DIR') !== getenv('HOME').'/.cache/composer') {
+    fwrite(STDERR, "Shared Composer authentication or private cache is unavailable\n");
     exit(1);
 }
 PHP
@@ -230,9 +245,9 @@ abr_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --
 # Fresh accounts must not access a foreign database whose name would match an
 # unescaped underscore in a database grant.
 sudo mysql --protocol=socket --user=root <<'SQL'
-CREATE DATABASE abrXfixtureXphp;
+CREATE DATABASE fixtureXphp;
 SQL
-printf 'USE abrXfixtureXphp; CREATE TABLE forbidden (id INT);\n' | sudo tee /var/lib/abr-ci/foreign.sql >/dev/null
+printf 'USE fixtureXphp; CREATE TABLE forbidden (id INT);\n' | sudo tee /var/lib/abr-ci/foreign.sql >/dev/null
 if abr_ci database import fixture-php /var/lib/abr-ci/foreign.sql --yes; then
   echo 'Wildcard database grant exposed another database' >&2; exit 1
 fi
@@ -240,8 +255,8 @@ fi
 sudo mysql --protocol=socket --user=root -e 'SET GLOBAL partial_revokes=ON;'
 sudo mkdir -p /srv/apps/fixture-literal/public /srv/apps/fixture-literal/storage/app/public
 abr_ci register --name fixture-literal --dir /srv/apps/fixture-literal --type laravel --domain fixture-literal.localhost
-sudo mysql --protocol=socket --user=root -e 'CREATE DATABASE abrXfixtureXliteral;'
-printf 'USE abrXfixtureXliteral; CREATE TABLE forbidden (id INT);\n' | sudo tee /var/lib/abr-ci/foreign-literal.sql >/dev/null
+sudo mysql --protocol=socket --user=root -e 'CREATE DATABASE fixtureXliteral;'
+printf 'USE fixtureXliteral; CREATE TABLE forbidden (id INT);\n' | sudo tee /var/lib/abr-ci/foreign-literal.sql >/dev/null
 if abr_ci database import fixture-literal /var/lib/abr-ci/foreign-literal.sql --yes; then
   echo 'Literal grant exposed another database' >&2; exit 1
 fi
@@ -249,6 +264,12 @@ abr_ci remove fixture-literal
 sudo mysql --protocol=socket --user=root -e 'SET GLOBAL partial_revokes=OFF;'
 sudo bash -c 'awk "!/^DB_(CONNECTION|HOST|PORT|DATABASE|USERNAME|PASSWORD)=/" /srv/apps/fixture-php/.env.example > /srv/apps/fixture-php/.env; cat /var/lib/abr-ci/credentials/fixture-php.env >> /srv/apps/fixture-php/.env; chmod 600 /srv/apps/fixture-php/.env'
 abr_ci deploy fixture-php --no-pull
+fixture_denied abr-fixture-php sh -c 'printf overwritten >> /var/lib/abr-ci/composer/auth.json'
+fixture_denied nobody cat /var/lib/abr-ci/composer/auth.json
+sudo grep -Fx 'DB_DATABASE=fixture_php' /var/lib/abr-ci/credentials/fixture-php.env
+if sudo grep -R -F 'fixture-private-token' /var/lib/abr-ci/deployments; then
+  echo 'Composer token leaked to deployment history' >&2; exit 1
+fi
 test "$(sudo systemctl show abr-fixture-php-scheduler.service --property=NoNewPrivileges --value)" = yes
 test "$(sudo systemctl show abr-fixture-php-scheduler.service --property=ProtectSystem --value)" = full
 fixture_denied abr-fixture-php curl --fail --silent --max-time 2 \
@@ -282,14 +303,14 @@ sudo test -S /run/php/abr-fixture-php.sock
 sudo test "$(sudo stat -c '%a' /srv/apps/fixture-php/.env)" = 600
 sudo test "$(sudo stat -c '%a' /var/lib/abr-ci/credentials/fixture-php.env)" = 600
 # Private atomic SQL dump and an actual restore with the scoped database account.
-sudo mysql --protocol=socket --user=root abr_fixture_php -e 'CREATE TABLE abr_backup_check (id INT PRIMARY KEY); INSERT INTO abr_backup_check VALUES (42);'
+sudo mysql --protocol=socket --user=root fixture_php -e 'CREATE TABLE abr_backup_check (id INT PRIMARY KEY); INSERT INTO abr_backup_check VALUES (42);'
 abr_ci database backup fixture-php --output-dir /var/lib/abr-ci/backups
 sql_dump=$(sudo find /var/lib/abr-ci/backups -name 'fixture-php-*.sql' -print -quit)
 sudo test "$(sudo stat -c '%a' "$sql_dump")" = 600
 abr_ci disable fixture-php
-sudo mysql --protocol=socket --user=root abr_fixture_php -e 'DROP TABLE abr_backup_check;'
+sudo mysql --protocol=socket --user=root fixture_php -e 'DROP TABLE abr_backup_check;'
 abr_ci database import fixture-php "$sql_dump" --yes
-sudo mysql --protocol=socket --user=root --batch --skip-column-names abr_fixture_php -e 'SELECT id FROM abr_backup_check;' | grep -Fx 42
+sudo mysql --protocol=socket --user=root --batch --skip-column-names fixture_php -e 'SELECT id FROM abr_backup_check;' | grep -Fx 42
 # SQL import cannot escape to another database or execute a root shell command.
 printf 'CREATE DATABASE forbidden_database;\n' | sudo tee /var/lib/abr-ci/forbidden.sql >/dev/null
 if abr_ci database import fixture-php /var/lib/abr-ci/forbidden.sql --yes; then echo 'Unscoped SQL was allowed' >&2; exit 1; fi
@@ -423,5 +444,9 @@ abr_ci register --name fixture-php --dir /srv/apps/fixture-php --type laravel --
 abr_ci deploy fixture-php --no-pull
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 abr_ci remove fixture-php
+sudo test -f /var/lib/abr-ci/composer/auth.json
+if sudo getfacl -cp /var/lib/abr-ci/composer/auth.json | grep -E '^user:[^:]+:r'; then
+  echo 'Removed app retained Composer token access' >&2; exit 1
+fi
 abr_ci doctor
 echo 'Disposable host smoke test passed.'

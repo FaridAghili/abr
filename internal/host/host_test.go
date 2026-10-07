@@ -144,7 +144,7 @@ func TestRegisterDatabaseIsPrivateStableAndScoped(t *testing.T) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		t.Fatal(err)
 	}
-	if !c.Ready || len(c.Password) != 68 || strings.Contains(out.String(), c.Password) {
+	if c.Database != "app" || c.User != a.User || !c.Ready || len(c.Password) != 68 || strings.Contains(out.String(), c.Password) {
 		t.Fatal("credential leak or invalid credentials")
 	}
 	info, err := os.Stat(h.credentialsEnvPath(a.Name))
@@ -160,7 +160,7 @@ func TestRegisterDatabaseIsPrivateStableAndScoped(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(sql, "ON `abr\\_app`.*") || strings.Contains(sql, "*.*") || strings.Contains(sql, "REVOKE") {
+	if !strings.Contains(sql, "ON `app`.*") || strings.Contains(sql, "*.*") || strings.Contains(sql, "REVOKE") {
 		t.Fatal(sql)
 	}
 	runner.calls = nil
@@ -365,8 +365,8 @@ func TestDeploymentStopsOnFailureAndRecordsResult(t *testing.T) {
 		}
 		return nil
 	}
-	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
-		t.Fatal("failed install reported success")
+	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil || !strings.Contains(err.Error(), "composer install") {
+		t.Fatalf("failed install not identified: %v", err)
 	}
 	if strings.Contains(out.String(), "Deployed app") {
 		t.Fatal("false success printed")

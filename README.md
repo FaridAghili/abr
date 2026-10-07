@@ -77,6 +77,13 @@ when none of its public tool links still use it.
 
 ## Deploy apps
 
+Run `sudo abr` for the interactive menu. Forms show one field at a time, with a
+short explanation and example. Use Enter to continue and Shift+Tab to revisit a
+field. Advanced registration settings are optional. **Server & credentials**
+contains VPS setup and shared GitHub/Composer access; **Tools** contains checks
+and bulk operations. Completed setup, clone and registration steps explain what
+to do next. Destructive imports still require confirmation.
+
 For private repositories, use one GitHub account SSH key for the VPS:
 
 ```sh
@@ -98,6 +105,28 @@ Later, `sudo abr deploy api` pulls with `git pull --ff-only`. Apps share the Git
 key's permissions; private Composer/npm dependencies may need separate credentials.
 Use `git setup --key /absolute/private-key` to import an existing unencrypted key.
 Imported keys must be regular files without symlinks and no larger than 64 KiB.
+
+Save a private Composer account once for all managed apps and future deployments:
+
+```sh
+sudo abr composer auth --host nova.laravel.com
+# Enter your Nova account email and license key at the hidden token prompt.
+sudo abr deploy api --no-pull
+```
+
+The interactive menu offers **Server & credentials → Composer credentials**. Nova uses
+your account email as the HTTP Basic username and your license key as its password
+([Nova installation documentation](https://nova.laravel.com/docs/v5/installation)).
+For scripts, use `--username USER --password-stdin` and pipe the token from a
+secret manager or private file; no token flag is accepted. Rerun the command to
+replace a repository's credentials; other saved repositories are retained.
+Abr stores the shared `auth.json` under `/var/lib/abr/composer`, owned by root.
+During Composer commands, app users get read access through ACLs and a shared
+`COMPOSER_HOME`; each app has its own writable cache under its private home.
+All managed apps share these accounts' package access. Removal revokes that app's
+access and preserves the saved credentials. Project-local `auth.json` can override
+shared credentials; keep it out of source control. Without saved shared credentials,
+Composer uses the app user's own configuration.
 
 Laravel deployment runs **npm ci → npm run build → Composer install → migrations →
 optimization → services**. It generates a missing APP_KEY and storage link. FPM is
@@ -239,13 +268,17 @@ The packaged welcome page is replaced with a generic 404. Identifying text in
 application bodies must be removed in the application itself.
 Default site templates also return 404 for `.env`, `.env.*`, and `.git` paths.
 
+Managed database names use the app name with hyphens replaced by underscores and
+no added prefix: `example-api` gets `example_api`. Long names are preserved;
+database names are independent of the dedicated runtime/MySQL account name.
 New managed MySQL accounts receive grants scoped to their exact database,
 including when MySQL's `partial_revokes` setting is enabled. Repeated database
 commands verify recorded accounts and preserve passwords, grants and contents.
 
 Artisan, Composer and npm command output stays private because project scripts
 and exception messages can contain SQL bindings and database passwords.
-Deployment history records command failures; inspect application logs privately
+Deployment history identifies failed commands. Composer download failures suggest
+`abr composer auth` for private-package credentials; inspect application logs privately
 when investigating failures. Secret-file reads reject symlinks/special files and
 are limited to 1 MiB. Deployment logs and backups have no automatic retention;
 monitor disk space and archive them deliberately.

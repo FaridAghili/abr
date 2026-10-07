@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -45,6 +46,8 @@ Commands:
   doctor           Portable config/registry/port checks
   setup            Install shared VPS packages, Caddy, Node 24 and RoadRunner
   git setup        Create/reuse one VPS GitHub SSH key (--key imports an existing key)
+  composer auth    Save shared private-package credentials; prompts for email/token
+                   --host HOST --username USER --password-stdin is scriptable
   clone URL DIR    Clone a GitHub SSH repository into a new directory under apps-dir
   database APP     Create/verify MySQL database (--show prints credentials)
   database backup APP... | --all --output-dir DIR
@@ -98,11 +101,17 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		command, args = "git setup", args[1:]
 	}
+	if command == "composer" {
+		if len(args) == 0 || args[0] != "auth" {
+			return fmt.Errorf("use abr composer auth --host HOST [--username USER --password-stdin]")
+		}
+		command, args = "composer auth", args[1:]
+	}
 	if command == "database" && len(args) > 0 && (args[0] == "backup" || args[0] == "import") {
 		command, args = "database "+args[0], args[1:]
 	}
 	switch command {
-	case "tui", "version", "config validate", "config example", "list", "register", "ports", "doctor", "setup", "git setup", "clone", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
+	case "tui", "version", "config validate", "config example", "list", "register", "ports", "doctor", "setup", "git setup", "composer auth", "clone", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -118,7 +127,13 @@ func run(args []string, out, stderr io.Writer) error {
 	var gitKey, backupDirectory string
 	var canonicalHost string
 	var backupAll, importYes bool
+	var composerHost, composerUsername string
+	var passwordStdin bool
 	switch command {
+	case "composer auth":
+		fs.StringVar(&composerHost, "host", "nova.laravel.com", "private Composer repository hostname")
+		fs.StringVar(&composerUsername, "username", "", "repository username/email (default: prompt)")
+		fs.BoolVar(&passwordStdin, "password-stdin", false, "read token from standard input instead of a hidden prompt")
 	case "git setup":
 		fs.StringVar(&gitKey, "key", "", "import an existing unencrypted SSH private key (default: generate/reuse VPS key)")
 	case "ports":
@@ -209,6 +224,17 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	h.Manager = m
 	switch command {
+	case "composer auth":
+		if !h.DryRun {
+			if err := host.Require(); err != nil {
+				return err
+			}
+		}
+		username, password, err := composerLogin(os.Stdin, stderr, composerUsername, passwordStdin, h.DryRun)
+		if err != nil {
+			return err
+		}
+		return h.ComposerAuth(composerHost, username, password)
 	case "git setup":
 		return h.GitSetup(gitKey)
 	case "clone":
@@ -226,6 +252,11 @@ func run(args []string, out, stderr io.Writer) error {
 			RoadRunnerVersion: host.DefaultRoadRunnerVersion, Input: os.Stdin, Output: out,
 			RunCommand: func(command []string, output io.Writer) error {
 				return run(append(append([]string(nil), base...), command...), output, output)
+			},
+			ComposerAuth: func(repository, username, password string, output io.Writer) error {
+				commandHost := h
+				commandHost.Output = output
+				return commandHost.ComposerAuth(repository, username, password)
 			},
 		})
 	case "version":
@@ -368,6 +399,45 @@ func run(args []string, out, stderr io.Writer) error {
 		return errors.Join(failures...)
 	}
 	return nil
+}
+
+func composerLogin(input io.Reader, output io.Writer, username string, passwordStdin, dryRun bool) (string, string, error) {
+	if dryRun {
+		return username, "", nil
+	}
+	if passwordStdin {
+		if strings.TrimSpace(username) == "" {
+			return "", "", fmt.Errorf("--password-stdin requires --username")
+		}
+		data, err := io.ReadAll(io.LimitReader(input, 4097))
+		if err != nil || len(data) > 4096 {
+			return "", "", fmt.Errorf("cannot read Composer token (max 4096 bytes)")
+		}
+		password := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
+		if password == "" || strings.ContainsAny(password, "\x00\r\n") {
+			return "", "", fmt.Errorf("Composer token must be one nonempty line")
+		}
+		return username, password, nil
+	}
+	file, ok := input.(*os.File)
+	if !ok || !term.IsTerminal(int(file.Fd())) {
+		return "", "", fmt.Errorf("use --username USER --password-stdin outside a terminal")
+	}
+	if username == "" {
+		fmt.Fprint(output, "Composer username / email: ")
+		line, err := bufio.NewReader(io.LimitReader(input, 4097)).ReadString('\n')
+		if err != nil || len(line) > 4096 {
+			return "", "", fmt.Errorf("cannot read Composer username")
+		}
+		username = strings.TrimSpace(line)
+	}
+	fmt.Fprint(output, "Composer token / license key (hidden): ")
+	data, err := term.ReadPassword(int(file.Fd()))
+	fmt.Fprintln(output)
+	if err != nil {
+		return "", "", fmt.Errorf("cannot read Composer token")
+	}
+	return username, string(data), nil
 }
 
 func terminalAvailable(out io.Writer) bool {

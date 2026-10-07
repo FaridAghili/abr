@@ -632,6 +632,9 @@ func (h Host) removeUser(a config.App) error {
 		if err := h.gitAccess(a, true); err != nil {
 			return err
 		}
+		if err := h.composerAccess(a, true); err != nil {
+			return err
+		}
 		if err := h.command("userdel", a.User); err != nil {
 			return err
 		}

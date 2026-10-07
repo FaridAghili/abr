@@ -17,6 +17,7 @@ No production server was contacted or changed.
 | npm scripts could disclose project secrets into deployment logs. | Hide npm output, alongside existing Composer/Artisan privacy. Retain command exit status and private deployment result records. |
 | stdout/stderr could concurrently corrupt an unsynchronized log writer. | Serialize writes to the shared command log sink. |
 | Asset compression spawned one user-switching process for every file. | Compress in batches of up to 64 files/32 KiB of path arguments, with the same app privileges and fail-fast behavior. |
+| Private Composer package credentials were unavailable to app users' clean deployment environments. | Save shared HTTP Basic credentials from a hidden prompt or bounded stdin, never command arguments. Root owns the shared Composer home; named app ACLs allow reading credentials while per-user caches remain writable. Revoke ACLs before deleting an app user and retain shared secrets. |
 
 Composer and npm scripts execute with the installing user's access, so dropping
 privileges is required even when the package manager itself is trusted.
@@ -39,6 +40,9 @@ that fail unless their effective UID is nonzero and `/proc/self/status` reports
 settings/process status, alongside existing deployment, database, Caddy, storage
 and removal checks. It also exercises unprivileged initial clone against an
 offline bare-repository fixture. It generates npm fixtures without sudo.
+The Composer scripts also check shared authentication and per-app cache paths
+across two apps and a repeated deployment. The fixture checks write denial,
+unrelated-user read denial, token-free deployment history and ACL revocation.
 
 Local verification uses Go 1.27.1 on macOS ARM64: gofmt, vet, all tests, race tests,
 module verification, reachable vulnerability scanning and a CGO-free Linux AMD64
@@ -53,6 +57,9 @@ it cannot be executed on this macOS workspace.
   and committed lockfiles. No blanket install-script bypass is added.
 - Applications share one GitHub identity and can read it after Git access is
   granted. Use a GitHub account restricted to the repositories this server needs.
+  Saved Composer accounts are also shared: apps can read their package tokens
+  after Composer access is granted, and project-local authentication can override
+  the shared file. App removal revokes access before UID reuse.
   Redis is loopback-only but shared without per-app authentication. These choices
   do not provide isolation between mutually untrusted tenants.
 - Native package installation and system configuration still require root.
