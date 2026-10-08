@@ -16,7 +16,7 @@ func (m *model) editMenu(app config.App) tea.Cmd {
 	var selected string
 	choices := []huh.Option[string]{huh.NewOption("Domains", "domains"), huh.NewOption("Health check", "health")}
 	if app.Type == "laravel" {
-		choices = append(choices, huh.NewOption("Workers", "workers"), huh.NewOption("Components", "components"))
+		choices = append(choices, huh.NewOption("Workers", "workers"), huh.NewOption("Components", "components"), huh.NewOption("Build order", "build-order"))
 	}
 	choices = append(choices, huh.NewOption("Back", "back"))
 	return m.setForm("app", app.Name+" / Edit settings", func() tea.Cmd {
@@ -58,6 +58,13 @@ func (m *model) editForm(app config.App, section string) tea.Cmd {
 		health := app.HealthCheck
 		groups = []*huh.Group{huh.NewGroup(textInput("Health check URL", "Check this URL after deployment. Clear to disable this check.", "https://example.com/up", &health))}
 		flags = func() []string { return []string{"--health-check", health} }
+	case "build-order":
+		order := app.BuildOrder
+		if order == "" {
+			order = config.BuildFrontendFirst
+		}
+		groups = []*huh.Group{huh.NewGroup(buildOrderSelect(&order))}
+		flags = func() []string { return []string{"--build-order", order} }
 	case "workers":
 		driver := app.Web.Driver
 		if driver == "" {
@@ -110,4 +117,11 @@ func (m *model) editForm(app config.App, section string) tea.Cmd {
 		args := append([]string{"edit", app.Name}, flags()...)
 		return m.review(action{title: "Save settings: " + app.Name, args: args, note: "Save these settings and reserve any required ports. Choose Deploy afterward to apply them.\n\n" + clean(strings.Join(flags(), " "))})
 	}, groups...)
+}
+
+func buildOrderSelect(order *string) *huh.Select[string] {
+	return huh.NewSelect[string]().Title("Laravel build order").Description("Choose whether assets or PHP dependencies come first. npm ci runs before both.\nExample: Composer first for Wayfinder builds that run Artisan.").Options(
+		huh.NewOption("Frontend first (default) · build assets before Composer", config.BuildFrontendFirst),
+		huh.NewOption("Composer first · install PHP dependencies before build", config.BuildComposerFirst),
+	).Value(order)
 }

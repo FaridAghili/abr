@@ -10,6 +10,7 @@ directory = "/srv/apps/api"
 user = "abr-api"
 type = "laravel"
 domain = "api.example.com"
+build_order = "frontend-first" # Use composer-first when the build invokes Artisan.
 # Separate subdomain apps keep their entered hostname without www aliases.
 health_check = "https://api.example.com/up"
 [apps.database]

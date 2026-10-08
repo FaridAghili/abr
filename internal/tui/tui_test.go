@@ -398,6 +398,11 @@ func TestAdvancedRegistrationFieldsAreOptionalAndDiscardedWhenSkipped(t *testing
 	}
 	press(m, tea.KeySpace) // scheduler
 	m.form.NextGroup()
+	if !strings.Contains(m.View().Content, "Laravel build order") {
+		t.Fatal("advanced build order setting is inaccessible")
+	}
+	press(m, tea.KeyDown) // Composer first.
+	m.form.NextGroup()
 	for _, input := range []struct{ title, value string }{
 		{"Redirect domains", "old.example.com"},
 		{"Extra serving domains", "shop.example.com"},
@@ -415,13 +420,13 @@ func TestAdvancedRegistrationFieldsAreOptionalAndDiscardedWhenSkipped(t *testing
 	}
 	// Go back and skip extras after entering them; stale values must not be sent.
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 6; i++ {
 		m.form.PrevGroup()
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	m.next()
 	args := strings.Join(m.current.args, " ")
-	for _, flag := range []string{"--alias", "--serving-domain", "--health-check", "--config-only", "--scheduler"} {
+	for _, flag := range []string{"--alias", "--serving-domain", "--health-check", "--config-only", "--scheduler", "--build-order"} {
 		if strings.Contains(args, flag) {
 			t.Fatalf("skipped extras retained %s", flag)
 		}

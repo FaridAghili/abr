@@ -12,7 +12,7 @@ import (
 func TestEditChangesOnlySuppliedFlagsAndPreviewDoesNotSave(t *testing.T) {
 	dir := t.TempDir()
 	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state")}
-	if _, err := invoke(t, append(paths, "register", "--name", "app", "--type", "laravel", "--domain", "example.com", "--alias", "old.example.com", "--scheduler", "--queue-workers", "2", "--config-only")...); err != nil {
+	if _, err := invoke(t, append(paths, "register", "--name", "app", "--type", "laravel", "--domain", "example.com", "--alias", "old.example.com", "--scheduler", "--queue-workers", "2", "--build-order", config.BuildComposerFirst, "--config-only")...); err != nil {
 		t.Fatal(err)
 	}
 	out, err := invoke(t, append(paths, "edit", "app", "--scheduler=false", "--alias", "", "--config-only")...)
@@ -20,16 +20,26 @@ func TestEditChangesOnlySuppliedFlagsAndPreviewDoesNotSave(t *testing.T) {
 		t.Fatalf("edit guidance: %q %v", out, err)
 	}
 	c, err := config.Load(paths[1])
-	if err != nil || c.Apps[0].Scheduler.Enabled || c.Apps[0].Queue.Workers != 2 || len(c.Apps[0].Aliases) != 0 || !c.Apps[0].Database.Enabled {
+	if err != nil || c.Apps[0].Scheduler.Enabled || c.Apps[0].Queue.Workers != 2 || len(c.Apps[0].Aliases) != 0 || !c.Apps[0].Database.Enabled || c.Apps[0].BuildOrder != config.BuildComposerFirst {
 		t.Fatalf("omitted or empty flags mishandled: %+v %v", c, err)
 	}
+	if _, err := invoke(t, append(paths, "edit", "app", "--build-order", config.BuildFrontendFirst, "--config-only")...); err != nil {
+		t.Fatal(err)
+	}
+	c, err = config.Load(paths[1])
+	if err != nil || c.Apps[0].BuildOrder != config.BuildFrontendFirst || c.Apps[0].Queue.Workers != 2 {
+		t.Fatalf("build-order edit lost settings: %+v %v", c, err)
+	}
 	before, _ := os.ReadFile(paths[1])
+	if _, err := invoke(t, append(paths, "edit", "app", "--build-order", "invalid", "--config-only")...); err == nil {
+		t.Fatal("accepted invalid build order")
+	}
 	if _, err := invoke(t, append(paths, "edit", "app", "--domain", "changed.example.com", "--config-only", "--dry-run")...); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := os.ReadFile(paths[1])
 	if string(before) != string(after) {
-		t.Fatal("preview saved")
+		t.Fatal("preview or invalid edit saved")
 	}
 	if _, err := invoke(t, append(paths, "edit", "app", "--config-only")...); err == nil {
 		t.Fatal("accepted empty edit")

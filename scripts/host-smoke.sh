@@ -343,9 +343,9 @@ if (process.getuid() === 0 || !/^NoNewPrivs:\s+1$/m.test(fs.readFileSync('/proc/
   throw new Error('npm script has unsafe privileges');
 }
 JS
-  # Exercise arbitrary Composer and npm project scripts under the real runner.
+  # Exercise Composer/npm privileges and a frontend build that invokes Artisan.
   php -r '$p="composer.json"; $c=json_decode(file_get_contents($p),true); $c["scripts"]["pre-install-cmd"][]="@php abr-fixture-privileges.php"; file_put_contents($p,json_encode($c,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");'
-  node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync("package.json")); p.scripts.prebuild="node abr-fixture-privileges.cjs"; fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n");'
+  node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync("package.json")); p.scripts.prebuild="node abr-fixture-privileges.cjs && php artisan list --raw --no-interaction > /dev/null"; fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n");'
 )
 sudo cp -R "$fixture_source/laravel" /srv/apps/fixture-php
 sudo tee /srv/apps/fixture-php/routes/web.php >/dev/null <<'PHP'
@@ -364,7 +364,7 @@ fixture_git() {
   sudo git -C "$1" commit --no-gpg-sign -m 'Fixture'
 }
 fixture_git /srv/apps/fixture-php
-abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost --serving-domain extra.fixture-php.localhost --canonical-host non-www --scheduler
+abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost --serving-domain extra.fixture-php.localhost --canonical-host non-www --scheduler --build-order composer-first
 # Database identities use the database name, separately from Ubuntu app users.
 sudo grep -Fx 'DB_DATABASE=fixture_php' /var/lib/abr-ci/credentials/fixture-php.env
 sudo grep -Fx 'DB_USERNAME=fixture_php' /var/lib/abr-ci/credentials/fixture-php.env
@@ -392,6 +392,7 @@ abr_ci env fixture-php
 sudo test "$(sudo stat -c '%U:%a' /srv/apps/fixture-php/.env)" = abr-fixture-php:600
 sudo grep -Fx 'APP_ENV=production' /srv/apps/fixture-php/.env
 sudo grep -Fx 'APP_DEBUG=false' /srv/apps/fixture-php/.env
+sudo test ! -f /srv/apps/fixture-php/vendor/autoload.php
 abr_ci deploy fixture-php --no-pull
 sudo cp /srv/apps/fixture-php/.env "$abr_binary_directory/prepared-php.env"
 abr_ci env fixture-php
@@ -567,6 +568,16 @@ abr_ci logs fixture-php scheduler
 
 sudo cp -R "$fixture_source/laravel" /srv/apps/fixture-octane
 sudo cp /srv/apps/fixture-php/routes/web.php /srv/apps/fixture-octane/routes/web.php
+# This app needs built assets during Composer installation: exercise frontend-first.
+sudo node -e 'const fs=require("node:fs"); const p="/srv/apps/fixture-octane/package.json"; const c=JSON.parse(fs.readFileSync(p)); c.scripts.prebuild="node abr-fixture-privileges.cjs"; fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");'
+sudo tee /srv/apps/fixture-octane/abr-fixture-assets.php >/dev/null <<'PHP'
+<?php
+if (!is_file(__DIR__.'/public/build/manifest.json')) {
+    fwrite(STDERR, "Composer installation requires built frontend assets\n");
+    exit(1);
+}
+PHP
+sudo php -r '$p="/srv/apps/fixture-octane/composer.json"; $c=json_decode(file_get_contents($p),true); $c["scripts"]["pre-install-cmd"][]="@php abr-fixture-assets.php"; file_put_contents($p,json_encode($c,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");'
 printf '\n.rr.yaml\n' | sudo tee -a /srv/apps/fixture-octane/.gitignore >/dev/null
 fixture_git /srv/apps/fixture-octane
 abr_ci register --name fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost --canonical-host www

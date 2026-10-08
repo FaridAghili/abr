@@ -25,6 +25,8 @@ func (changes AppChanges) Apply(a App) (App, error) {
 			a.Domains = append([]string(nil), v.Domains...)
 		case "health-check":
 			a.HealthCheck = v.HealthCheck
+		case "build-order":
+			a.BuildOrder = v.BuildOrder
 		case "web-driver":
 			a.Web.Driver = v.Web.Driver
 		case "octane-workers":

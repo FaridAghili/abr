@@ -32,6 +32,7 @@ type App struct {
 	Aliases     []string  `toml:"aliases,omitempty"`
 	Domains     []string  `toml:"domains,omitempty"`
 	HealthCheck string    `toml:"health_check,omitempty"`
+	BuildOrder  string    `toml:"build_order,omitempty"`
 	Web         Web       `toml:"web,omitempty"`
 	Queue       Queue     `toml:"queue,omitempty"`
 	Scheduler   Component `toml:"scheduler,omitempty"`
@@ -54,6 +55,11 @@ type Component struct {
 type Database struct {
 	Enabled bool `toml:"enabled,omitempty"`
 }
+
+const (
+	BuildFrontendFirst = "frontend-first"
+	BuildComposerFirst = "composer-first"
+)
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 var userPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
@@ -172,6 +178,9 @@ func (a App) Validate() error {
 	}
 	switch a.Type {
 	case "laravel":
+		if a.BuildOrder != "" && a.BuildOrder != BuildFrontendFirst && a.BuildOrder != BuildComposerFirst {
+			return fmt.Errorf("build_order must be frontend-first or composer-first")
+		}
 		if a.Web.Driver != "fpm" && a.Web.Driver != "octane" {
 			return fmt.Errorf("web.driver must be fpm or octane")
 		}
@@ -179,7 +188,7 @@ func (a App) Validate() error {
 			return fmt.Errorf("web.workers is only used by Octane")
 		}
 	case "nuxt":
-		if a.Web.Driver != "" || a.Web.Workers != 0 || a.Queue.Workers != 0 || a.Scheduler.Enabled || a.Nightwatch.Enabled || a.InertiaSSR.Enabled || a.Database.Enabled {
+		if a.BuildOrder != "" || a.Web.Driver != "" || a.Web.Workers != 0 || a.Queue.Workers != 0 || a.Scheduler.Enabled || a.Nightwatch.Enabled || a.InertiaSSR.Enabled || a.Database.Enabled {
 			return fmt.Errorf("Laravel components cannot be enabled for Nuxt apps")
 		}
 	default:

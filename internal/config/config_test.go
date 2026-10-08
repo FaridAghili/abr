@@ -76,6 +76,7 @@ func TestDuplicateAndInvalidApps(t *testing.T) {
 		change func(*App)
 	}{
 		{"driver", func(a *App) { a.Web.Driver = "swoole" }},
+		{"build order", func(a *App) { a.BuildOrder = "custom" }},
 		{"relative directory", func(a *App) { a.Directory = "srv/app" }},
 		{"root", func(a *App) { a.User = "root" }},
 		{"domain", func(a *App) { a.Domain = "https://example.com" }},
@@ -109,5 +110,19 @@ func TestDuplicateAndInvalidApps(t *testing.T) {
 	c.Apps = []App{a, b}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "same directory") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestBuildOrderValidation(t *testing.T) {
+	for _, order := range []string{"", BuildFrontendFirst, BuildComposerFirst} {
+		a := testApp()
+		a.BuildOrder = order
+		if err := a.Validate(); err != nil {
+			t.Fatalf("rejected build order %q: %v", order, err)
+		}
+	}
+	a := App{Name: "nuxt", Directory: "/srv/nuxt", User: "nuxt", Type: "nuxt", Domain: "nuxt.test", BuildOrder: BuildComposerFirst}
+	if err := a.Validate(); err == nil {
+		t.Fatal("accepted Composer build order for Nuxt")
 	}
 }

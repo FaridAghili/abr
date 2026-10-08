@@ -108,6 +108,7 @@ func (m *model) registrationForm(name, detected string, cloned bool) tea.Cmd {
 	var configOnly, extra bool
 	canonicalHost := config.CanonicalWWW
 	workers, queue := "2", "0"
+	buildOrder := config.BuildFrontendFirst
 	kind, driver = "laravel", "fpm"
 	if detected != "" {
 		kind = detected
@@ -138,6 +139,7 @@ func (m *model) registrationForm(name, detected string, cloned bool) tea.Cmd {
 				args = append(args, "--octane-workers", workers)
 			}
 			if extra {
+				args = append(args, "--build-order", buildOrder)
 				for _, component := range components {
 					args = append(args, "--"+component)
 				}
@@ -182,6 +184,7 @@ func (m *model) registrationForm(name, detected string, cloned bool) tea.Cmd {
 	groups = append(groups, huh.NewGroup(huh.NewSelect[bool]().Title("Advanced settings?").Description("Most apps can skip these optional settings.\nExample: add an old domain that redirects to your primary domain.").Options(huh.NewOption("Skip (default)", false), huh.NewOption("Configure extras", true)).Value(&extra)))
 	if detected != "nuxt" {
 		groups = append(groups, huh.NewGroup(huh.NewMultiSelect[string]().Height(8).Title("Laravel components").Description("Optional services used by this project.\nExample: scheduler for scheduled jobs.").Options(huh.NewOption("Scheduler · scheduled jobs", "scheduler"), huh.NewOption("Nightwatch · monitoring", "nightwatch"), huh.NewOption("Inertia SSR · server rendering", "inertia-ssr")).Value(&components)).WithHideFunc(func() bool { return !extra || kind != "laravel" }))
+		groups = append(groups, huh.NewGroup(buildOrderSelect(&buildOrder)).WithHideFunc(func() bool { return !extra || kind != "laravel" }))
 	}
 	groups = append(groups,
 		huh.NewGroup(textInput("Redirect domains (optional)", "Comma-separated domains to redirect. Leave blank for none.", "old.example.com, legacy.example.com", &aliases)).WithHideFunc(func() bool { return !extra }),

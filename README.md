@@ -208,8 +208,12 @@ Composer downloads packages into the app’s cache before downtime, checking pri
 repository access when an archive is needed. Project scripts, builds and migrations
 can still fail during deployment.
 
-Laravel deployment then runs **npm ci → npm run build → Composer install → migrations →
-optimization → services**. It generates a missing APP_KEY and storage link. FPM is
+Laravel deployment defaults to **npm ci → npm run build → Composer install → migrations →
+optimization → services**. Apps whose frontend build invokes Artisan (such as Wayfinder)
+can choose **Composer first** under **App → More actions → Edit settings → Build order**, or
+run `sudo abr edit APP --build-order composer-first`. This installs Composer dependencies
+after `npm ci` and before `npm run build`. Choose `frontend-first` to build assets before
+Composer. It generates a missing APP_KEY and storage link. FPM is
 the default driver. Optional flags: `--scheduler`, `--queue-workers N`, `--nightwatch`,
 `--inertia-ssr`, `--octane-workers N`, `--health-check URL`; `--no-database` keeps DB
 management external. Install the corresponding Laravel packages in your project;
@@ -217,7 +221,7 @@ Inertia's server bundle must honor `SSR_PORT`. Octane uses the shared RoadRunner
 remove any app-local `rr` binary. Deployments have downtime and no automatic rollback.
 
 Use **App → More actions → Edit settings** to change domains, workers, components
-or the deployment health check. Forms start with current values. Saving settings
+or the deployment health check and build order. Forms start with current values. Saving settings
 reserves any new ports and keeps existing services running; deploy to apply them.
 Disabling the database retains its data and credentials.
 

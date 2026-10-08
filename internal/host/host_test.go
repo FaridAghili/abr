@@ -473,75 +473,112 @@ func TestDeploymentStopsOnFailureAndRecordsResult(t *testing.T) {
 	}
 }
 
-func TestLaravelFrontendFailureStopsBeforeComposer(t *testing.T) {
-	for _, failed := range []string{"npm ci", "npm run build"} {
-		t.Run(failed, func(t *testing.T) {
-			h, r, out, a := fixture(t)
-			if _, err := h.Register(a, nil); err != nil {
-				t.Fatal(err)
-			}
-			r.fail = func(c Command) error {
-				if c.Name == "runuser" && strings.Contains(strings.Join(c.Args, " "), failed) {
-					return testExit(8)
+func TestLaravelFrontendFailureStopsBeforeApplicationChanges(t *testing.T) {
+	for _, order := range []string{config.BuildFrontendFirst, config.BuildComposerFirst} {
+		for _, failed := range []string{"npm ci", "npm run build"} {
+			t.Run(order+"/"+failed, func(t *testing.T) {
+				h, r, out, a := fixture(t)
+				a.BuildOrder = order
+				if _, err := h.Register(a, nil); err != nil {
+					t.Fatal(err)
 				}
-				return nil
-			}
-			if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
-				t.Fatal("frontend failure reported success")
-			}
-			for _, c := range r.calls {
-				args := strings.Join(c.Args, " ")
-				if c.Name == "runuser" && (strings.Contains(args, "composer install") || strings.Contains(args, "artisan ")) {
-					t.Fatalf("PHP deployment continued after frontend failure: %s", args)
+				r.fail = func(c Command) error {
+					if c.Name == "runuser" && strings.Contains(strings.Join(c.Args, " "), failed) {
+						return testExit(8)
+					}
+					return nil
 				}
-			}
-			if strings.Contains(out.String(), "Deployed app") {
-				t.Fatal("false success printed")
-			}
-		})
+				if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
+					t.Fatal("frontend failure reported success")
+				}
+				for _, c := range r.calls {
+					args := strings.Join(c.Args, " ")
+					if c.Name == "runuser" && (strings.Contains(args, "artisan ") || (order == config.BuildFrontendFirst || failed == "npm ci") && strings.Contains(args, "composer install")) {
+						t.Fatalf("PHP deployment continued after frontend failure: %s", args)
+					}
+				}
+				if strings.Contains(out.String(), "Deployed app") {
+					t.Fatal("false success printed")
+				}
+			})
+		}
 	}
 }
 
-func TestDeploymentMigratesBeforeClearingDatabaseCache(t *testing.T) {
-	h, r, _, a := fixture(t)
+func TestComposerFirstFailureStopsBeforeBuild(t *testing.T) {
+	h, r, out, a := fixture(t)
+	a.BuildOrder = config.BuildComposerFirst
 	if _, err := h.Register(a, nil); err != nil {
 		t.Fatal(err)
 	}
-	// Stop at cache clearing to inspect the first-deployment sequence without
-	// simulating an active FPM socket. A missing cache table would fail here.
 	r.fail = func(c Command) error {
-		if strings.Contains(strings.Join(c.Args, " "), "artisan optimize:clear") {
-			return testExit(9)
+		if c.Name == "runuser" && strings.Contains(strings.Join(c.Args, " "), "composer install") {
+			return testExit(7)
 		}
 		return nil
 	}
 	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
-		t.Fatal("expected the simulated cache clear failure")
+		t.Fatal("dependency failure reported success")
 	}
-	npmCI, npmBuild, composer, configClear, migrate, cacheClear := -1, -1, -1, -1, -1, -1
-	for i, c := range r.calls {
+	for _, c := range r.calls {
 		args := strings.Join(c.Args, " ")
-		if strings.Contains(args, "npm ci") {
-			npmCI = i
-		}
-		if strings.Contains(args, "npm run build") {
-			npmBuild = i
-		}
-		if strings.Contains(args, "composer install") {
-			composer = i
-		}
-		if strings.Contains(args, "artisan config:clear") {
-			configClear = i
-		}
-		if strings.Contains(args, "artisan migrate") {
-			migrate = i
-		}
-		if strings.Contains(args, "artisan optimize:clear") {
-			cacheClear = i
+		if c.Name == "runuser" && (strings.Contains(args, "npm run build") || strings.Contains(args, "artisan ")) {
+			t.Fatalf("deployment continued after Composer failed: %s", args)
 		}
 	}
-	if npmCI < 0 || npmBuild <= npmCI || composer <= npmBuild || configClear <= composer || migrate <= configClear || cacheClear <= migrate {
-		t.Fatalf("unsafe first-deploy order: npm ci=%d build=%d composer=%d config=%d migrate=%d cache=%d", npmCI, npmBuild, composer, configClear, migrate, cacheClear)
+	if strings.Contains(out.String(), "Deployed app") {
+		t.Fatal("false success printed")
+	}
+}
+
+func TestDeploymentMigratesBeforeClearingDatabaseCache(t *testing.T) {
+	for _, order := range []string{"", config.BuildFrontendFirst, config.BuildComposerFirst} {
+		t.Run(order, func(t *testing.T) {
+			h, r, _, a := fixture(t)
+			a.BuildOrder = order
+			if _, err := h.Register(a, nil); err != nil {
+				t.Fatal(err)
+			}
+			// Stop at cache clearing to inspect the first-deployment sequence without
+			// simulating an active FPM socket. A missing cache table would fail here.
+			r.fail = func(c Command) error {
+				if strings.Contains(strings.Join(c.Args, " "), "artisan optimize:clear") {
+					return testExit(9)
+				}
+				return nil
+			}
+			if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
+				t.Fatal("expected the simulated cache clear failure")
+			}
+			npmCI, npmBuild, composer, configClear, migrate, cacheClear := -1, -1, -1, -1, -1, -1
+			for i, c := range r.calls {
+				args := strings.Join(c.Args, " ")
+				if strings.Contains(args, "npm ci") {
+					npmCI = i
+				}
+				if strings.Contains(args, "npm run build") {
+					npmBuild = i
+				}
+				if strings.Contains(args, "composer install") {
+					composer = i
+				}
+				if strings.Contains(args, "artisan config:clear") {
+					configClear = i
+				}
+				if strings.Contains(args, "artisan migrate") {
+					migrate = i
+				}
+				if strings.Contains(args, "artisan optimize:clear") {
+					cacheClear = i
+				}
+			}
+			if npmCI < 0 || npmBuild <= npmCI || composer <= npmCI || configClear <= npmBuild || configClear <= composer || migrate <= configClear || cacheClear <= migrate {
+				t.Fatalf("unsafe first-deploy order: npm ci=%d build=%d composer=%d config=%d migrate=%d cache=%d", npmCI, npmBuild, composer, configClear, migrate, cacheClear)
+			}
+			if (order == config.BuildComposerFirst) != (composer < npmBuild) {
+				t.Fatalf("build order %q not honored: build=%d composer=%d", order, npmBuild, composer)
+			}
+		})
 	}
 }
 

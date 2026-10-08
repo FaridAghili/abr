@@ -144,6 +144,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.Var((*stringsFlag)(&app.Aliases), "alias", "replace redirect domains (repeatable; empty clears)")
 		fs.Var((*stringsFlag)(&app.Domains), "serving-domain", "replace additional serving domains (repeatable; empty clears)")
 		fs.StringVar(&app.HealthCheck, "health-check", "", "deployment health-check URL (empty clears)")
+		fs.StringVar(&app.BuildOrder, "build-order", "", "Laravel: frontend-first (default) or composer-first")
 		fs.StringVar(&app.Web.Driver, "web-driver", "", "Laravel: fpm or octane")
 		fs.IntVar(&app.Web.Workers, "octane-workers", 0, "Octane worker count")
 		fs.IntVar(&app.Queue.Workers, "queue-workers", 0, "queue worker count (0 disables)")
@@ -173,6 +174,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.Var((*stringsFlag)(&app.Aliases), "alias", "redirect domain (repeatable)")
 		fs.Var((*stringsFlag)(&app.Domains), "serving-domain", "additional serving domain (repeatable)")
 		fs.StringVar(&app.HealthCheck, "health-check", "", "optional deployment health-check URL")
+		fs.StringVar(&app.BuildOrder, "build-order", "", "Laravel: frontend-first (default) or composer-first")
 		fs.StringVar(&app.Web.Driver, "web-driver", "", "Laravel: fpm (default) or octane")
 		fs.IntVar(&app.Web.Workers, "octane-workers", 0, "Octane worker count (default 2)")
 		fs.IntVar(&app.Queue.Workers, "queue-workers", 0, "Laravel queue worker count")
@@ -211,7 +213,7 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "edit" {
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
-			case "domain", "canonical-host", "alias", "serving-domain", "health-check", "web-driver", "octane-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "database":
+			case "domain", "canonical-host", "alias", "serving-domain", "health-check", "build-order", "web-driver", "octane-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "database":
 				changes.Fields = append(changes.Fields, f.Name)
 			}
 		})

@@ -208,9 +208,11 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		}
 		return deploymentCommandError(a.User, name, args, err)
 	}
-	// Build frontend assets before installing PHP dependencies or running Artisan.
+	// Frontend-first is the default; apps whose builds invoke Artisan can opt
+	// into installing Composer dependencies before the frontend build.
 	_, packageErr := os.Stat(h.path(filepath.Join(a.Directory, "package.json")))
-	if a.Type == "nuxt" || packageErr == nil || h.DryRun {
+	frontend := a.Type == "nuxt" || packageErr == nil || h.DryRun
+	if frontend {
 		if !h.DryRun {
 			if _, err := os.Stat(h.path(filepath.Join(a.Directory, "package-lock.json"))); err != nil {
 				return fmt.Errorf("commit package-lock.json before deployment: %w", err)
@@ -220,21 +222,33 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		if err := run("npm", "ci", "--include=dev"); err != nil {
 			return err
 		}
+	} else if !os.IsNotExist(packageErr) {
+		return packageErr
+	}
+	installComposer := func() error {
+		if err := run("composer", "install", "--no-dev", "--optimize-autoloader", "--no-interaction", "--prefer-dist"); err != nil {
+			return err
+		}
+		return run("composer", "check-platform-reqs", "--no-dev")
+	}
+	if a.Type == "laravel" && a.BuildOrder == config.BuildComposerFirst {
+		if err := installComposer(); err != nil {
+			return err
+		}
+	}
+	if frontend {
 		if err := run("npm", "run", "build"); err != nil {
 			return err
 		}
 		if err := h.compressAssets(a, plan.Environment); err != nil {
 			return err
 		}
-	} else if !os.IsNotExist(packageErr) {
-		return packageErr
 	}
 	if a.Type == "laravel" {
-		if err := run("composer", "install", "--no-dev", "--optimize-autoloader", "--no-interaction", "--prefer-dist"); err != nil {
-			return err
-		}
-		if err := run("composer", "check-platform-reqs", "--no-dev"); err != nil {
-			return err
+		if a.BuildOrder != config.BuildComposerFirst {
+			if err := installComposer(); err != nil {
+				return err
+			}
 		}
 		if h.DryRun {
 			h.say("Would generate APP_KEY only if missing")
