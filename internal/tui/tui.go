@@ -103,7 +103,9 @@ type model struct {
 	dark                 bool
 	width, height        int
 	form                 *huh.Form
+	groups               []*huh.Group
 	next                 func() tea.Cmd
+	back, menu           func() tea.Cmd
 	page, title, context string
 	current              action
 	busy                 bool
@@ -126,7 +128,11 @@ func newModel(o Options) *model {
 }
 func (m *model) Init() tea.Cmd { return tea.Batch(m.form.Init(), tea.RequestBackgroundColor) }
 func (m *model) setForm(page, title string, next func() tea.Cmd, groups ...*huh.Group) tea.Cmd {
+	if page == "form" {
+		m.back = m.menu
+	}
 	m.page, m.title, m.next = page, title, next
+	m.groups = groups
 	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(func(bool) *huh.Styles { return formTheme(m.dark) })).WithWidth(m.bodyWidth()).WithHeight(m.formHeight()).WithShowHelp(false)
 	return m.form.Init()
 }
@@ -147,6 +153,7 @@ func clean(s string) string {
 	}, ansi.Strip(s))
 }
 func (m *model) home() tea.Cmd {
+	m.menu, m.back = m.home, nil
 	// No state mutation on opening the dashboard, and no inferred service health.
 	m.output, m.result, m.notice, m.context = "", nil, "", ""
 	m.lineLength = 0
@@ -164,8 +171,9 @@ func (m *model) home() tea.Cmd {
 		}
 	}
 	choices := make([]huh.Option[string], 0, len(c.Apps)+8)
+	slices.SortFunc(c.Apps, func(a, b config.App) int { return strings.Compare(a.Name, b.Name) })
 	for _, app := range c.Apps {
-		choices = append(choices, huh.NewOption(clean(app.Name+"  ·  "+app.Type+"  ·  "+app.Domain), "app:"+app.Name))
+		choices = append(choices, huh.NewOption(appSummary(app), "app:"+app.Name))
 	}
 	choices = append(choices,
 		huh.NewOption("Clone application", "clone"),
@@ -199,6 +207,7 @@ func (m *model) home() tea.Cmd {
 }
 
 func (m *model) serverMenu() tea.Cmd {
+	m.menu, m.back = m.serverMenu, m.home
 	m.notice, m.context = "", ""
 	var selected string
 	return m.setForm("menu", "Server & credentials", func() tea.Cmd {
@@ -225,6 +234,7 @@ func (m *model) serverMenu() tea.Cmd {
 }
 
 func (m *model) toolsMenu() tea.Cmd {
+	m.menu, m.back = m.toolsMenu, m.home
 	m.notice, m.context = "", ""
 	var selected string
 	return m.setForm("menu", "Tools", func() tea.Cmd {
@@ -254,8 +264,9 @@ func (m *model) toolsMenu() tea.Cmd {
 }
 
 func (m *model) appMenu(app config.App) tea.Cmd {
+	m.menu, m.back = m.appDestination(app.Name, m.appMenu), m.home
 	m.notice = ""
-	m.context = clean(app.Domain)
+	m.context = clean(app.Domain + " · User: " + app.User)
 	choices := []huh.Option[string]{
 		huh.NewOption("Deploy", "deploy"), huh.NewOption("Service status", "status"),
 		huh.NewOption("Restart services", "restart"), huh.NewOption("Recent logs", "logs"),
@@ -271,10 +282,11 @@ func (m *model) appMenu(app config.App) tea.Cmd {
 }
 
 func (m *model) databaseMenu(app config.App) tea.Cmd {
+	m.menu, m.back = m.appDestination(app.Name, m.databaseMenu), m.appDestination(app.Name, m.appMenu)
 	var selected string
 	return m.setForm("app", app.Name+" / Database", func() tea.Cmd {
 		if selected == "back" {
-			return m.appMenu(app)
+			return m.goBack()
 		}
 		return m.appAction(app, selected)
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Database actions").Options(
@@ -286,13 +298,15 @@ func (m *model) databaseMenu(app config.App) tea.Cmd {
 }
 
 func (m *model) moreAppMenu(app config.App) tea.Cmd {
+	m.menu, m.back = m.appDestination(app.Name, m.moreAppMenu), m.appDestination(app.Name, m.appMenu)
 	var selected string
 	return m.setForm("app", app.Name+" / More actions", func() tea.Cmd {
 		if selected == "back" {
-			return m.appMenu(app)
+			return m.goBack()
 		}
 		return m.appAction(app, selected)
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Manage application").Options(
+		huh.NewOption("Ubuntu user & paths", "user"),
 		huh.NewOption("Edit settings", "edit"),
 		huh.NewOption("Enable services", "enable"),
 		huh.NewOption("Disable services", "disable"),
@@ -303,10 +317,12 @@ func (m *model) moreAppMenu(app config.App) tea.Cmd {
 func (m *model) appAction(app config.App, selected string) tea.Cmd {
 	args := []string{selected, app.Name}
 	switch selected {
+	case "user":
+		return m.appDetails(app)
 	case "edit":
 		return m.editMenu(app)
 	case "back":
-		return m.home()
+		return m.goBack()
 	case "database-menu":
 		return m.databaseMenu(app)
 	case "more":
@@ -414,6 +430,23 @@ func (m *model) deployForm(name string) tea.Cmd {
 	}, huh.NewGroup(huh.NewSelect[bool]().Title("Source code").Description("Pull your latest committed code, or deploy the current files.\nExample: current checkout for a first deployment after cloning.").Options(huh.NewOption("Pull latest code", false), huh.NewOption("Use current checkout", true)).Value(&noPull)))
 }
 func (m *model) review(a action) tea.Cmd {
+	if m.form != nil && m.page == "form" {
+		groups, focused, next, back := m.groups, m.form.GetFocusedField(), m.next, m.back
+		page, title, context := m.page, m.title, m.context
+		m.back = func() tea.Cmd {
+			m.context = context
+			cmds := []tea.Cmd{m.setForm(page, title, next, groups...)}
+			m.back = back
+			// A completed huh form no longer renders. Rebuild it with the same
+			// fields and return to the field the user just submitted.
+			for i := 0; i < len(groups) && m.form.GetFocusedField() != focused; i++ {
+				cmds = append(cmds, m.form.NextGroup())
+			}
+			return tea.Sequence(cmds...)
+		}
+	} else {
+		m.back = m.menu
+	}
 	m.current = a
 	m.page, m.title, m.form, m.approved, m.notice = "confirm", "Review · "+a.title, nil, false, ""
 	description := a.note
@@ -430,10 +463,14 @@ func (m *model) review(a action) tea.Cmd {
 	return nil
 }
 func (m *model) start(a action) tea.Cmd {
+	// Return to the originating menu after execution, never to a retained
+	// credential form or a confirmation that could repeat the command.
+	m.back = m.menu
 	a.args = append([]string(nil), a.args...)
 	m.current = a
 	m.current.run = nil
 	m.page, m.title, m.form, m.output, m.result, m.busy = "output", a.title, nil, "", nil, true
+	m.groups = nil
 	m.next = nil
 	m.lineLength = 0
 	m.notice, m.context = "", ""
@@ -469,9 +506,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h := m.bodyHeight() - 1
 		if m.page == "confirm" {
 			h--
+		} else if m.page == "details" {
+			h = m.bodyHeight()
 		}
 		m.viewport.SetHeight(max(3, h))
-		if m.page == "confirm" {
+		if m.page == "confirm" || m.page == "details" {
 			m.viewport.SetContent(ansi.Wrap(m.reviewText, m.bodyWidth(), ""))
 		}
 		if m.form != nil {
@@ -525,19 +564,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.page == "home" {
 				return m, tea.Quit
 			}
-			return m, m.home()
+			return m, m.goBack()
 		}
 		if m.width < 48 || m.height < 16 {
 			return m, nil
+		}
+		if m.page == "details" && key == "enter" {
+			return m, m.goBack()
 		}
 		if m.page == "output" && !m.busy && key == "enter" {
 			if next := m.current.continueWith; next != nil && m.result == nil && !m.options.DryRun {
 				m.current.continueWith = nil
 				return m, next()
 			}
-			return m, m.home()
+			return m, m.goBack()
 		}
-		if m.page == "output" || m.page == "confirm" {
+		if m.page == "output" || m.page == "confirm" || m.page == "details" {
 			switch key {
 			case "home":
 				m.viewport.GotoTop()
@@ -562,11 +604,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.approved {
 					return m, m.start(m.current)
 				}
-				return m, m.home()
+				return m, m.goBack()
 			}
 		}
 	}
-	if m.page == "output" || m.page == "confirm" {
+	if m.page == "output" || m.page == "confirm" || m.page == "details" {
 		var cmd tea.Cmd
 		if m.busy {
 			m.spinner, cmd = m.spinner.Update(msg)
@@ -582,7 +624,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.next()
 		}
 		if m.form.State == huh.StateAborted {
-			return m, m.home()
+			return m, m.goBack()
 		}
 		return m, cmd
 	}
@@ -600,6 +642,9 @@ func (m *model) View() tea.View {
 	var body, footer string
 	if m.width < 48 || m.height < 16 {
 		body = "Resize the terminal to at least 48 × 16.\nEsc / Ctrl+C goes back or quits when idle."
+	} else if m.page == "details" {
+		body = m.viewport.View()
+		footer = "↑/↓ scroll · Enter / Esc back"
 	} else if m.page == "output" {
 		status := m.spinner.View() + " Running"
 		if !m.busy {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -241,6 +242,7 @@ func (m *model) databaseBackupForm(name string) tea.Cmd {
 	}
 	choices := []huh.Option[string]{}
 	selected := []string{}
+	slices.SortFunc(c.Apps, func(a, b config.App) int { return strings.Compare(a.Name, b.Name) })
 	for _, app := range c.Apps {
 		if app.Database.Enabled {
 			choices = append(choices, huh.NewOption(clean(app.Name), app.Name))

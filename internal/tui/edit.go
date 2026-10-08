@@ -12,6 +12,7 @@ import (
 )
 
 func (m *model) editMenu(app config.App) tea.Cmd {
+	m.menu, m.back = m.appDestination(app.Name, m.editMenu), m.appDestination(app.Name, m.moreAppMenu)
 	var selected string
 	choices := []huh.Option[string]{huh.NewOption("Domains", "domains"), huh.NewOption("Health check", "health")}
 	if app.Type == "laravel" {
@@ -20,7 +21,7 @@ func (m *model) editMenu(app config.App) tea.Cmd {
 	choices = append(choices, huh.NewOption("Back", "back"))
 	return m.setForm("app", app.Name+" / Edit settings", func() tea.Cmd {
 		if selected == "back" {
-			return m.appMenu(app)
+			return m.goBack()
 		}
 		return m.editForm(app, selected)
 	}, huh.NewGroup(huh.NewSelect[string]().Title("What would you like to change?").Options(choices...).Value(&selected)))

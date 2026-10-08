@@ -104,7 +104,9 @@ func (m *model) firstDeploy(name string) tea.Cmd {
 }
 
 func (m *model) workflowError(title string, err error) tea.Cmd {
+	m.back = m.menu
 	m.page, m.title, m.form, m.busy, m.result = "output", title, nil, false, err
+	m.groups = nil
 	m.current, m.next = action{}, nil
 	m.notice, m.context = "", ""
 	m.output, m.lineLength = "", 0

@@ -110,13 +110,24 @@ server is not rebooted.
 
 Run `sudo abr` for the interactive menu. Forms show one field at a time, with a
 short explanation and example. Use Enter to continue and Shift+Tab to revisit a
-field. Advanced registration settings are optional. **Server & credentials**
+field. Esc returns one level through project menus; from an action review it
+returns to the form, and after a command it returns to the originating menu.
+Applications are sorted A–Z. Laravel entries show FPM or Octane (with its worker
+count), queue workers, scheduler and Nightwatch settings from the saved config.
+Advanced registration settings are optional. **Server & credentials**
 contains VPS setup and updates, shared GitHub/Composer access and the TablePlus admin login; **Tools** contains checks
 and bulk operations. **Set up VPS** asks for a server name (advanced settings
 are optional), installs the tools, automatically creates/reuses and displays the
 GitHub public key, asks for Composer credentials (or lets you skip), and ends
 with the TablePlus MySQL login and password. Press Enter after copying the key
 to continue the same setup workflow.
+
+For manual file transfers, select **App → More actions → Ubuntu user & paths**
+to see the configured Ubuntu user, matching managed group, project directory and
+Laravel `storage/app/public` path. `sudo abr list` also shows each project's user
+and directory. Use your SSH administrator account for rsync; app users have no
+login shell. Set transferred files' owner and group to the values shown for that
+project.
 
 **Clone application** asks for the repository and app name, detects Laravel
 or Nuxt, and continues directly to registration using that name. Detection uses
