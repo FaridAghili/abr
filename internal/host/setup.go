@@ -6,7 +6,6 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -280,43 +279,30 @@ func fetch(url string, limit int64) ([]byte, error) {
 }
 
 func (h Host) installRoadRunner(version string) error {
-	h.say("Install shared RoadRunner %s with GitHub asset SHA256 verification", version)
+	h.say("Install shared RoadRunner %s (latest follows the Octane-compatible 2025.1 series) with GitHub asset SHA256 verification", version)
 	if h.DryRun {
 		h.say("Would install /opt/roadrunner/%s/rr and link /usr/local/bin/rr", version)
 		return nil
 	}
 	url := "https://api.github.com/repos/roadrunner-server/roadrunner/releases/tags/v" + version
 	if version == "latest" {
-		url = "https://api.github.com/repos/roadrunner-server/roadrunner/releases/latest"
+		url = roadRunnerReleasesURL
 	}
-	data, err := fetch(url, 2<<20)
+	data, err := fetch(url, 8<<20)
 	if err != nil {
 		return err
 	}
-	var release struct {
-		Tag        string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
-		Assets     []struct {
-			Name   string `json:"name"`
-			URL    string `json:"browser_download_url"`
-			Digest string `json:"digest"`
-		} `json:"assets"`
-	}
-	if err := json.Unmarshal(data, &release); err != nil {
+	release, err := resolveRoadRunnerRelease(data, version)
+	if err != nil {
 		return err
 	}
-	resolved := strings.TrimPrefix(release.Tag, "v")
-	if release.Draft || release.Prerelease || !regexp.MustCompile(`^\d{4}\.\d+\.\d+$`).MatchString(resolved) || (version != "latest" && resolved != version) {
-		return fmt.Errorf("unexpected or unstable RoadRunner release")
-	}
-	version = resolved
+	version = strings.TrimPrefix(release.Tag, "v")
 	name := "roadrunner-" + version + "-linux-amd64.tar.gz"
 	for _, asset := range release.Assets {
 		if asset.Name != name {
 			continue
 		}
-		if !strings.HasPrefix(asset.URL, "https://github.com/roadrunner-server/roadrunner/releases/download/") {
+		if asset.URL != "https://github.com/roadrunner-server/roadrunner/releases/download/"+release.Tag+"/"+name {
 			return fmt.Errorf("unexpected RoadRunner asset URL")
 		}
 		archive, err := fetch(asset.URL, 100<<20)

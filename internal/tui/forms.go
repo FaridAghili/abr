@@ -232,7 +232,7 @@ func (m *model) setupForm() tea.Cmd {
 			return errors.New("Enter 0 or a port from 1 to 65535")
 		}
 		return nil
-	})).WithHideFunc(func() bool { return !extra }), huh.NewGroup(textInput("RoadRunner version", "Use latest for the current stable runtime, or choose a version.", "latest", &rr).Validate(required)).WithHideFunc(func() bool { return !extra }),
+	})).WithHideFunc(func() bool { return !extra }), huh.NewGroup(textInput("RoadRunner version", "Use latest for the stable Octane-compatible 2025.1 runtime, or choose a version.", "latest", &rr).Validate(required)).WithHideFunc(func() bool { return !extra }),
 		huh.NewGroup(huh.NewMultiSelect[string]().Height(8).Title("Additional tools").Description("Included by default; deselect tools you do not need.\nExample: keep Redis for caching and queues.").Options(huh.NewOption("Redis", "redis"), huh.NewOption("Image-processing tools", "images"), huh.NewOption("Firewall · SSH and HTTPS", "firewall")).Value(&features)).WithHideFunc(func() bool { return !extra }))
 }
 

@@ -210,7 +210,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.Var(&imports, "port", "import free ENDPOINT=PORT (repeatable)")
 	case "setup":
 		fs.StringVar(&setup.Hostname, "hostname", "", "VPS name: Ubuntu hostname and GitHub key label (default: prompt)")
-		fs.StringVar(&setup.RoadRunnerVersion, "roadrunner-version", host.DefaultRoadRunnerVersion, "shared RoadRunner release (default: latest stable)")
+		fs.StringVar(&setup.RoadRunnerVersion, "roadrunner-version", host.DefaultRoadRunnerVersion, "shared RoadRunner release (default: latest stable in Octane-compatible 2025.1 series)")
 		fs.StringVar(&setup.AdminUser, "admin-user", "", "existing SSH administrator (default: sudo user or root); must already have authorized keys")
 		fs.IntVar(&setup.SSHPort, "ssh-port", 0, "SSH port to preserve (default: discover effective sshd ports)")
 		fs.BoolVar(&setup.NoFirewall, "no-firewall", false, "leave firewall unchanged")

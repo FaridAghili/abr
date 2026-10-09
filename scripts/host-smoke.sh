@@ -169,6 +169,7 @@ fixture_caddy_version() {
   sudo systemctl is-active --quiet caddy
 }
 fixture_caddy_version
+/usr/local/bin/rr --version | grep -E 'version 2025\.1\.[0-9]+'
 fixture_caddy_format /etc/caddy/Caddyfile
 for repository in node; do
   repository_key="/etc/apt/keyrings/abr/$repository.gpg"
