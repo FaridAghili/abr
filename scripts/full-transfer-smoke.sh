@@ -25,7 +25,23 @@ done
 test ! -e /usr/local/bin/git
 cat > "$abr_binary_directory/full-git-shim" <<'SH'
 #!/bin/sh
-exec /usr/bin/git -c url.file:///srv/abr-full-git/.insteadOf=git@github.com:fixture/ "$@"
+# Keep metadata commands on the saved SSH URL; rewrite only repository traffic.
+git_command=
+skip_value=0
+for git_argument do
+  if [ "$skip_value" = 1 ]; then skip_value=0; continue; fi
+  case "$git_argument" in
+    -c|-C|--git-dir|--work-tree) skip_value=1 ;;
+    -*) ;;
+    *) git_command=$git_argument; break ;;
+  esac
+done
+case "$git_command" in
+  clone|fetch|pull|push)
+    exec /usr/bin/git -c url.file:///srv/abr-full-git/.insteadOf=git@github.com:fixture/ "$@"
+    ;;
+  *) exec /usr/bin/git "$@" ;;
+esac
 SH
 sudo install -m 755 "$abr_binary_directory/full-git-shim" /usr/local/bin/git
 fixture_git_shim=1
