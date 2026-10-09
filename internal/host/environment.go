@@ -1,6 +1,7 @@
 package host
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -174,10 +175,11 @@ func appProcess(a config.App, environment map[string]string, program string, arg
 }
 
 // EnvEditor returns a foreground process for the TUI to run while its renderer
-// is suspended. No example means no editor (nil, nil). The editor runs with the
-// app's identity, never as root.
-func (h Host) EnvEditor(name string) (*exec.Cmd, error) {
+// is suspended, and a check for content changes after it exits. An existing .env
+// is required, but .env.example is not. The editor runs as the app user.
+func (h Host) EnvEditor(name string) (*exec.Cmd, func() (bool, error), error) {
 	var command *exec.Cmd
+	var changed func() (bool, error)
 	err := h.locked(func() error {
 		if h.DryRun {
 			return fmt.Errorf("environment editing is unavailable in preview mode")
@@ -189,19 +191,33 @@ func (h Host) EnvEditor(name string) (*exec.Cmd, error) {
 		if err := h.project(a); err != nil {
 			return err
 		}
-		exists, err := project.HasEnvExample(h.path(a.Directory))
-		if err != nil || !exists {
-			return err
-		}
 		if _, err := h.environmentAccount(a); err != nil {
 			return err
 		}
-		if _, err := readProjectEnv(h.path(filepath.Join(a.Directory, ".env"))); err != nil {
+		path := h.path(filepath.Join(a.Directory, ".env"))
+		data, err := readProjectEnv(path)
+		if err != nil {
 			return err
+		}
+		before := sha256.Sum256(data)
+		changed = func() (bool, error) {
+			var different bool
+			err := h.locked(func() error {
+				if err := h.project(a); err != nil {
+					return err
+				}
+				data, err := readProjectEnv(path)
+				if err != nil {
+					return err
+				}
+				different = sha256.Sum256(data) != before
+				return nil
+			})
+			return different, err
 		}
 		command = environmentProcess(a, "/usr/bin/nano", "--", ".env")
 		command.Dir = h.path(a.Directory)
 		return nil
 	})
-	return command, err
+	return command, changed, err
 }

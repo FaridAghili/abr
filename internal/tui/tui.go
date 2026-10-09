@@ -32,7 +32,7 @@ type Options struct {
 	Output                                               io.Writer
 	RunCommand                                           func([]string, io.Writer) error
 	ComposerAuth                                         func(string, string, string, io.Writer) error
-	EnvEditor                                            func(string) (*exec.Cmd, error)
+	EnvEditor                                            func(string) (*exec.Cmd, func() (bool, error), error)
 	ArtisanShell                                         func(string) (*exec.Cmd, error)
 }
 
@@ -293,6 +293,7 @@ func (m *model) appMenu(app config.App) tea.Cmd {
 	choices := []huh.Option[string]{
 		huh.NewOption("Deploy", "deploy"), huh.NewOption("Service status", "status"),
 		huh.NewOption("Restart services", "restart"), huh.NewOption("Read logs", "logs"),
+		huh.NewOption("Edit .env", "edit-env"),
 	}
 	if app.Database.Enabled {
 		choices = append(choices, huh.NewOption("Database", "database-menu"))
@@ -349,6 +350,8 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 		return m.appDetails(app)
 	case "edit":
 		return m.editMenu(app)
+	case "edit-env":
+		return m.openEnvironment(app.Name, false)
 	case "clear-logs":
 		return m.clearLogsForm(app.Name)
 	case "disk":
@@ -541,6 +544,18 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 	case editorFinished:
 		if msg.err != nil {
 			return m, m.workflowError("Edit .env: "+msg.name, msg.err)
+		}
+		if !msg.initial {
+			changed, err := msg.changed()
+			if err != nil {
+				return m, m.workflowError("Check .env: "+msg.name, err)
+			}
+			if !changed {
+				m.busy = false
+				cmd := m.appDestination(msg.name, m.appMenu)()
+				m.notice = "No .env changes; deployment skipped."
+				return m, cmd
+			}
 		}
 		return m, m.firstDeploy(msg.name)
 	case tea.BackgroundColorMsg:

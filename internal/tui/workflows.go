@@ -70,22 +70,32 @@ func (m *model) environmentChoice(name string) tea.Cmd {
 	edit := true
 	return m.setForm("form", name+" / Environment", func() tea.Cmd {
 		if edit {
-			if m.options.EnvEditor == nil {
-				return m.workflowError("Edit .env: "+name, fmt.Errorf("environment editor is unavailable"))
-			}
-			command, err := m.options.EnvEditor(name)
-			if err != nil {
-				return m.workflowError("Edit .env: "+name, err)
-			}
-			if command == nil {
-				return m.skipEnvironment(name)
-			}
-			m.page, m.title, m.form, m.busy = "output", "Edit .env: "+name, nil, true
-			m.next, m.current = nil, action{}
-			return tea.ExecProcess(command, func(err error) tea.Msg { return editorFinished{name: name, err: err} })
+			return m.openEnvironment(name, true)
 		}
 		return m.firstDeploy(name)
 	}, huh.NewGroup(huh.NewSelect[bool]().Title("Edit .env before deployment?").Description("Review app secrets in nano. Save with Ctrl+O, Enter; close with Ctrl+X to deploy automatically.\nExample: add mail or API credentials.").Options(huh.NewOption("Open .env in editor", true), huh.NewOption("Deploy with prepared .env", false)).Value(&edit)))
+}
+
+func (m *model) openEnvironment(name string, initial bool) tea.Cmd {
+	if m.options.DryRun {
+		return m.workflowError("Edit .env: "+name, fmt.Errorf("environment editing is unavailable in preview mode"))
+	}
+	if m.options.EnvEditor == nil {
+		return m.workflowError("Edit .env: "+name, fmt.Errorf("environment editor is unavailable"))
+	}
+	command, changed, err := m.options.EnvEditor(name)
+	if err != nil {
+		return m.workflowError("Edit .env: "+name, err)
+	}
+	if command == nil || changed == nil {
+		return m.workflowError("Edit .env: "+name, fmt.Errorf("environment editor did not prepare a process and change check"))
+	}
+	m.back = m.menu
+	m.page, m.title, m.form, m.busy = "output", "Edit .env: "+name, nil, true
+	m.next, m.current = nil, action{}
+	return tea.ExecProcess(command, func(err error) tea.Msg {
+		return editorFinished{name: name, err: err, initial: initial, changed: changed}
+	})
 }
 
 func (m *model) skipEnvironment(name string) tea.Cmd {
@@ -95,8 +105,10 @@ func (m *model) skipEnvironment(name string) tea.Cmd {
 }
 
 type editorFinished struct {
-	name string
-	err  error
+	name    string
+	err     error
+	initial bool
+	changed func() (bool, error)
 }
 
 func (m *model) firstDeploy(name string) tea.Cmd {

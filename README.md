@@ -159,6 +159,14 @@ The workflow stops on errors; preview mode does not advance into steps that need
 newly created files. Config-only registration saves settings without deployment.
 Destructive imports and full app deletion require confirmation.
 
+For a registered app, choose **Apps → your app → Edit .env** to open its existing
+environment file in nano as the app user. Save with Ctrl+O, Enter, and exit with
+Ctrl+X. If the saved contents changed, Abr automatically deploys the current
+checkout with `--no-pull`, including the normal builds and Laravel migrations.
+Closing without changing the contents returns to the app menu without deployment.
+This action requires an existing `.env`; it does not require `.env.example`.
+Editor or file-check errors stop the workflow without deployment.
+
 For private repositories, use one GitHub account SSH key for the VPS:
 
 ```sh

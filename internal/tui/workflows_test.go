@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"abr/internal/config"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 )
@@ -217,9 +218,9 @@ func TestCloneWithoutEnvExampleDeploysDirectlyForBothFrameworks(t *testing.T) {
 				}
 				return nil
 			}
-			o.EnvEditor = func(string) (*exec.Cmd, error) {
+			o.EnvEditor = func(string) (*exec.Cmd, func() (bool, error), error) {
 				t.Error("missing example opened an editor")
-				return nil, errors.New("unexpected editor")
+				return nil, nil, errors.New("unexpected editor")
 			}
 			m := newModel(o)
 			m.cloneForm()
@@ -307,11 +308,11 @@ func TestEnvironmentEditorSuccessDeploysAndFailureStops(t *testing.T) {
 	}
 	var command string
 	o.RunCommand = func(args []string, _ io.Writer) error { command = strings.Join(args, " "); return nil }
-	o.EnvEditor = func(name string) (*exec.Cmd, error) {
+	o.EnvEditor = func(name string) (*exec.Cmd, func() (bool, error), error) {
 		if name != "app" {
 			t.Fatal("wrong editor app")
 		}
-		return exec.Command("true"), nil
+		return exec.Command("true"), func() (bool, error) { return false, nil }, nil
 	}
 	m := newModel(o)
 	m.environmentChoice("app")
@@ -319,7 +320,7 @@ func TestEnvironmentEditorSuccessDeploysAndFailureStops(t *testing.T) {
 	if cmd == nil || !m.busy || command != "" {
 		t.Fatal("editor did not suspend deployment")
 	}
-	m.Update(editorFinished{name: "app"})
+	m.Update(editorFinished{name: "app", initial: true})
 	finishStep(t, m)
 	if command != "deploy app --no-pull" {
 		t.Fatal("editor completion did not start deployment")
@@ -328,5 +329,116 @@ func TestEnvironmentEditorSuccessDeploysAndFailureStops(t *testing.T) {
 	m.Update(editorFinished{name: "app", err: errors.New("editor failed")})
 	if command != "" || m.busy || m.result == nil {
 		t.Fatal("failed editor started deployment")
+	}
+}
+
+func TestAppEnvironmentEditorDeploysOnlyChangedContents(t *testing.T) {
+	for _, kind := range []string{"laravel", "nuxt"} {
+		for _, outcome := range []string{"changed", "unchanged", "editor-error", "check-error", "deploy-error"} {
+			t.Run(kind+"/"+outcome, func(t *testing.T) {
+				o := testOptions(t)
+				a := navigationApp("example")
+				if kind == "nuxt" {
+					a.Type, a.Web, a.Database = kind, config.Web{}, config.Database{}
+				}
+				saveApps(t, o, a)
+				var commands []string
+				o.RunCommand = func(args []string, _ io.Writer) error {
+					commands = append(commands, strings.Join(args, " "))
+					if outcome == "deploy-error" {
+						return errors.New("deployment failed")
+					}
+					return nil
+				}
+				checks := 0
+				changed := func() (bool, error) {
+					checks++
+					if outcome == "check-error" {
+						return false, errors.New("cannot read .env")
+					}
+					return outcome != "unchanged", nil
+				}
+				editorCalls := 0
+				o.EnvEditor = func(name string) (*exec.Cmd, func() (bool, error), error) {
+					editorCalls++
+					if name != a.Name {
+						t.Fatal("wrong editor app")
+					}
+					return exec.Command("true"), changed, nil
+				}
+				m := newModel(o)
+				m.width, m.height = 100, 40
+				m.appMenu(a)
+				if !strings.Contains(m.View().Content, "Edit .env") {
+					t.Fatal("app environment action missing")
+				}
+				for range 4 {
+					press(m, tea.KeyDown)
+				}
+				if cmd := m.next(); cmd == nil || editorCalls != 1 || !m.busy || len(commands) != 0 {
+					t.Fatal("app menu did not open editor before deployment")
+				}
+				var editorErr error
+				if outcome == "editor-error" {
+					editorErr = errors.New("editor failed")
+				}
+				m.Update(editorFinished{name: a.Name, changed: changed, err: editorErr})
+				if outcome == "changed" || outcome == "deploy-error" {
+					finishStep(t, m)
+					if !slices.Equal(commands, []string{"deploy example --no-pull"}) {
+						t.Fatalf("did not deploy current checkout exactly once: %v", commands)
+					}
+					if (m.result != nil) != (outcome == "deploy-error") {
+						t.Fatal("deployment result was not reported")
+					}
+				} else if len(commands) != 0 || m.busy {
+					t.Fatal("unchanged or failed edit started deployment")
+				}
+				if outcome == "unchanged" && (m.title != a.Name || !strings.Contains(m.notice, "deployment skipped") || m.result != nil) {
+					t.Fatal("unchanged edit did not return to app menu with explanation")
+				}
+				if (outcome == "editor-error" || outcome == "check-error") && m.result == nil {
+					t.Fatal("edit/check error was not reported")
+				}
+				wantChecks := 1
+				if outcome == "editor-error" {
+					wantChecks = 0
+				}
+				if checks != wantChecks {
+					t.Fatalf("change checks = %d, want %d", checks, wantChecks)
+				}
+			})
+		}
+	}
+}
+
+func TestAppEnvironmentEditorUnavailableStopsWorkflow(t *testing.T) {
+	for _, outcome := range []string{"preview", "unavailable", "missing-env", "missing-process", "missing-check"} {
+		t.Run(outcome, func(t *testing.T) {
+			o := testOptions(t)
+			o.DryRun = outcome == "preview"
+			o.RunCommand = func([]string, io.Writer) error {
+				t.Error("unavailable editor started deployment")
+				return nil
+			}
+			if outcome != "unavailable" {
+				o.EnvEditor = func(string) (*exec.Cmd, func() (bool, error), error) {
+					if outcome == "preview" {
+						t.Error("preview opened editor")
+					}
+					if outcome == "missing-env" {
+						return nil, nil, os.ErrNotExist
+					}
+					if outcome == "missing-process" {
+						return nil, func() (bool, error) { return false, nil }, nil
+					}
+					return exec.Command("true"), nil, nil
+				}
+			}
+			m := newModel(o)
+			if cmd := m.appAction(navigationApp("example"), "edit-env"); cmd != nil || m.busy || m.result == nil {
+				t.Fatal("unavailable editor did not stop with an error")
+			}
+		})
 	}
 }

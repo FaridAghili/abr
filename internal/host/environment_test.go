@@ -128,7 +128,7 @@ func TestEnvironmentRejectsSymlinksAndForeignAccounts(t *testing.T) {
 	if err := h.PrepareEnv(a.Name); err == nil {
 		t.Fatal("followed environment symlink")
 	}
-	if _, err := h.EnvEditor(a.Name); err == nil {
+	if _, _, err := h.EnvEditor(a.Name); err == nil {
 		t.Fatal("opened environment symlink")
 	}
 	got, _ := os.ReadFile(outside)
@@ -145,7 +145,7 @@ func TestEnvironmentRejectsSymlinksAndForeignAccounts(t *testing.T) {
 	if err := h.PrepareEnv(a.Name); err == nil {
 		t.Fatal("adopted replacement user")
 	}
-	if _, err := h.EnvEditor(a.Name); err == nil {
+	if _, _, err := h.EnvEditor(a.Name); err == nil {
 		t.Fatal("editor adopted replacement user")
 	}
 }
@@ -166,11 +166,11 @@ func TestNuxtEnvironmentWithExampleAndEditorIdentity(t *testing.T) {
 	if err := h.PrepareEnv(a.Name); err != nil {
 		t.Fatal(err)
 	}
-	cmd, err := h.EnvEditor(a.Name)
+	cmd, changed, err := h.EnvEditor(a.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cmd == nil || cmd.Path != "/usr/sbin/runuser" || cmd.Args[2] != a.User || !slices.Contains(cmd.Args, "/usr/bin/nano") || cmd.Dir != a.Directory {
+	if changed == nil || cmd == nil || cmd.Path != "/usr/sbin/runuser" || cmd.Args[2] != a.User || !slices.Contains(cmd.Args, "/usr/bin/nano") || cmd.Dir != a.Directory {
 		t.Fatal("editor is not an app-user foreground process")
 	}
 	if len(cmd.Env) != 2 {
@@ -196,7 +196,7 @@ func TestMissingExampleAndEnvironmentPreview(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(a.Directory, ".env")); !os.IsNotExist(err) {
 		t.Fatal("preview created .env")
 	}
-	if _, err := h.EnvEditor(a.Name); err == nil {
+	if _, _, err := h.EnvEditor(a.Name); err == nil {
 		t.Fatal("preview allowed editing")
 	}
 	if !strings.Contains(out.String(), "Would copy .env.example") {
@@ -204,7 +204,7 @@ func TestMissingExampleAndEnvironmentPreview(t *testing.T) {
 	}
 }
 
-func TestMissingExampleSkipsPreparationAndEditorWithoutChangingExistingFiles(t *testing.T) {
+func TestMissingExampleSkipsPreparationButAllowsEditingExistingEnv(t *testing.T) {
 	for _, kind := range []string{"laravel", "nuxt"} {
 		for _, existing := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/existing=%t", kind, existing), func(t *testing.T) {
@@ -232,10 +232,6 @@ func TestMissingExampleSkipsPreparationAndEditorWithoutChangingExistingFiles(t *
 				if err := h.PrepareEnv(a.Name); err != nil {
 					t.Fatal(err)
 				}
-				cmd, err := h.EnvEditor(a.Name)
-				if err != nil || cmd != nil {
-					t.Fatalf("missing example opened an editor: %v", err)
-				}
 				got, err := os.ReadFile(path)
 				if existing && (err != nil || !bytes.Equal(got, old)) || !existing && !os.IsNotExist(err) {
 					t.Fatal("missing example created or changed .env")
@@ -243,7 +239,99 @@ func TestMissingExampleSkipsPreparationAndEditorWithoutChangingExistingFiles(t *
 				if len(runner.calls) != 0 || !strings.Contains(out.String(), "Skipped .env preparation") || strings.Contains(out.String(), "Set managed MySQL") {
 					t.Fatal("skipped environment performed or claimed work")
 				}
+				cmd, changed, err := h.EnvEditor(a.Name)
+				if existing {
+					if err != nil || cmd == nil || changed == nil {
+						t.Fatalf("existing .env could not be edited without an example: %v", err)
+					}
+				} else if err == nil || cmd != nil || changed != nil {
+					t.Fatal("missing .env allowed editing")
+				}
 			})
 		}
+	}
+}
+
+func TestEnvEditorDetectsContentChanges(t *testing.T) {
+	h, _, _, a := fixture(t)
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(a.Directory, ".env")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, changed, err := h.EnvEditor(a.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(want bool) {
+		t.Helper()
+		got, err := changed()
+		if err != nil || got != want {
+			t.Fatalf("changed = %t, want %t: %v", got, want, err)
+		}
+	}
+	check(false)
+	// A save or atomic replacement with identical contents must not deploy.
+	temp := filepath.Join(a.Directory, "saved-env")
+	if err := os.WriteFile(temp, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(temp, path); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	// Content changes still count when length and timestamps are unchanged.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := bytes.Clone(before)
+	after[len(after)-1] = ' '
+	if err := os.WriteFile(path, after, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	if err := os.WriteFile(path, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+}
+
+func TestEnvEditorChangeCheckRejectsRemovedOrUnsafeFiles(t *testing.T) {
+	for _, replacement := range []string{"missing", "symlink", "directory", "oversized"} {
+		t.Run(replacement, func(t *testing.T) {
+			h, _, _, a := fixture(t)
+			if _, err := h.Register(a, nil); err != nil {
+				t.Fatal(err)
+			}
+			_, changed, err := h.EnvEditor(a.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(a.Directory, ".env")
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			switch replacement {
+			case "symlink":
+				err = os.Symlink(filepath.Join(a.Directory, "artisan"), path)
+			case "directory":
+				err = os.Mkdir(path, 0700)
+			case "oversized":
+				err = os.WriteFile(path, make([]byte, (1<<20)+1), 0600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := changed(); err == nil || got {
+				t.Fatalf("unsafe .env reported a successful change check: %t, %v", got, err)
+			}
+		})
 	}
 }
