@@ -119,7 +119,12 @@ Run `sudo abr` for the interactive menu. Forms show one field at a time, with a
 short explanation and example. Use Enter to continue and Shift+Tab to revisit a
 field. Esc returns one level through project menus; from an action review it
 returns to the form, and after a command it returns to the originating menu.
-Applications are sorted A–Z. Laravel entries show FPM or Octane (with its worker
+The TUI fills the terminal height, keeping the header and controls visible while
+lists and output scroll. Open **Apps** from the main menu to browse applications
+sorted A–Z. Type in any list to filter labels (case-insensitive), use arrow keys
+to select a match, and Backspace to edit the search. Esc clears the search before
+going back. Space toggles choices in lists with multiple selections.
+Laravel entries show FPM or Octane (with its worker
 count), queue workers, scheduler and Nightwatch settings from the saved config.
 Advanced registration settings are optional. **Server & credentials**
 contains VPS setup and updates, shared GitHub/Composer access and the TablePlus admin login; **Tools** contains checks

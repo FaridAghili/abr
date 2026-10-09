@@ -30,13 +30,14 @@ func navigationApp(name string) config.App {
 	return config.App{Name: name, Type: "laravel", Domain: name + ".example.com", Directory: "/srv/apps/" + name, User: "custom-" + name, Web: config.Web{Driver: "fpm"}, Database: config.Database{Enabled: true}}
 }
 
-func TestDashboardSortsAppsAndShowsConfiguredSettings(t *testing.T) {
+func TestAppsMenuSortsAppsAndShowsConfiguredSettings(t *testing.T) {
 	o := testOptions(t)
 	z, a := navigationApp("zebra"), navigationApp("alpha")
 	z.Web = config.Web{Driver: "octane", Workers: 4}
 	z.Queue.Workers, z.Scheduler.Enabled, z.Nightwatch.Enabled = 3, true, true
 	saveApps(t, o, z, a)
 	m := newModel(o)
+	m.next() // Main menu → Apps.
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := m.View().Content
 	if strings.Index(view, "alpha · laravel") < 0 || strings.Index(view, "alpha · laravel") >= strings.Index(view, "zebra · laravel") {
@@ -58,7 +59,7 @@ func TestDashboardSortsAppsAndShowsConfiguredSettings(t *testing.T) {
 	}
 
 	for _, size := range []tea.WindowSizeMsg{{Width: 80, Height: 24}, {Width: 48, Height: 16}} {
-		m.home()
+		m.appsMenu()
 		m.Update(size)
 		view = m.View().Content
 		for _, label := range []string{"FPM", "Queue: 0", "Scheduler: off", "Nightwatch: off", "Esc back"} {
@@ -67,7 +68,7 @@ func TestDashboardSortsAppsAndShowsConfiguredSettings(t *testing.T) {
 			}
 		}
 		if lipgloss.Width(view) > size.Width || lipgloss.Height(view) > size.Height {
-			t.Fatal("dashboard exceeds terminal bounds")
+			t.Fatal("apps list exceeds terminal bounds")
 		}
 	}
 }
@@ -77,16 +78,18 @@ func TestEscReturnsOneLevelThroughProjectMenus(t *testing.T) {
 	app := navigationApp("example")
 	saveApps(t, o, app)
 	m := newModel(o)
-	m.next() // Home → app.
+	m.next() // Main menu → Apps.
+	m.next() // Apps → app.
 	m.appAction(app, "more")
 	m.appAction(app, "edit")
 	m.editForm(app, "workers")
-	for _, title := range []string{"example / Edit settings", "example / More actions", "example", "Applications"} {
+	for _, title := range []string{"example / Edit settings", "example / More actions", "example", "Apps", "Main menu"} {
 		press(m, tea.KeyEscape)
 		if m.title != title {
 			t.Fatalf("Esc returned to %q, want %q", m.title, title)
 		}
 	}
+	m.next()
 	m.next()
 	m.appAction(app, "database-menu")
 	m.appAction(app, "database-import")
@@ -108,7 +111,7 @@ func TestMenuBackChoicesAndSearchEscape(t *testing.T) {
 	m.appMenu(app)
 	m.moreAppMenu(app)
 	m.editMenu(app)
-	for _, title := range []string{"example / More actions", "example", "Applications"} {
+	for _, title := range []string{"example / More actions", "example", "Apps", "Main menu"} {
 		// All application menus put Back at the end.
 		press(m, tea.KeyUp)
 		m.next()

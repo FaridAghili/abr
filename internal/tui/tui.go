@@ -134,17 +134,10 @@ func (m *model) setForm(page, title string, next func() tea.Cmd, groups ...*huh.
 	}
 	m.page, m.title, m.next = page, title, next
 	m.groups = groups
-	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(func(bool) *huh.Styles { return formTheme(m.dark) })).WithWidth(m.bodyWidth()).WithHeight(m.formHeight()).WithShowHelp(false)
-	return m.form.Init()
+	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(func(bool) *huh.Styles { return formTheme(m.dark) })).WithKeyMap(listKeyMap()).WithShowHelp(false)
+	return tea.Batch(m.resizeForm(), m.form.Init())
 }
-func (m *model) bodyWidth() int  { return max(20, min(m.width-4, 96)) }
-func (m *model) bodyHeight() int { return max(6, m.height-8) }
-func (m *model) formHeight() int {
-	if m.page == "app" {
-		return max(3, m.bodyHeight()-2)
-	}
-	return m.bodyHeight()
-}
+func (m *model) bodyWidth() int { return max(20, min(m.width-4, 96)) }
 func clean(s string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) && r != '\n' && r != '\t' {
@@ -171,19 +164,54 @@ func (m *model) home() tea.Cmd {
 			m.notice = clean(err.Error())
 		}
 	}
-	choices := make([]huh.Option[string], 0, len(c.Apps)+8)
-	slices.SortFunc(c.Apps, func(a, b config.App) int { return strings.Compare(a.Name, b.Name) })
-	for _, app := range c.Apps {
-		choices = append(choices, huh.NewOption(appSummary(app), "app:"+app.Name))
-	}
-	choices = append(choices,
+	var selected string
+	return m.setForm("home", "Main menu", func() tea.Cmd {
+		switch selected {
+		case "apps":
+			return m.appsMenu()
+		case "clone":
+			return m.cloneForm()
+		case "register":
+			return m.registerForm()
+		case "server":
+			return m.serverMenu()
+		case "tools":
+			return m.toolsMenu()
+		case "quit":
+			return tea.Quit
+		}
+		return m.home()
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Choose a section").Options(
+		huh.NewOption(fmt.Sprintf("Apps (%d)", len(c.Apps)), "apps"),
 		huh.NewOption("Clone application", "clone"),
 		huh.NewOption("Register application", "register"),
 		huh.NewOption("Server & credentials", "server"),
 		huh.NewOption("Tools", "tools"),
-		huh.NewOption("Quit", "quit"))
+		huh.NewOption("Quit", "quit")).Value(&selected)))
+}
+
+func (m *model) appsMenu() tea.Cmd {
+	m.menu, m.back = m.appsMenu, m.home
+	m.notice, m.context = "", ""
+	c, err := config.Load(m.options.ConfigPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			m.notice = "No configuration yet. Choose Clone or Register application from the main menu."
+		} else {
+			m.notice = clean(err.Error())
+		}
+	}
+	choices := make([]huh.Option[string], 0, len(c.Apps)+1)
+	slices.SortFunc(c.Apps, func(a, b config.App) int { return strings.Compare(a.Name, b.Name) })
+	for _, app := range c.Apps {
+		choices = append(choices, huh.NewOption(appSummary(app), "app:"+app.Name))
+	}
+	choices = append(choices, huh.NewOption("Back", "back"))
+	if len(c.Apps) == 0 && m.notice == "" {
+		m.notice = "No apps registered. Choose Clone or Register application from the main menu."
+	}
 	var selected string
-	return m.setForm("home", "Applications", func() tea.Cmd {
+	return m.setForm("apps", "Apps", func() tea.Cmd {
 		if strings.HasPrefix(selected, "app:") {
 			for _, app := range c.Apps {
 				if app.Name == strings.TrimPrefix(selected, "app:") {
@@ -191,20 +219,8 @@ func (m *model) home() tea.Cmd {
 				}
 			}
 		}
-		switch selected {
-		case "quit":
-			return tea.Quit
-		case "register":
-			return m.registerForm()
-		case "clone":
-			return m.cloneForm()
-		case "server":
-			return m.serverMenu()
-		case "tools":
-			return m.toolsMenu()
-		}
-		return m.home()
-	}, huh.NewGroup(huh.NewSelect[string]().Title(fmt.Sprintf("%d configured applications", len(c.Apps))).Description("Choose an app, or clone and register a new project.").Options(choices...).Value(&selected)))
+		return m.goBack()
+	}, huh.NewGroup(huh.NewSelect[string]().Title(fmt.Sprintf("%d configured applications", len(c.Apps))).Description("Choose an app to manage.").Options(choices...).Value(&selected)))
 }
 
 func (m *model) serverMenu() tea.Cmd {
@@ -271,7 +287,7 @@ func (m *model) toolsMenu() tea.Cmd {
 }
 
 func (m *model) appMenu(app config.App) tea.Cmd {
-	m.menu, m.back = m.appDestination(app.Name, m.appMenu), m.home
+	m.menu, m.back = m.appDestination(app.Name, m.appMenu), m.appsMenu
 	m.notice = ""
 	m.context = clean(app.Domain + " · User: " + app.User)
 	choices := []huh.Option[string]{
@@ -513,7 +529,8 @@ func (m *model) start(a action) tea.Cmd {
 	}()
 	return tea.Batch(waitEvent(ch), m.spinner.Tick)
 }
-func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
+	defer func() { cmd = tea.Batch(cmd, m.resizeLayout()) }()
 	switch msg := msg.(type) {
 	case artisanShellFinished:
 		m.busy = false
@@ -531,19 +548,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.Style = colors(m.dark).accent
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.viewport.SetWidth(m.bodyWidth())
-		h := m.bodyHeight() - 1
-		if m.page == "confirm" {
-			h--
-		} else if m.page == "details" {
-			h = m.bodyHeight()
-		}
-		m.viewport.SetHeight(max(3, h))
 		if m.page == "confirm" || m.page == "details" {
 			m.viewport.SetContent(ansi.Wrap(m.reviewText, m.bodyWidth(), ""))
-		}
-		if m.form != nil {
-			m.form.WithWidth(m.bodyWidth()).WithHeight(m.formHeight())
 		}
 	case event:
 		if msg.done {
@@ -578,10 +584,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		key := msg.String()
 		// Escape clears a menu search before it navigates away.
-		if key == "esc" && m.form != nil {
-			if field, ok := m.form.GetFocusedField().(interface{ GetFiltering() bool }); ok && field.GetFiltering() {
-				updated, cmd := m.form.Update(msg)
-				m.form = updated.(*huh.Form)
+		if key == "esc" && m.width >= 48 && m.height >= 16 {
+			if cmd, cleared := m.clearSearch(msg); cleared {
 				return m, cmd
 			}
 		}
@@ -597,6 +601,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.width < 48 || m.height < 16 {
 			return m, nil
+		}
+		if m.noSearchMatch() {
+			// Empty filtered lists have no cursor to move or action to submit.
+			switch key {
+			case "up", "down", "home", "end", "pgup", "pgdown", "ctrl+p", "ctrl+n", "ctrl+k", "ctrl+j", "ctrl+u", "ctrl+d", "enter", "tab":
+				return m, nil
+			case "space":
+				if _, ok := m.form.GetFocusedField().(*huh.MultiSelect[string]); ok {
+					return m, nil
+				}
+			}
 		}
 		if m.page == "details" && key == "enter" {
 			return m, m.goBack()
@@ -650,6 +665,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmd, scroll)
 	}
 	if m.form != nil {
+		var search tea.Cmd
+		if key, ok := msg.(tea.KeyPressMsg); ok {
+			search = m.searchKey(key)
+		}
 		updated, cmd := m.form.Update(msg)
 		m.form = updated.(*huh.Form)
 		if m.form.State == huh.StateCompleted {
@@ -658,7 +677,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.form.State == huh.StateAborted {
 			return m, m.goBack()
 		}
-		return m, cmd
+		return m, tea.Batch(search, cmd)
 	}
 	return m, nil
 }
@@ -671,12 +690,12 @@ func (m *model) View() tea.View {
 		mode = " · Preview"
 	}
 	header := accent.Render("Abr") + muted.Render("  "+m.options.Version+mode)
-	var body, footer string
+	var body string
+	footer := m.footer()
 	if m.width < 48 || m.height < 16 {
 		body = "Resize the terminal to at least 48 × 16.\nEsc / Ctrl+C goes back or quits when idle."
 	} else if m.page == "details" {
 		body = m.viewport.View()
-		footer = "↑/↓ scroll · Enter / Esc back"
 	} else if m.page == "output" {
 		status := m.spinner.View() + " Running"
 		if !m.busy {
@@ -695,20 +714,6 @@ func (m *model) View() tea.View {
 			}
 		}
 		body = lipgloss.NewStyle().Width(width).Render(status) + "\n" + m.viewport.View()
-		footer = "↑/↓ scroll"
-		if !m.busy && isLogView(m.current.args) {
-			footer += " · r refresh"
-		}
-		if !m.busy {
-			if m.current.continueWith != nil && m.result == nil && !m.options.DryRun {
-				footer += " · Enter continue · Esc cancel"
-			} else {
-				footer += " · Enter / Esc back"
-			}
-		}
-		if len(m.current.args) > 0 && (m.current.args[0] == "logs" || m.current.args[0] == "doctor") {
-			footer += "\n" + ansi.Truncate(m.current.note, width, "…")
-		}
 	} else if m.page == "confirm" {
 		cancel, run := "  Cancel  ", "  Run command  "
 		if m.approved {
@@ -717,19 +722,8 @@ func (m *model) View() tea.View {
 			cancel = accent.Render("[ Cancel ]")
 		}
 		body = m.viewport.View() + "\n\n" + cancel + "    " + run
-		footer = "←/→ choose · enter confirm · esc cancel"
 	} else {
 		body = m.form.View()
-		footer = "↑/↓ select · Enter open · Esc back"
-		if m.page == "form" {
-			footer = "Enter next · Shift+Tab back · Esc cancel"
-			switch m.form.GetFocusedField().(type) {
-			case *huh.MultiSelect[string]:
-				footer = "Space toggle · Enter next · Esc cancel"
-			case *huh.Select[string], *huh.Select[bool]:
-				footer = "↑/↓ choose · Enter next · Esc cancel"
-			}
-		}
 	}
 	if m.notice != "" {
 		body = muted.Render(ansi.Truncate(m.notice, width, "…")) + "\n" + body
@@ -741,10 +735,11 @@ func (m *model) View() tea.View {
 		}
 		body = muted.Render(strings.Join(lines, "\n")) + "\n\n" + body
 	}
-	content := header + "\n\n" + accent.Render(m.title) + "\n\n" + body + "\n" + muted.Render(footer)
+	body = lipgloss.NewStyle().Height(m.contentHeight()).MaxHeight(m.contentHeight()).Render(body)
+	content := header + "\n\n" + accent.Render(ansi.Truncate(m.title, width, "…")) + "\n\n" + body + "\n" + muted.Render(footer)
 	// Keep every screen within the terminal, including long paths and failures.
-	content = lipgloss.NewStyle().Width(width).MaxWidth(width).MaxHeight(max(1, m.height-2)).Render(content)
-	v := tea.NewView(lipgloss.NewStyle().Padding(1, 2).Render(content))
+	content = lipgloss.NewStyle().Width(width).MaxWidth(width).Height(max(1, m.height-2)).MaxHeight(max(1, m.height-2)).Render(content)
+	v := tea.NewView(lipgloss.NewStyle().Padding(1, 2).MaxWidth(m.width).MaxHeight(m.height).Render(content))
 	v.AltScreen = true
 	return v
 }
