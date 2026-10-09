@@ -82,7 +82,7 @@ fixture_image_cache() {
       curl --fail --silent --show-error --insecure --resolve "$domain:443:127.0.0.1" \
         "${request[@]}" -D "$fixture_source/image-headers" -o "$fixture_source/image-body" \
         "https://$domain/abr-image.$ext?v=1"
-      tr -d '\r' < "$fixture_source/image-headers" | grep -Fix 'Cache-Control: public, max-age=86400'
+      tr -d '\r' < "$fixture_source/image-headers" | grep -Fix 'Cache-Control: public, max-age=2592000'
       fixture_security_headers "$fixture_source/image-headers"
       if [[ $method == GET ]]; then
         test "$(cat "$fixture_source/image-body")" = 'public image fixture'
@@ -590,7 +590,7 @@ fixture_image_cache fixture-php.localhost /srv/apps/fixture-php/public abr-fixtu
 sudo runuser -u abr-fixture-php -- sh -c 'printf "public upload fixture" > /srv/apps/fixture-php/storage/app/public/abr-upload.png'
 curl --fail --silent --show-error --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
   -D "$fixture_source/upload-headers" https://fixture-php.localhost/storage/abr-upload.png -o "$fixture_source/upload-body"
-tr -d '\r' < "$fixture_source/upload-headers" | grep -Fix 'Cache-Control: public, max-age=86400'
+tr -d '\r' < "$fixture_source/upload-headers" | grep -Fix 'Cache-Control: public, max-age=2592000'
 test "$(cat "$fixture_source/upload-body")" = 'public upload fixture'
 sudo runuser -u abr-fixture-php -- rm /srv/apps/fixture-php/storage/app/public/abr-upload.png
 # A generated hashed asset is served with Brotli and immutable caching.
