@@ -45,6 +45,10 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 		}
 	}
 	switch c.Name {
+	case "dpkg-query":
+		if slices.Contains(c.Args, "caddy") {
+			return []byte("install ok installed\n2.11.7"), nil
+		}
 	case "getent":
 		if c.Args[0] == "group" {
 			if entry, ok := r.groups[c.Args[len(c.Args)-1]]; ok {

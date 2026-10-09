@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bufio"
 	"io"
 	"net"
 	"net/http"
@@ -16,6 +17,64 @@ import (
 	"abr/internal/config"
 	"abr/internal/ports"
 )
+
+// Recent Caddy releases flush compressed SSE responses immediately. Ensure an
+// event arrives while the upstream is still running, rather than at its EOF.
+func TestCaddyStreaming(t *testing.T) {
+	caddy, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("Caddy is not installed")
+	}
+	for _, kind := range []string{"octane", "nuxt"} {
+		t.Run(kind, func(t *testing.T) {
+			release := make(chan struct{})
+			event := "data: " + strings.Repeat("streaming fixture ", 64) + "\n"
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = io.WriteString(w, event+"\n")
+				w.(http.Flusher).Flush()
+				select {
+				case <-release:
+				case <-r.Context().Done():
+				}
+			}))
+			defer upstream.Close()
+			defer close(release)
+			_, port, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+			upstreamPort, _ := strconv.Atoi(port)
+			a := config.App{Name: "app", User: "abr-app", Directory: t.TempDir(), Type: "laravel", Domain: "app.test"}
+			purpose := "octane-http"
+			if kind == "nuxt" {
+				a.Type, purpose = "nuxt", "nuxt-http"
+			} else {
+				a.Web.Driver = "octane"
+			}
+			r := ports.Empty()
+			for i, endpoint := range a.Endpoints() {
+				endpointPort := upstreamPort + i + 1
+				if endpoint == purpose {
+					endpointPort = upstreamPort
+				}
+				r.Assignments = append(r.Assignments, ports.Assignment{App: a.Name, Purpose: endpoint, Port: endpointPort})
+			}
+			address := startCaddyFixture(t, caddy, a, r)
+			// Go's transport requests gzip and decodes it transparently.
+			client := &http.Client{Timeout: 2 * time.Second}
+			response, err := client.Get("http://" + address + "/events")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK || !response.Uncompressed {
+				t.Fatalf("expected compressed SSE response: status=%d uncompressed=%v", response.StatusCode, response.Uncompressed)
+			}
+			line, err := bufio.NewReader(response.Body).ReadString('\n')
+			if err != nil || line != event {
+				t.Fatalf("event did not arrive before upstream EOF: %v", err)
+			}
+		})
+	}
+}
 
 // Exercise the actual header middleware with Caddy's own Via header and headers
 // supplied by an upstream. All listeners and files belong to disposable fixtures.

@@ -216,7 +216,7 @@ func (m *model) serverMenu() tea.Cmd {
 		case "setup":
 			return m.setupForm()
 		case "update":
-			return m.review(action{title: "Update server", args: []string{"update"}, note: "Upgrade apt packages, remove unused packages, clean the apt cache, self-update Composer and upgrade global npm tools, Zsh, Oh My Zsh and both shell plugins. This updates the whole VPS."})
+			return m.review(action{title: "Update server", args: []string{"update"}, note: "Upgrade apt packages, remove unused packages, clean the apt cache, upgrade Caddy to the latest stable release, self-update Composer and upgrade global npm tools, Zsh, Oh My Zsh and both shell plugins. This updates the whole VPS."})
 		case "git":
 			return m.gitSetupForm()
 		case "composer":

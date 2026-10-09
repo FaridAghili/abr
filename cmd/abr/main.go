@@ -47,7 +47,7 @@ Commands:
                    --domain HOST --queue-workers N --scheduler=true|false, etc.
   ports            Show reservations (--allocate reconciles config edits)
   doctor           Check configuration, reservations and app TCP listener ownership
-  update           Upgrade apt packages, Composer, global npm tools, Oh My Zsh and shell plugins
+  update           Upgrade apt packages, stable Caddy, Composer, global npm tools, Oh My Zsh and shell plugins
   setup            Install shared VPS packages, Caddy, Node 24, RoadRunner and root's Zsh
                    Prompts for VPS name; --hostname NAME is scriptable
   git setup        Create/reuse one VPS GitHub SSH key (--key imports an existing key)

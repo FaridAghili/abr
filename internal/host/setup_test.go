@@ -96,16 +96,16 @@ func TestAPTRepositoryUsesTrustedLocalKeys(t *testing.T) {
 	key := []byte("test repository key")
 	source := "Types: deb\nURIs: https://example.invalid\nSuites: stable\nComponents: main\n"
 	for range 2 {
-		if err := h.writeAPTRepository("caddy", key, source); err != nil {
+		if err := h.writeAPTRepository("node", key, source); err != nil {
 			t.Fatal(err)
 		}
 	}
-	const keyPath = "/etc/apt/keyrings/abr/caddy.gpg"
+	const keyPath = "/etc/apt/keyrings/abr/node.gpg"
 	got, err := h.read(keyPath)
 	if err != nil || !bytes.Equal(got, key) {
 		t.Fatalf("local repository key: %q %v", got, err)
 	}
-	got, err = h.read("/etc/apt/sources.list.d/abr-caddy.sources")
+	got, err = h.read("/etc/apt/sources.list.d/abr-node.sources")
 	if err != nil || string(got) != source+"Signed-By: "+keyPath+"\n" {
 		t.Fatalf("repository source: %q %v", got, err)
 	}
@@ -122,10 +122,10 @@ func TestAPTRepositoryUsesTrustedLocalKeys(t *testing.T) {
 	if err := os.Chmod(h.path("/etc/apt/keyrings/abr"), 0777); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.writeAPTRepository("node", key, source); err == nil {
+	if err := h.writeAPTRepository("unsafe", key, source); err == nil {
 		t.Fatal("accepted writable local key directory")
 	}
-	if _, err := h.read("/etc/apt/sources.list.d/abr-node.sources"); !os.IsNotExist(err) {
+	if _, err := h.read("/etc/apt/sources.list.d/abr-unsafe.sources"); !os.IsNotExist(err) {
 		t.Fatal("enabled repository with an unsafe key directory")
 	}
 }

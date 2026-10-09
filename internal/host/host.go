@@ -136,8 +136,9 @@ type Host struct {
 	Output       io.Writer
 	Runner       Runner
 	// Only tests override these; CLI exposes no guard bypass or alternate host root.
-	check func() error
-	root  string
+	caddyFetch func(string, int64) ([]byte, error)
+	check      func() error
+	root       string
 }
 
 func Require() error {

@@ -36,6 +36,9 @@ func (h Host) Update() error {
 				return err
 			}
 		}
+		if err := h.installCaddy(); err != nil {
+			return err
+		}
 		// Keep self-update's keys and backups separate from app repository auth.
 		home := filepath.Join(h.Manager.StateDir, "composer-update")
 		if !h.DryRun {
@@ -68,7 +71,7 @@ func (h Host) Update() error {
 		if h.DryRun {
 			h.say("Server update preview complete; no commands executed or files changed")
 		} else {
-			h.say("Server update complete; apt packages (including Zsh), Composer, global npm tools, Oh My Zsh and shell plugins updated")
+			h.say("Server update complete; apt packages (including Zsh), latest stable Caddy, Composer, global npm tools, Oh My Zsh and shell plugins updated")
 		}
 		return nil
 	})

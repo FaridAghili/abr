@@ -1,6 +1,7 @@
 package host
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +13,7 @@ func TestServerUpdateOrderAndFailureReporting(t *testing.T) {
 	for _, failure := range []string{"", "update", "full-upgrade", "autoremove", "autoclean", "self-update", "--jsonUpgraded", "omz", "autosuggestions", "highlighting"} {
 		t.Run("failure="+failure, func(t *testing.T) {
 			h, runner, out, _ := fixture(t)
+			h.caddyFetch = caddyFixtureDownload
 			runner.users["_apt"] = "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"
 			h.Runner = shellRunner{nodeToolsRunner{fakeRunner: runner}}
 			prepareShellFixture(t, h)
@@ -100,5 +102,34 @@ func TestServerUpdateRequiresShellBeforeChangingPackages(t *testing.T) {
 	}
 	if len(runner.calls) != 0 || strings.Contains(out.String(), "Server update complete") {
 		t.Fatal("changed host or reported completion with missing shell")
+	}
+}
+
+func TestServerUpdateStopsWhenCaddyReleaseCheckFails(t *testing.T) {
+	h, runner, out, _ := fixture(t)
+	runner.users["_apt"] = "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"
+	h.Runner = shellRunner{nodeToolsRunner{fakeRunner: runner}}
+	prepareShellFixture(t, h)
+	if err := h.installNPM(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.write("/usr/local/bin/composer", []byte("fixture"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	h.caddyFetch = func(string, int64) ([]byte, error) {
+		return nil, fmt.Errorf("fixture GitHub release check failed")
+	}
+	runner.calls = nil
+	out.Reset()
+	if err := h.Update(); err == nil || !strings.Contains(err.Error(), "release check failed") {
+		t.Fatalf("Caddy failure was not returned: %v", err)
+	}
+	if strings.Contains(out.String(), "Server update complete") {
+		t.Fatal("reported completion after Caddy failure")
+	}
+	for _, c := range runner.calls {
+		if slices.Contains(c.Args, "self-update") {
+			t.Fatal("continued updating after Caddy failure")
+		}
 	}
 }

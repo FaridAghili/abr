@@ -77,7 +77,6 @@ func (h Host) Setup(o SetupOptions) error {
 			return err
 		}
 		for _, repo := range []struct{ name, keyURL, source string }{
-			{"caddy", "https://dl.cloudsmith.io/public/caddy/stable/gpg.key", "Types: deb\nURIs: https://dl.cloudsmith.io/public/caddy/stable/deb/debian\nSuites: any-version\nComponents: main\nArchitectures: amd64\n"},
 			{"node", "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key", "Types: deb\nURIs: https://deb.nodesource.com/node_24.x\nSuites: nodistro\nComponents: main\nArchitectures: amd64\n"},
 		} {
 			var key []byte
@@ -101,7 +100,10 @@ func (h Host) Setup(o SetupOptions) error {
 		if err := h.command("apt-get", "-o", "APT::Update::Error-Mode=any", "update"); err != nil {
 			return err
 		}
-		if _, err := h.run("Install Caddy and shared Node 24/npm", Command{Name: "apt-get", Args: []string{"-o", "DPkg::Lock::Timeout=120", "install", "-y", "caddy", "nodejs"}, Env: []string{"DEBIAN_FRONTEND=noninteractive"}}); err != nil {
+		if _, err := h.run("Install shared Node 24/npm", Command{Name: "apt-get", Args: []string{"-o", "DPkg::Lock::Timeout=120", "install", "-y", "nodejs"}, Env: []string{"DEBIAN_FRONTEND=noninteractive"}}); err != nil {
+			return err
+		}
+		if err := h.installCaddy(); err != nil {
 			return err
 		}
 		if err := h.installNPM(!o.NoImages); err != nil {

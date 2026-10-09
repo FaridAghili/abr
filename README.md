@@ -66,9 +66,10 @@ GitHub title use this name; renaming the VPS preserves the existing key.
 
 Only the binary is needed on the VPS; templates and the generic example config are
 embedded. Setup installs PHP 8.5/extensions (including Imagick SVG support and
-Excimer), Node 24, latest compatible npm, npm-check-updates, Caddy, Composer,
-shared RoadRunner, MySQL 8.4, Redis and image optimization tools. It also installs
-Zsh as root's default login shell, Oh My Zsh under `/root/.oh-my-zsh`, and enables
+Excimer), Node 24, latest compatible npm, npm-check-updates, latest stable Caddy
+from GitHub, Composer, shared RoadRunner, MySQL 8.4, Redis and image optimization
+tools. Caddy uses the official Debian release package; setup does not add a
+Caddy APT repository. It also installs Zsh as root's default login shell, Oh My Zsh under `/root/.oh-my-zsh`, and enables
 `git`, `zsh-autosuggestions` and `zsh-syntax-highlighting` (loaded last). This
 configures root even when invoked through sudo; `--admin-user` only selects the
 SSH administrator. Existing `.zshrc` settings are preserved, with an initial
@@ -95,8 +96,12 @@ sudo abr update --dry-run
 ```
 
 Update refreshes apt indexes, runs `full-upgrade`, `autoremove` and `autoclean`,
-self-updates Composer to its stable release, then runs `ncu -g` and installs all
-suggested upgrades for the shared global tools, usually npm and SVGO. Globals
+installs newer stable Caddy releases from GitHub using the official Linux AMD64
+Debian package with SHA256 verification. Caddy upgrades validate existing
+configuration before installation, preserve configuration files and certificates,
+and restart the service. It self-updates Composer to its stable release, then
+runs `ncu -g` and installs all suggested upgrades for the shared global tools,
+usually npm and SVGO. Globals
 without an ncu suggestion retain their exact versions. Other global prefixes
 and app dependencies are left alone. Package downloads and installs
 still run as `_apt` with scripts disabled. Project dependency lockfiles and app
@@ -551,7 +556,7 @@ Caddy strips Server/Via/X-Powered-By headers, compresses dynamic responses with
 [precompressed Brotli](https://caddyserver.com/docs/caddyfile/directives/file_server)
 for built assets generated during deploy. Versioned Vite/Nuxt assets get immutable
 browser caching. Existing public PNG, JPG/JPEG, GIF, AVIF, WebP and SVG files
-(including Laravel public storage) are served directly by Caddy with one-day
+(including Laravel public storage) are served directly by Caddy with 30-day
 browser caching. Stable image filenames are not marked immutable; hashed build
 images keep the one-year immutable policy. Dynamic image routes and HTML/API/SSR
 responses keep the application's cache policy.

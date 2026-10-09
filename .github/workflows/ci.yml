@@ -64,13 +64,13 @@ jobs:
       - name: Check templates and proxy headers with installed Caddy
         run: |
           command -v caddy
-          go test ./internal/services -run '^TestCaddy(TemplatesAdapt|ProxyHeaders|ImageCaching|Embedding)$' -count=1
+          go test ./internal/services -run '^TestCaddy(TemplatesAdapt|ProxyHeaders|ImageCaching|Embedding|Streaming)$' -count=1
       - name: Host diagnostics on failure
         if: failure() && steps.host.outcome == 'failure'
         run: |
           sudo systemctl --no-pager --full status caddy php8.5-fpm mysql abr-fixture-php-scheduler.service abr-fixture-php-scheduler.timer abr-fixture-octane-octane.service || true
           sudo journalctl --no-pager -b -n 300 || true
-          sudo namei -l /etc/apt/keyrings/abr/caddy.gpg /opt/roadrunner /usr/local/bin/composer || true
+          sudo namei -l /usr/bin/caddy /opt/roadrunner /usr/local/bin/composer || true
           sudo stat -c '%U:%G %a %n' /etc/redis /etc/redis/redis.conf /etc/redis/abr.conf || true
           sudo namei -l /var/lib/abr-ci/git/id_ed25519 || true
           sudo getfacl -p /var/lib/abr-ci /var/lib/abr-ci/git /var/lib/abr-ci/git/id_ed25519 /var/lib/abr-ci/git/known_hosts || true

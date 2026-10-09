@@ -134,6 +134,9 @@ sudo install -d -m 700 /root/.ssh
 sudo install -d -m 755 /run/sshd
 sudo ssh-keygen -t ed25519 -N '' -f /root/.ssh/abr-fixture-ssh >/dev/null
 sudo bash -c 'cat /root/.ssh/abr-fixture-ssh.pub >> /root/.ssh/authorized_keys; chmod 600 /root/.ssh/authorized_keys'
+# Start with Ubuntu's older native Caddy package to exercise setup upgrades.
+sudo apt-get install -y caddy
+caddy_ubuntu_version=$(dpkg-query -W -f='${Version}' caddy)
 sudo apt-get install -y redis-server
 sudo systemctl start redis-server
 sudo redis-cli SET abr-fixture-persist survives-setup >/dev/null
@@ -157,8 +160,17 @@ grep -Fx $'127.0.1.1\tabr-ci-vps' /etc/hosts
 getent hosts abr-ci-vps >/dev/null
 grep -Fx 'preserve_hostname: true' /etc/cloud/cloud.cfg.d/99-abr-hostname.cfg
 grep -Fx 'manage_etc_hosts: false' /etc/cloud/cloud.cfg.d/99-abr-hostname.cfg
+fixture_caddy_version() {
+  local stable installed
+  stable=$(curl --fail --silent --show-error https://api.github.com/repos/caddyserver/caddy/releases/latest | python3 -c 'import json,sys; r=json.load(sys.stdin); assert not r["draft"] and not r["prerelease"]; print(r["tag_name"][1:])')
+  installed=$(dpkg-query -W -f='${Version}' caddy)
+  dpkg --compare-versions "$installed" ge "$stable"
+  test "$(caddy version | cut -d' ' -f1)" = "v$installed"
+  sudo systemctl is-active --quiet caddy
+}
+fixture_caddy_version
 fixture_caddy_format /etc/caddy/Caddyfile
-for repository in caddy node; do
+for repository in node; do
   repository_key="/etc/apt/keyrings/abr/$repository.gpg"
   test "$(stat -c '%u:%g:%a' /etc/apt/keyrings/abr)" = 0:0:755
   test "$(stat -c '%u:%g:%a' "$repository_key")" = 0:0:644
@@ -212,7 +224,16 @@ for shell_repository in "${shell_repositories[@]}"; do
   sudo git -C "$shell_repository" reset --hard HEAD~1
 done
 sudo cp /root/.zshrc "$abr_binary_directory/zshrc-before-update"
+# Downgrade only this disposable fixture to exercise abr update's GitHub upgrade.
+sudo apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+  install -y --allow-downgrades "caddy=$caddy_ubuntu_version"
+sudo cp /etc/caddy/Caddyfile "$abr_binary_directory/caddy-before-update"
+sudo cp /etc/systemd/system/caddy.service.d/abr-admin.conf "$abr_binary_directory/caddy-admin-before-update"
 abr_ci update
+fixture_caddy_version
+sudo cmp /etc/caddy/Caddyfile "$abr_binary_directory/caddy-before-update"
+sudo cmp /etc/systemd/system/caddy.service.d/abr-admin.conf "$abr_binary_directory/caddy-admin-before-update"
+sudo test -S /var/lib/caddy/abr-admin.sock
 fixture_shell
 sudo cmp /root/.zshrc "$abr_binary_directory/zshrc-before-update"
 for shell_repository in "${shell_repositories[@]}"; do
