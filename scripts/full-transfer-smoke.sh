@@ -87,9 +87,14 @@ sudo /usr/bin/git -C "$full_worktree" -c safe.directory="$full_git_fixture/fixtu
 
 fixture_refused 'pass --yes' restore "$full_backup_fixture"
 fixture_refused 'fresh server' restore "$full_backup_fixture" --yes
-# Remove only disposable fixture apps and move their now-empty manager state.
+# Remove only disposable fixture apps and move their application state aside.
 for full_app in "${full_apps[@]}"; do abr_ci remove "$full_app" --purge --yes; done
+full_node_tools_before=$(readlink /opt/abr/node-tools/current)
 sudo mv /var/lib/abr-ci "$abr_binary_directory/full-old-state"
+# Shared runtimes stay installed on this host. Keep their ownership record so
+# restore setup can replace the recorded Node tools without adopting unknown files.
+sudo install -d -m 700 /var/lib/abr-ci
+sudo mv "$abr_binary_directory/full-old-state/node-tools.json" /var/lib/abr-ci/node-tools.json
 sudo mv /etc/abr-ci/config.toml "$abr_binary_directory/full-old-config.toml"
 sudo mysql --protocol=socket --user=root <<'SQL'
 DROP USER 'root'@'127.0.0.1';
@@ -100,6 +105,13 @@ sudo rm -rf /var/lib/caddy/.local
 abr_ci restore "$full_backup_fixture" --dry-run
 sudo test ! -e /var/lib/abr-ci/setup.json
 abr_ci restore "$full_backup_fixture" --yes --admin-user root --ssh-port 22
+sudo test ! -e "$full_node_tools_before"
+sudo python3 - <<'PY'
+import json
+from pathlib import Path
+record = json.loads(Path('/var/lib/abr-ci/node-tools.json').read_text())
+assert Path('/opt/abr/node-tools/current').readlink() == Path(record['Directory'])
+PY
 sudo cmp /srv/apps/fixture-php/.env "$abr_binary_directory/full-env-before"
 sudo cmp /var/lib/abr-ci/databases/fixture-php.json "$abr_binary_directory/full-db-before"
 sudo cmp /var/lib/abr-ci/git/id_ed25519 "$abr_binary_directory/full-git-before"
