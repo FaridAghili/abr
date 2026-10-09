@@ -164,7 +164,7 @@ func TestCaddyImageCaching(t *testing.T) {
 			for _, ext := range []string{"png", "jpg", "jpeg", "gif", "avif", "webp", "svg", "PNG"} {
 				for _, path := range []string{"/images/logo." + ext, build + "/plain." + ext} {
 					write(path)
-					paths[path] = "public, max-age=86400"
+					paths[path] = "public, max-age=2592000"
 				}
 				if ext != "PNG" {
 					path := build + "/logo-AbCd1234." + ext
@@ -183,7 +183,7 @@ func TestCaddyImageCaching(t *testing.T) {
 					t.Fatal(err)
 				}
 				write("/storage/upload.png")
-				paths["/storage/upload.png"] = "public, max-age=86400"
+				paths["/storage/upload.png"] = "public, max-age=2592000"
 			}
 			address := startCaddyFixture(t, caddy, a, r)
 			client := &http.Client{Timeout: time.Second}
@@ -225,7 +225,7 @@ func TestCaddyImageCaching(t *testing.T) {
 				status  int
 			}{{map[string]string{"If-None-Match": etag}, 304}, {map[string]string{"Range": "bytes=0-3"}, 206}} {
 				response := request("GET", image, test.headers)
-				if response.StatusCode != test.status || response.Header.Get("Cache-Control") != "public, max-age=86400" {
+				if response.StatusCode != test.status || response.Header.Get("Cache-Control") != "public, max-age=2592000" {
 					t.Fatal("conditional/partial image response lost caching", response.StatusCode, response.Header)
 				}
 			}
