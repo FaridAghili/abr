@@ -8,6 +8,19 @@ Laravel uses PHP-FPM or shared RoadRunner/Octane; Nuxt uses Node for SSR or SPA.
 Caddy serves direct HTTPS. Users, databases, services and ports are managed per app.
 Version **1.0.0**; development supports macOS ARM64.
 
+## Install the latest release
+
+Run this one-line command on your **Ubuntu 26.04 LTS AMD64 VPS**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/FaridAghili/abr/main/scripts/install.sh | bash
+```
+
+The installer downloads the latest stable release, verifies its SHA256 checksum,
+and installs `abr` to `/usr/local/bin` using sudo when needed. It only installs
+the executable. Continue with the fresh-VPS instructions below to configure
+the server; skip the manual download and installation in steps 4–5.
+
 ## Start with a fresh VPS
 
 1. Allow your SSH port, TCP 80/443 and UDP 443 in your provider firewall, and point
