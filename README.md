@@ -68,7 +68,11 @@ Only the binary is needed on the VPS; templates and the generic example config a
 embedded. Setup installs PHP 8.5/extensions (including Imagick SVG support and
 Excimer), Node 24, latest compatible npm, npm-check-updates, latest stable Caddy
 from GitHub, Composer, shared RoadRunner, MySQL 8.4, Redis and image optimization
-tools. Caddy uses the official Debian release package; setup does not add a
+tools. Release lookups can use an optional `GITHUB_TOKEN` environment variable
+to avoid GitHub's unauthenticated API rate limit. When running through sudo,
+use `sudo --preserve-env=GITHUB_TOKEN abr setup` to pass it through. Abr sends
+the token only to `https://api.github.com`, never to release asset hosts.
+Caddy uses the official Debian release package; setup does not add a
 Caddy APT repository. RoadRunner’s default `latest` selects the newest stable
 2025.1 release supported by the current Octane integration. It also installs Zsh
 as root's default login shell, Oh My Zsh under `/root/.oh-my-zsh`, and enables

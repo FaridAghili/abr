@@ -17,7 +17,7 @@ abr_ci() {
   (
     # Setup must work with no repository or template files beside the binary.
     cd "$abr_binary_directory"
-    sudo "$abr_test_binary" --config /etc/abr-ci/config.toml --state-dir /var/lib/abr-ci "$@"
+    sudo --preserve-env=GITHUB_TOKEN "$abr_test_binary" --config /etc/abr-ci/config.toml --state-dir /var/lib/abr-ci "$@"
   )
 }
 fixture_denied() {
@@ -163,7 +163,10 @@ grep -Fx 'preserve_hostname: true' /etc/cloud/cloud.cfg.d/99-abr-hostname.cfg
 grep -Fx 'manage_etc_hosts: false' /etc/cloud/cloud.cfg.d/99-abr-hostname.cfg
 fixture_caddy_version() {
   local stable installed
-  stable=$(curl --fail --silent --show-error https://api.github.com/repos/caddyserver/caddy/releases/latest | python3 -c 'import json,sys; r=json.load(sys.stdin); assert not r["draft"] and not r["prerelease"]; print(r["tag_name"][1:])')
+  # Feed the optional API credential through stdin, never curl's arguments.
+  stable=$({ if [[ -n ${GITHUB_TOKEN:-} ]]; then printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN"; fi; } | \
+    curl --config - --fail --silent --show-error https://api.github.com/repos/caddyserver/caddy/releases/latest | \
+    python3 -c 'import json,sys; r=json.load(sys.stdin); assert not r["draft"] and not r["prerelease"]; print(r["tag_name"][1:])')
   installed=$(dpkg-query -W -f='${Version}' caddy)
   dpkg --compare-versions "$installed" ge "$stable"
   test "$(caddy version | cut -d' ' -f1)" = "v$installed"

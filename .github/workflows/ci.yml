@@ -60,6 +60,8 @@ jobs:
       - name: Setup, deploy and full backup/restore on disposable Ubuntu
         id: host
         timeout-minutes: 55
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/host-smoke.sh dist/abr-linux-amd64
       - name: Check templates and proxy headers with installed Caddy
         run: |

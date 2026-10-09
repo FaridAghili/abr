@@ -263,6 +263,9 @@ func fetch(url string, limit int64) ([]byte, error) {
 		if request.URL.Scheme != "https" || len(via) >= 10 {
 			return fmt.Errorf("unsafe or excessive download redirects")
 		}
+		// Go can forward headers to subdomains on redirects. Never forward the
+		// API credential to release assets or any other download host.
+		githubDownloadAuth(request)
 		return nil
 	}}
 	request, err := http.NewRequest(http.MethodGet, url, nil)
@@ -270,6 +273,7 @@ func fetch(url string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	request.Header.Set("User-Agent", "abr/"+abr.Version)
+	githubDownloadAuth(request)
 	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("download %s: %w", url, err)
@@ -286,6 +290,15 @@ func fetch(url string, limit int64) ([]byte, error) {
 		return nil, fmt.Errorf("download exceeds size limit: %s", url)
 	}
 	return data, nil
+}
+
+func githubDownloadAuth(request *http.Request) {
+	request.Header.Del("Authorization")
+	if request.URL.Scheme == "https" && request.URL.Host == "api.github.com" {
+		if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
 }
 
 func (h Host) installRoadRunner(version string) error {
