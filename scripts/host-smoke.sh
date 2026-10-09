@@ -436,8 +436,12 @@ sudo test ! -f /srv/apps/fixture-php/vendor/autoload.php
 abr_ci deploy fixture-php --no-pull
 printf 'stdin works\n' | abr_ci artisan fixture-php abr:access-check 'literal $(id) value'
 test "$(sudo stat -c '%U:%G' /srv/apps/fixture-php/storage/abr-access-check)" = abr-fixture-php:abr-fixture-php
+# The ownership probe is outside Laravel's ignored runtime directories. Remove
+# only this disposable test file so subsequent deploy preflight tests stay clean.
+sudo runuser -u abr-fixture-php -- rm -- /srv/apps/fixture-php/storage/abr-access-check
 abr_ci artisan fixture-php cache:clear --no-interaction
 fixture_refused 'not defined' artisan fixture-php abr:missing-command
+test -z "$(sudo runuser -u abr-fixture-php -- git -C /srv/apps/fixture-php status --porcelain --untracked-files=all)"
 sudo cp /srv/apps/fixture-php/.env "$abr_binary_directory/prepared-php.env"
 abr_ci env fixture-php
 sudo cmp /srv/apps/fixture-php/.env "$abr_binary_directory/prepared-php.env"
