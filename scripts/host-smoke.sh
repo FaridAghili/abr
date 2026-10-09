@@ -5,6 +5,7 @@ if [[ ${GITHUB_ACTIONS:-false} != true && ${ABR_HOST_TEST:-0} != 1 ]]; then
   echo 'Refusing host test: use a disposable Ubuntu machine and ABR_HOST_TEST=1.' >&2
   exit 1
 fi
+abr_smoke_script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 abr_binary_source=$(realpath "${1:-bin/abr}")
 abr_binary_directory=$(mktemp -d)
 fixture_source=''
@@ -768,6 +769,8 @@ for rendering in true false; do
   sudo systemctl start "abr-$app-nuxt.service"
   abr_ci restart "$app" web
 done
+# Full backup and latest-code restore exercise the same real Ubuntu services.
+source "$abr_smoke_script_directory/full-transfer-smoke.sh"
 abr_ci ports
 # Real services own their occupied ports, including RoadRunner's child processes.
 abr_ci doctor > "$fixture_source/doctor-healthy.log"

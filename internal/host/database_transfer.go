@@ -180,46 +180,51 @@ func (h Host) ImportDatabase(name, path string, yes bool) error {
 			h.say("Would import %s into the managed database for %s using its scoped MySQL account; data may be overwritten", path, name)
 			return nil
 		}
-		c, err := h.transferCredentials(a)
-		if err != nil {
-			return err
-		}
-		if !c.TCPManaged || !c.TCPReady {
-			return fmt.Errorf("managed TCP account is not ready; run abr database %s first", name)
-		}
-		f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		info, err := f.Stat()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() || info.Size() == 0 {
-			return fmt.Errorf("SQL import must be a nonempty regular file")
-		}
-		// Private temporary defaults file keeps passwords out of process arguments/environment.
-		defaults, err := os.CreateTemp(h.Manager.StateDir, ".abr-mysql-*")
-		if err != nil {
-			return err
-		}
-		defer os.Remove(defaults.Name())
-		defer defaults.Close()
-		text := fmt.Sprintf("[client]\nuser=%s\npassword=%s\nprotocol=TCP\nhost=127.0.0.1\nport=3306\n", c.User, c.Password)
-		if _, err := io.WriteString(defaults, text); err != nil {
-			return err
-		}
-		if err := defaults.Close(); err != nil {
-			return err
-		}
-		_, err = h.run("Import SQL into "+c.Database+" with its scoped account", Command{Name: "mysql", Args: []string{
-			"--defaults-file=" + defaults.Name(), "--no-login-paths", "--binary-mode=1", "--local-infile=0", "--default-character-set=utf8mb4", "--database=" + c.Database,
-		}, Stdin: f, Stdout: io.Discard, Private: true})
-		if err != nil {
-			return fmt.Errorf("import failed; database may be partially changed: %w", err)
-		}
-		h.say("Imported SQL into %s", c.Database)
-		return nil
+		return h.importDatabaseFile(a, path)
 	})
+}
+
+// Caller owns host.lock and has confirmed the import.
+func (h Host) importDatabaseFile(a config.App, path string) error {
+	c, err := h.transferCredentials(a)
+	if err != nil {
+		return err
+	}
+	if !c.TCPManaged || !c.TCPReady {
+		return fmt.Errorf("managed TCP account is not ready; run abr database %s first", a.Name)
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() == 0 {
+		return fmt.Errorf("SQL import must be a nonempty regular file")
+	}
+	// Private temporary defaults file keeps passwords out of process arguments/environment.
+	defaults, err := os.CreateTemp(h.Manager.StateDir, ".abr-mysql-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(defaults.Name())
+	defer defaults.Close()
+	text := fmt.Sprintf("[client]\nuser=%s\npassword=%s\nprotocol=TCP\nhost=127.0.0.1\nport=3306\n", c.User, c.Password)
+	if _, err := io.WriteString(defaults, text); err != nil {
+		return err
+	}
+	if err := defaults.Close(); err != nil {
+		return err
+	}
+	_, err = h.run("Import SQL into "+c.Database+" with its scoped account", Command{Name: "mysql", Args: []string{
+		"--defaults-file=" + defaults.Name(), "--no-login-paths", "--binary-mode=1", "--local-infile=0", "--default-character-set=utf8mb4", "--database=" + c.Database,
+	}, Stdin: f, Stdout: io.Discard, Private: true})
+	if err != nil {
+		return fmt.Errorf("import failed; database may be partially changed: %w", err)
+	}
+	h.say("Imported SQL into %s", c.Database)
+	return nil
 }

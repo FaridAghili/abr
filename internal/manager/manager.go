@@ -219,3 +219,64 @@ func (m Manager) Registry() (ports.Registry, error) {
 	})
 	return r, err
 }
+
+// WithSnapshot keeps portable writers locked while a full backup captures state.
+func (m Manager) WithSnapshot(fn func(config.Config, ports.Registry) error) error {
+	return m.locked(func() error {
+		c, err := config.Load(m.ConfigPath)
+		if err != nil {
+			return err
+		}
+		r, err := ports.Load(m.RegistryPath())
+		if err != nil {
+			return err
+		}
+		return fn(c, r)
+	})
+}
+
+// RestoreSnapshot installs the checked config/registry pair on an empty target.
+// Saved ports, including disabled components' reservations, must all be free.
+func (m Manager) RestoreSnapshot(c config.Config, r ports.Registry) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	if err := CheckReservations(c, r); err != nil {
+		return err
+	}
+	return m.locked(func() error {
+		current, err := config.Load(m.ConfigPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if len(current.Apps) != 0 {
+			return fmt.Errorf("restore requires an empty application configuration")
+		}
+		existing, err := ports.Load(m.RegistryPath())
+		if err != nil {
+			return err
+		}
+		if len(existing.Assignments) != 0 {
+			return fmt.Errorf("restore requires an empty port registry")
+		}
+		for _, assignment := range r.Assignments {
+			if err := m.probe()(assignment.Port); err != nil {
+				return fmt.Errorf("restore port %d for %s/%s: %w", assignment.Port, assignment.App, assignment.Purpose, err)
+			}
+		}
+		data, err := config.Encode(c)
+		if err != nil {
+			return err
+		}
+		if err := r.Save(m.RegistryPath()); err != nil {
+			return err
+		}
+		if err := storage.AtomicWrite(m.ConfigPath, data); err != nil {
+			return fmt.Errorf("restore config failed; port reservations retained: %w", err)
+		}
+		return nil
+	})
+}

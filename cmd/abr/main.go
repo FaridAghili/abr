@@ -57,6 +57,9 @@ Commands:
   env APP          Prepare .env when its example exists; fill managed Laravel MySQL values
   database APP     Create/verify MySQL database (--show prints credentials)
   database --admin TablePlus root connection details (--show prints password)
+  backup           Full backup of all apps/data/settings (--output FILE.tar.gz)
+  restore FILE.tar.gz --yes
+                   Restore latest Git code and saved data onto a fresh server
   database backup APP... | --all --output-dir DIR
                    Export selected/all managed databases as private SQL files
   database import APP FILE.sql --yes
@@ -130,7 +133,7 @@ func run(args []string, out, stderr io.Writer) error {
 		command, args = "logs clear", args[1:]
 	}
 	switch command {
-	case "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
+	case "backup", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -143,7 +146,8 @@ func run(args []string, out, stderr io.Writer) error {
 	var imports portFlags
 	var setup host.SetupOptions
 	var deploy host.DeployOptions
-	var gitKey, backupDirectory string
+	var gitKey, backupDirectory, fullBackupOutput string
+	var restore host.RestoreOptions
 	var canonicalHost string
 	var backupAll, importYes, purge, removeYes bool
 	var composerHost, composerUsername string
@@ -153,6 +157,12 @@ func run(args []string, out, stderr io.Writer) error {
 	var readLogs host.ReadLogsOptions
 	var diskUsage host.DiskOptions
 	switch command {
+	case "backup":
+		fs.StringVar(&fullBackupOutput, "output", "", "absolute private backup FILE.tar.gz (required)")
+	case "restore":
+		fs.BoolVar(&restore.Yes, "yes", false, "confirm full SQL and Redis restore on a fresh server")
+		fs.StringVar(&restore.AdminUser, "admin-user", "", "existing administrator on this new server")
+		fs.IntVar(&restore.SSHPort, "ssh-port", 0, "SSH port to preserve on this new server (default: discover)")
 	case "disk":
 		fs.BoolVar(&diskUsage.All, "all", false, "report all registered apps (default without APP)")
 		fs.BoolVar(&diskUsage.Refresh, "refresh", false, "bypass the one-minute app-size cache")
@@ -272,6 +282,14 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 	}
 	switch command {
+	case "backup":
+		if len(positional) != 0 || fullBackupOutput == "" {
+			return fmt.Errorf("use abr backup --output /absolute/backup.tar.gz")
+		}
+	case "restore":
+		if len(positional) != 1 {
+			return fmt.Errorf("use abr restore /absolute/backup.tar.gz --yes")
+		}
 	case "artisan":
 		if len(positional) < 1 {
 			return fmt.Errorf("use abr artisan APP [COMMAND...] (Abr flags go before APP)")
@@ -333,6 +351,10 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	h.Manager = m
 	switch command {
+	case "backup":
+		return h.FullBackup(fullBackupOutput)
+	case "restore":
+		return h.FullRestore(positional[0], restore)
 	case "artisan", "shell":
 		if command == "shell" && !h.DryRun && !terminalAvailable(out) {
 			return fmt.Errorf("shell requires a terminal; use abr artisan APP COMMAND for scripts")

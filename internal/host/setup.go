@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -225,6 +226,15 @@ func (h Host) Setup(o SetupOptions) error {
 		}
 		if err := h.command("systemctl", "reload", "caddy"); err != nil {
 			return err
+		}
+		if !h.DryRun {
+			data, err := json.Marshal(o)
+			if err != nil {
+				return err
+			}
+			if err := h.write(filepath.Join(h.Manager.StateDir, "setup.json"), data, 0600); err != nil {
+				return err
+			}
 		}
 		if h.DryRun {
 			h.say("Setup preview complete; no commands executed or files changed")

@@ -472,6 +472,77 @@ enables MySQL `skip_name_resolve` to distinguish this TCP account from socket
 root; existing hostname-based grants or an unrecorded loopback root account
 require manual review before setup changes accounts.
 
+## Full backup and fresh-server restore
+
+Choose **Server & credentials → Full backup & restore**, or use:
+
+```sh
+sudo abr backup --output /var/backups/abr/full.tar.gz
+```
+
+The archive includes every registered app's settings, repository URL and current
+branch, port reservations, edited templates, shared Git/Composer credentials and
+MySQL admin credentials. Laravel contributes its exact `.env`,
+`storage/app/public`, `storage/app/private` when present, and a SQL dump with its
+recorded database/account password. Recorded databases retained after disabling
+an app's database component are included too. Nuxt contributes `.env` when
+present. Managed Redis persistence (all logical DBs), Caddy certificates/storage,
+the shared Caddyfile and abr-managed PHP/MySQL/Redis runtime configuration are
+included. User ownership records and generated app services are recreated on the
+target; numeric UIDs need not match.
+
+Project source, `.git`, dependencies, build output, logs and caches on disk are
+rebuilt or omitted. All Laravel apps must have recorded abr-managed MySQL
+credentials. External/unregistered databases, uploads outside the two Laravel
+directories, unrelated server files and administrator SSH access are outside this
+backup's scope.
+
+Backup pauses managed app services, Caddy, PHP-FPM and Redis while taking the SQL,
+upload and Redis snapshots. Stop external database writers first; remaining
+processes under managed app users cause capture to fail. Previously enabled apps
+resume after capture, before compression. Previously disabled apps remain
+disabled. A failed capture attempts the same recovery and reports recovery errors.
+Only complete archives are published; existing files are never overwritten.
+The output must be an absolute `.tar.gz` path outside app, state, template and
+other captured data directories. Capture needs temporary disk space under abr's
+state directory as well as space for the compressed archive.
+
+**Archives contain passwords and private keys.** They are root-only (0600),
+compressed and checksummed, but not encrypted. Keep an encrypted off-server copy
+using your backup storage tooling.
+
+On a fresh **Ubuntu 26.04 AMD64** server, install the abr binary and establish
+working administrator SSH key access as described above. Copy the archive onto
+that server, then run restore directly; do not run `abr setup` first:
+
+```sh
+sudo abr restore /var/backups/abr/full.tar.gz --dry-run
+sudo abr restore /var/backups/abr/full.tar.gz --yes
+```
+
+`--admin-user USER` and `--ssh-port PORT` refer to the **new** server's SSH access;
+otherwise restore discovers that access normally. Saved setup choices, hostname
+and templates supply the server/runtime settings. Restore validates the entire
+archive and checks target users, project paths and port conflicts before
+provisioning. Existing abr apps/state are refused. Preview validates the archive
+in a temporary private directory without provisioning the host.
+
+Restore clones the **latest commit of each saved branch**, places `.env` and
+uploads, recreates MySQL accounts with their saved passwords and imports SQL,
+then restores Redis and shared configuration. It runs the standard deployment
+steps with saved build ordering: `npm ci`, frontend build, `composer install`,
+Laravel storage links, migrations, cache clearing and Artisan optimization.
+Dependency versions come from the latest repository's lockfiles. All apps stay
+stopped until every import/build completes; previously enabled apps then start
+and run their configured health checks. If restore fails, abr attempts to stop
+all restored apps, reports stop failures and preserves partial data for inspection.
+A partial target must be inspected before further work; full restore continues to
+require a fresh target and does not overwrite it on retry.
+
+Check the restored applications, keep the old server's workers/schedulers stopped
+and point DNS at the new server. Test a restore on a disposable server before
+relying on an archive for recovery.
+
 ## Database backups and imports
 
 Database backups and imports are available in the menu and CLI:

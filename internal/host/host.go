@@ -129,6 +129,8 @@ func (r ExecRunner) Run(c Command) ([]byte, error) {
 }
 
 type Host struct {
+	// Set only on the local copy used while full restore owns host.lock.
+	lockHeld     bool
 	Manager      manager.Manager
 	TemplatesDir string
 	AppsDir      string
@@ -205,7 +207,7 @@ func (h Host) locked(fn func() error) error {
 	if err := h.guard(); err != nil {
 		return err
 	}
-	if h.DryRun {
+	if h.DryRun || h.lockHeld {
 		return fn()
 	}
 	if err := h.trustedAncestor(h.path(h.Manager.StateDir)); err != nil {

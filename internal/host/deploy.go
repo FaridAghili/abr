@@ -18,7 +18,10 @@ import (
 	"abr/internal/storage"
 )
 
-type DeployOptions struct{ All, NoPull bool }
+type DeployOptions struct {
+	All, NoPull bool
+	deferEnable bool
+}
 
 func (h Host) Deploy(names []string, o DeployOptions) error {
 	if o.All == (len(names) > 0) {
@@ -294,23 +297,15 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 			return err
 		}
 	}
+	if o.deferEnable {
+		h.say("Built %s; services remain stopped until full restore completes", a.Name)
+		return nil
+	}
 	if err := h.enable(a, r); err != nil {
 		return err
 	}
-	if a.HealthCheck != "" {
-		if h.DryRun {
-			h.say("Would check application health at %s", a.HealthCheck)
-		} else {
-			client := &http.Client{Timeout: 10 * time.Second}
-			response, err := client.Get(a.HealthCheck)
-			if err != nil {
-				return fmt.Errorf("health check failed: %w", err)
-			}
-			response.Body.Close()
-			if response.StatusCode < 200 || response.StatusCode >= 300 {
-				return fmt.Errorf("health check returned HTTP %d", response.StatusCode)
-			}
-		}
+	if err := h.deploymentHealth(a); err != nil {
+		return err
 	}
 	if h.DryRun {
 		h.say("Deployment preview complete for %s; no commands executed or files changed", a.Name)
@@ -361,4 +356,23 @@ func deploymentCommandError(user, name string, args []string, err error) error {
 		err = fmt.Errorf("package download failed; for private repositories save credentials with abr composer auth --host HOST: %w", err)
 	}
 	return fmt.Errorf("%s as %s: %w", strings.Join(append([]string{name}, args...), " "), user, err)
+}
+
+func (h Host) deploymentHealth(a config.App) error {
+	if a.HealthCheck != "" {
+		if h.DryRun {
+			h.say("Would check application health at %s", a.HealthCheck)
+		} else {
+			client := &http.Client{Timeout: 10 * time.Second}
+			response, err := client.Get(a.HealthCheck)
+			if err != nil {
+				return fmt.Errorf("health check failed: %w", err)
+			}
+			response.Body.Close()
+			if response.StatusCode < 200 || response.StatusCode >= 300 {
+				return fmt.Errorf("health check returned HTTP %d", response.StatusCode)
+			}
+		}
+	}
+	return nil
 }

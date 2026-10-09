@@ -237,6 +237,8 @@ func (m *model) serverMenu() tea.Cmd {
 			return m.gitSetupForm()
 		case "composer":
 			return m.composerAuthForm()
+		case "full-transfer":
+			return m.fullTransferMenu()
 		case "mysql-admin":
 			return m.start(action{title: "MySQL admin · TablePlus", args: []string{"database", "--admin", "--show"}})
 		}
@@ -247,6 +249,7 @@ func (m *model) serverMenu() tea.Cmd {
 		huh.NewOption("GitHub key", "git"),
 		huh.NewOption("Composer credentials", "composer"),
 		huh.NewOption("MySQL admin · TablePlus", "mysql-admin"),
+		huh.NewOption("Full backup & restore", "full-transfer"),
 		huh.NewOption("Back", "back")).Value(&selected)))
 }
 
@@ -764,6 +767,10 @@ func nextStep(args []string) string {
 		return ""
 	}
 	switch args[0] {
+	case "backup":
+		return "Copy the private backup archive to storage outside this VPS."
+	case "restore":
+		return "Check the restored apps, point DNS at this server, and keep the old server’s workers stopped."
 	case "edit":
 		return "Choose Deploy to apply saved settings. Database credentials and data are retained when a component is disabled."
 	case "disk":

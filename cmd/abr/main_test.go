@@ -423,3 +423,30 @@ func TestEmbeddingCLIRegistrationEditAndClear(t *testing.T) {
 		t.Fatal("clear failed", err)
 	}
 }
+
+func TestFullTransferCLIValidationAndBackupPreview(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state")}
+	args := append(append([]string{}, paths...), "register", "--config-only", "--name", "demo", "--dir", "/srv/apps/demo", "--type", "laravel", "--domain", "demo.test")
+	if _, err := invoke(t, args...); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "full.tar.gz")
+	out, err := invoke(t, append(append([]string{}, paths...), "backup", "--output", output, "--dry-run")...)
+	if err != nil || !strings.Contains(out, "Laravel public/private uploads") || !strings.Contains(out, "Redis") {
+		t.Fatal("incomplete backup preview", out, err)
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatal("backup preview wrote archive")
+	}
+	for _, command := range [][]string{{"backup"}, {"backup", "unexpected", "--output", output}, {"backup", "--output", "relative.tar.gz"}, {"restore"}, {"restore", output, "extra"}, {"restore", output}, {"restore", output, "--yes", "--ssh-port", "70000"}} {
+		out, err := invoke(t, append(append([]string{}, paths...), command...)...)
+		if err == nil || out != "" {
+			t.Fatal("invalid transfer reported success", command, out, err)
+		}
+	}
+	help, err := invoke(t, "help")
+	if err != nil || !strings.Contains(help, "restore FILE.tar.gz --yes") {
+		t.Fatal("full transfer missing from help", err)
+	}
+}
