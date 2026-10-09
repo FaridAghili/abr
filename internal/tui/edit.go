@@ -18,7 +18,7 @@ func (m *model) editMenu(app config.App) tea.Cmd {
 	if app.Type == "laravel" {
 		choices = append(choices, huh.NewOption("Workers", "workers"), huh.NewOption("Components", "components"), huh.NewOption("Build order", "build-order"))
 	}
-	choices = append(choices, huh.NewOption("Back", "back"))
+	choices = append(choices, huh.NewOption("Iframe embedding", "embedding"), huh.NewOption("Back", "back"))
 	return m.setForm("app", app.Name+" / Edit settings", func() tea.Cmd {
 		if selected == "back" {
 			return m.goBack()
@@ -50,6 +50,32 @@ func (m *model) editForm(app config.App, section string) tea.Cmd {
 				}
 				for _, d := range strings.Split(item.value, ",") {
 					args = append(args, item.flag, strings.TrimSpace(d))
+				}
+			}
+			return args
+		}
+	case "embedding":
+		paths, origins := strings.Join(app.Embedding.Paths, ", "), strings.Join(app.Embedding.Origins, ", ")
+		groups = []*huh.Group{
+			huh.NewGroup(textInput("Embeddable paths", "Comma-separated paths allowed in external iframes. Clear to disable. Use a trailing /* for a prefix.", "/banner.html, /ads/*", &paths).Validate(func(value string) error {
+				e := config.Embedding{Paths: embeddingList(value)}
+				if len(e.Paths) > 0 {
+					e.Origins = []string{"*"}
+				}
+				return e.Validate()
+			})),
+			huh.NewGroup(textInput("Allowed embedding origins", "Comma-separated origins. Use * for any website or self for this app. Ignored when paths are empty.", "*", &origins).Validate(func(value string) error {
+				return (config.Embedding{Paths: embeddingList(paths), Origins: embeddingList(value)}).Validate()
+			})).WithHideFunc(func() bool { return strings.TrimSpace(paths) == "" }),
+		}
+		flags = func() []string {
+			if strings.TrimSpace(paths) == "" {
+				return []string{"--embed-path", "", "--embed-origin", ""}
+			}
+			var args []string
+			for _, item := range []struct{ flag, value string }{{"--embed-path", paths}, {"--embed-origin", origins}} {
+				for _, value := range strings.Split(item.value, ",") {
+					args = append(args, item.flag, strings.TrimSpace(value))
 				}
 			}
 			return args
@@ -124,4 +150,15 @@ func buildOrderSelect(order *string) *huh.Select[string] {
 		huh.NewOption("Frontend first (default) · build assets before Composer", config.BuildFrontendFirst),
 		huh.NewOption("Composer first · install PHP dependencies before build", config.BuildComposerFirst),
 	).Value(order)
+}
+
+func embeddingList(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	values := strings.Split(value, ",")
+	for i := range values {
+		values[i] = strings.TrimSpace(values[i])
+	}
+	return values
 }

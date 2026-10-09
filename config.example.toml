@@ -13,6 +13,10 @@ domain = "api.example.com"
 build_order = "frontend-first" # Use composer-first when the build invokes Artisan.
 # Separate subdomain apps keep their entered hostname without www aliases.
 health_check = "https://api.example.com/up"
+# Optional iframe exception; all other paths retain SAMEORIGIN.
+# [apps.embedding]
+# paths = ["/banner.html", "/ads/*"]
+# origins = ["*"] # Any website; alternatively ["self", "https://partner.example.com"].
 [apps.database]
 enabled = true
 [apps.web]

@@ -23,6 +23,10 @@ func (changes AppChanges) Apply(a App) (App, error) {
 			a.Aliases = append([]string(nil), v.Aliases...)
 		case "serving-domain":
 			a.Domains = append([]string(nil), v.Domains...)
+		case "embed-path":
+			a.Embedding.Paths = append([]string(nil), v.Embedding.Paths...)
+		case "embed-origin":
+			a.Embedding.Origins = append([]string(nil), v.Embedding.Origins...)
 		case "health-check":
 			a.HealthCheck = v.HealthCheck
 		case "build-order":

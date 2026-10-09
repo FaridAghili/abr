@@ -221,7 +221,7 @@ Inertia's server bundle must honor `SSR_PORT`. Octane uses the shared RoadRunner
 remove any app-local `rr` binary. Deployments have downtime and no automatic rollback.
 
 Use **App → More actions → Edit settings** to change domains, workers, components
-or the deployment health check and build order. Forms start with current values. Saving settings
+or iframe embedding, the deployment health check and build order. Forms start with current values. Saving settings
 reserves any new ports and keeps existing services running; deploy to apply them.
 Disabling the database retains its data and credentials.
 
@@ -496,6 +496,33 @@ The templates set `X-Frame-Options: SAMEORIGIN` and
 [Laravel deployment guide](https://laravel.com/docs/13.x/deployment).
 They also set `Referrer-Policy: strict-origin-when-cross-origin` on HTTPS responses.
 These headers are applied when responses are written, overriding upstream values.
+
+Allow external iframes per app under **App → More actions → Edit settings → Iframe embedding**,
+or with repeatable CLI flags:
+
+```sh
+sudo abr edit APP --embed-path /banner.html --embed-origin '*'
+sudo abr deploy APP
+```
+
+`*` allows embedding on any website, so no advertiser domain list is needed.
+Paths match exactly; `/ads/*` matches a prefix and `/*` opts in the whole app.
+Other paths retain `SAMEORIGIN`. To restrict embedding, repeat `--embed-origin`
+with `self` or full origins such as `https://partner.example.com` (no path).
+`--embed-path` and `--embed-origin` replace their respective lists; omitted flags
+retain current settings. Clear both to restore the default:
+`sudo abr edit APP --embed-path '' --embed-origin ''`, then deploy.
+Registration also accepts these flags. Both lists must be set or both empty.
+The equivalent TOML settings are `[apps.embedding]` with `paths` and `origins` arrays.
+
+For matching paths Caddy removes `X-Frame-Options` and adds a CSP `frame-ancestors`
+policy. Existing application CSP policies are preserved and enforced together;
+an application policy with restrictive `frame-ancestors` must also allow embedding.
+These settings change headers, not routing or file-serving behavior.
+Redirect aliases keep their default framing protection.
+The installed `/etc/abr/templates/caddy-site.caddy.tmpl` must include the embedding
+matchers from the bundled template. Setup preserves edited templates, so installing
+an executable alone does not replace that file.
 
 Caddy strips Server/Via/X-Powered-By headers, compresses dynamic responses with
 [zstd/gzip](https://caddyserver.com/docs/caddyfile/directives/encode), and serves

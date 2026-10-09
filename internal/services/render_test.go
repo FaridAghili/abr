@@ -250,7 +250,8 @@ func TestCaddyImageCaching(t *testing.T) {
 }
 
 func TestRenderAllComponents(t *testing.T) {
-	a := config.App{Name: "app", User: "abr-app", Directory: "/srv/apps/my app%", Type: "laravel", Domain: "app.test", Aliases: []string{"old.test"}, Domains: []string{"extra.test"}, Web: config.Web{Driver: "octane"}, Queue: config.Queue{Workers: 2}, Scheduler: config.Component{Enabled: true}, Nightwatch: config.Component{Enabled: true}, InertiaSSR: config.Component{Enabled: true}}
+	a := config.App{Name: "app", User: "abr-app", Directory: "/srv/apps/my app%", Type: "laravel", Domain: "app.test", Aliases: []string{"old.test"}, Domains: []string{"extra.test"},
+		Embedding: config.Embedding{Paths: []string{"/banner.html", "/ads/*"}, Origins: []string{"*"}}, Web: config.Web{Driver: "octane"}, Queue: config.Queue{Workers: 2}, Scheduler: config.Component{Enabled: true}, Nightwatch: config.Component{Enabled: true}, InertiaSSR: config.Component{Enabled: true}}
 	r := ports.Empty()
 	if err := r.Ensure(a, config.Default().Ports, nil, func(int) error { return nil }); err != nil {
 		t.Fatal(err)
@@ -433,6 +434,74 @@ func TestCaddyTemplatesAdapt(t *testing.T) {
 				if output, err := exec.Command(caddy, "adapt", "--config", path, "--adapter", "caddyfile").CombinedOutput(); err != nil {
 					t.Fatalf("Caddy rejected %s template: %v\n%s", kind, err, output)
 				}
+			}
+		})
+	}
+}
+
+func TestCaddyEmbedding(t *testing.T) {
+	caddy, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("Caddy is not installed")
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "script-src 'self'")
+		_, _ = io.WriteString(w, "banner fixture")
+	}))
+	defer upstream.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+	upstreamPort, _ := strconv.Atoi(port)
+	for _, origins := range [][]string{{"*"}, {"self", "https://partner.example.com"}} {
+		t.Run(strings.Join(origins, ","), func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, ".output/public/ads"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, ".output/public/ads/image.png"), []byte("static fixture"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			a := config.App{Name: "app", User: "abr-app", Directory: dir, Type: "nuxt", Domain: "app.test", Embedding: config.Embedding{Paths: []string{"/banner.html", "/ads/*"}, Origins: origins}}
+			r := ports.Registry{Version: 1, Assignments: []ports.Assignment{{App: "app", Purpose: "nuxt-http", Port: upstreamPort}}}
+			address := startCaddyFixture(t, caddy, a, r)
+			client := &http.Client{Timeout: time.Second}
+			for _, path := range []string{"/banner.html?campaign=1", "/ads/banner", "/ads/image.png", "/", "/banner.html/extra", "/ads", "/other/banner.html", "/_nuxt/missing.js"} {
+				resp, err := client.Get("http://" + address + path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_ = resp.Body.Close()
+				embedded := strings.HasPrefix(path, "/banner.html?") || strings.HasPrefix(path, "/ads/")
+				if embedded {
+					if len(resp.Header.Values("X-Frame-Options")) != 0 {
+						t.Errorf("%s: embedding blocked: %v", path, resp.Header)
+					}
+					found := false
+					for _, value := range resp.Header.Values("Content-Security-Policy") {
+						if value == a.Embedding.FrameAncestors() {
+							found = true
+						}
+					}
+					if !found {
+						t.Errorf("%s: missing CSP: %v", path, resp.Header)
+					}
+				} else if resp.Header.Get("X-Frame-Options") != "SAMEORIGIN" {
+					t.Errorf("%s: lost default protection: %v", path, resp.Header)
+				}
+				if path == "/banner.html?campaign=1" && !strings.Contains(strings.Join(resp.Header.Values("Content-Security-Policy"), ";"), "script-src 'self'") {
+					t.Fatal("lost application's other CSP directives")
+				}
+			}
+			// A separate app with no exception must retain the default.
+			a.Embedding = config.Embedding{}
+			other := startCaddyFixture(t, caddy, a, r)
+			resp, err := client.Get("http://" + other + "/banner.html")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.Header.Get("X-Frame-Options") != "SAMEORIGIN" {
+				t.Fatal("embedding setting leaked to another app")
 			}
 		})
 	}

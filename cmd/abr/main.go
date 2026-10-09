@@ -156,6 +156,8 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&diskUsage.JSON, "json", false, "print structured measurements in bytes")
 		fs.BoolVar(&diskUsage.FilesystemOnly, "filesystem-only", false, "read live filesystem space without scanning apps or querying MySQL")
 	case "edit":
+		fs.Var((*stringsFlag)(&app.Embedding.Paths), "embed-path", "replace embeddable paths: /banner.html or /ads/* (repeatable; empty clears)")
+		fs.Var((*stringsFlag)(&app.Embedding.Origins), "embed-origin", "replace embedding origins: * for any website, self, or http(s) origin (repeatable; empty clears)")
 		fs.StringVar(&app.Domain, "domain", "", "primary domain")
 		fs.StringVar(&canonicalHost, "canonical-host", "", "as-entered, www or non-www")
 		fs.Var((*stringsFlag)(&app.Aliases), "alias", "replace redirect domains (repeatable; empty clears)")
@@ -182,6 +184,8 @@ func run(args []string, out, stderr io.Writer) error {
 	case "ports":
 		fs.BoolVar(&allocate, "allocate", false, "reserve missing endpoints; retain assignments")
 	case "register":
+		fs.Var((*stringsFlag)(&app.Embedding.Paths), "embed-path", "embeddable path: /banner.html or /ads/* (repeatable)")
+		fs.Var((*stringsFlag)(&app.Embedding.Origins), "embed-origin", "embedding origin: * for any website, self, or http(s) origin (repeatable)")
 		fs.StringVar(&app.Name, "name", "", "unique application name (required)")
 		fs.StringVar(&app.Directory, "dir", "", "project directory override (default: apps-dir/NAME)")
 		fs.StringVar(&app.User, "user", "", "dedicated runtime user (default: abr-NAME)")
@@ -237,7 +241,7 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "edit" {
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
-			case "domain", "canonical-host", "alias", "serving-domain", "health-check", "build-order", "web-driver", "octane-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "database":
+			case "embed-path", "embed-origin", "domain", "canonical-host", "alias", "serving-domain", "health-check", "build-order", "web-driver", "octane-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "database":
 				changes.Fields = append(changes.Fields, f.Name)
 			}
 		})
@@ -247,6 +251,11 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		if len(app.Domains) == 1 && app.Domains[0] == "" {
 			app.Domains = nil
+		}
+		for _, list := range []*[]string{&app.Embedding.Paths, &app.Embedding.Origins} {
+			if len(*list) == 1 && (*list)[0] == "" {
+				*list = nil
+			}
 		}
 		changes.Values, changes.CanonicalHost = app, canonicalHost
 		if len(changes.Fields) == 0 {

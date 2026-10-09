@@ -373,6 +373,7 @@ sudo tee /srv/apps/fixture-php/routes/web.php >/dev/null <<'PHP'
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 Route::get('/', fn () => response('Laravel fixture database='.DB::select('SELECT 1 AS ok')[0]->ok)->withHeaders(['X-Powered-By' => 'fixture-runtime', 'Strict-Transport-Security' => 'max-age=0', 'X-Frame-Options' => 'DENY', 'X-Content-Type-Options' => 'fixture-invalid', 'Referrer-Policy' => 'unsafe-url']));
+Route::get('/ads/banner', fn () => response('dynamic banner fixture')->withHeaders(['X-Frame-Options' => 'DENY', 'Content-Security-Policy' => "script-src 'self'"]));
 Route::get('/php-config', fn () => response()->json(['expose_php' => ini_get('expose_php'), 'display_errors' => ini_get('display_errors'), 'opcache' => ini_get('opcache.enable'), 'unprivileged' => posix_geteuid() !== 0, 'no_new_privs' => (bool) preg_match('/^NoNewPrivs:\s+1$/m', file_get_contents('/proc/self/status'))]));
 PHP
 
@@ -383,8 +384,11 @@ fixture_git() {
   sudo git -C "$1" add .
   sudo git -C "$1" commit --no-gpg-sign -m 'Fixture'
 }
+sudo tee /srv/apps/fixture-php/public/banner.html >/dev/null <<'HTML'
+<!doctype html><html><body>static banner fixture</body></html>
+HTML
 fixture_git /srv/apps/fixture-php
-abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost --serving-domain extra.fixture-php.localhost --canonical-host non-www --scheduler --build-order composer-first
+abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost --serving-domain extra.fixture-php.localhost --canonical-host non-www --scheduler --build-order composer-first --embed-path /banner.html --embed-path '/ads/*' --embed-origin '*'
 # Database identities use the database name, separately from Ubuntu app users.
 sudo grep -Fx 'DB_DATABASE=fixture_php' /var/lib/abr-ci/credentials/fixture-php.env
 sudo grep -Fx 'DB_USERNAME=fixture_php' /var/lib/abr-ci/credentials/fixture-php.env
@@ -437,6 +441,26 @@ fixture_denied abr-fixture-php head -c 1 /var/lib/abr-ci/credentials/fixture-php
 fixture_denied abr-fixture-php cat /var/lib/abr-ci/mysql-admin.json
 fixture_denied nobody head -c 1 /var/lib/abr-ci/git/id_ed25519
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+# Real FPM/static responses must apply the per-app iframe exception after upstream
+# headers, without changing protection on other paths or losing unrelated CSP.
+for domain in fixture-php.localhost extra.fixture-php.localhost; do
+  for path in /banner.html /ads/banner; do
+    curl --fail --silent --show-error --insecure --resolve "$domain:443:127.0.0.1" \
+      -D "$fixture_source/banner-headers" -o "$fixture_source/banner-body" "https://$domain$path?campaign=1"
+    tr -d '\r' < "$fixture_source/banner-headers" | grep -Fix 'Content-Security-Policy: frame-ancestors *;'
+    if grep -Ei '^x-frame-options:' "$fixture_source/banner-headers"; then
+      echo 'Iframe exception still blocks embedding' >&2; exit 1
+    fi
+    if [[ $path == /banner.html ]]; then
+      grep -F 'static banner fixture' "$fixture_source/banner-body"
+    else
+      grep -F 'dynamic banner fixture' "$fixture_source/banner-body"
+      tr -d '\r' < "$fixture_source/banner-headers" | grep -Fix "Content-Security-Policy: script-src 'self'"
+    fi
+  done
+  fixture_https "$domain" -D "$fixture_source/protected-headers" -o /dev/null
+  fixture_security_headers "$fixture_source/protected-headers"
+done
 
 # Failed preflight must leave the live app and its Git checkout untouched.
 sudo mv /srv/apps/fixture-php/.env "$abr_binary_directory/fixture-php.env"

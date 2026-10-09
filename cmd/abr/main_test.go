@@ -397,3 +397,29 @@ func TestServerUpdateIsScriptableAndPreviewDoesNotWrite(t *testing.T) {
 		t.Fatal("update accepted an application argument")
 	}
 }
+
+func TestEmbeddingCLIRegistrationEditAndClear(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	flags := []string{"--config", path, "--state-dir", filepath.Join(dir, "state"), "--apps-dir", filepath.Join(dir, "apps")}
+	call := func(args ...string) {
+		t.Helper()
+		if _, err := invoke(t, append(flags, args...)...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call("register", "--config-only", "--name", "app", "--type", "nuxt", "--domain", "app.example.com", "--embed-path", "/banner.html", "--embed-path", "/ads/*", "--embed-origin", "*")
+	call("edit", "app", "--config-only", "--embed-origin", "self", "--embed-origin", "https://partner.example.com")
+	c, err := config.Load(path)
+	if err != nil || len(c.Apps[0].Embedding.Paths) != 2 || len(c.Apps[0].Embedding.Origins) != 2 {
+		t.Fatalf("lost settings: %+v %v", c, err)
+	}
+	if _, err := invoke(t, append(flags, "edit", "app", "--config-only", "--embed-path", "")...); err == nil {
+		t.Fatal("accepted partially cleared embedding")
+	}
+	call("edit", "app", "--config-only", "--embed-path", "", "--embed-origin", "")
+	c, err = config.Load(path)
+	if err != nil || len(c.Apps[0].Embedding.Paths) != 0 || len(c.Apps[0].Embedding.Origins) != 0 {
+		t.Fatal("clear failed", err)
+	}
+}

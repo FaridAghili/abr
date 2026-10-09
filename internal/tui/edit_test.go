@@ -67,3 +67,19 @@ func TestRegistrationAdvancedBuildOrder(t *testing.T) {
 		t.Fatalf("registration lost build order: %v", m.current.args)
 	}
 }
+
+func TestEmbeddingFormPrefillsAndDisables(t *testing.T) {
+	m := newModel(testOptions(t))
+	a := config.App{Name: "app", Type: "nuxt", Embedding: config.Embedding{Paths: []string{"/banner.html", "/ads/*"}, Origins: []string{"*"}}}
+	m.editForm(a, "embedding")
+	m.next()
+	if strings.Join(m.current.args, " ") != "edit app --embed-path /banner.html --embed-path /ads/* --embed-origin *" {
+		t.Fatalf("lost embedding values: %v", m.current.args)
+	}
+	a.Embedding = config.Embedding{Origins: []string{"*"}}
+	m.editForm(a, "embedding")
+	m.next()
+	if len(m.current.args) != 6 || m.current.args[3] != "" || m.current.args[5] != "" {
+		t.Fatalf("disable did not clear both lists: %v", m.current.args)
+	}
+}

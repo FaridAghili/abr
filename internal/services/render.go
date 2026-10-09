@@ -35,6 +35,8 @@ type data struct {
 	Name, User, Directory, Type, WebDriver                                string
 	SiteDomains, Domain                                                   string
 	Aliases                                                               []string
+	EmbedPaths                                                            []string
+	FrameAncestors                                                        string
 	AssetRoot, AssetPath, HTTPDomains                                     string
 	PHPBinary, NodeBinary, ManagedEnvironmentFile, FPMSocket              string
 	OctaneHTTPPort, RoadRunnerRPCPort, NuxtHTTPPort, NightwatchIngestPort int
@@ -60,6 +62,8 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 		PHPBinary: "/usr/bin/php" + PHPVersion, NodeBinary: "/usr/bin/node", OctaneWorkers: a.Web.Workers, QueueWorkers: a.Queue.Workers,
 		ManagedEnvironmentFile: filepath.Join(state, "env", a.Name+".env"), FPMSocket: "/run/php/abr-" + a.Name + ".sock",
 	}
+	d.EmbedPaths = a.Embedding.Paths
+	d.FrameAncestors = a.Embedding.FrameAncestors()
 	d.AssetRoot, d.AssetPath = filepath.Join(a.Directory, "public"), "/build/assets"
 	if a.Type == "nuxt" {
 		d.AssetRoot, d.AssetPath = filepath.Join(a.Directory, ".output/public"), "/_nuxt"

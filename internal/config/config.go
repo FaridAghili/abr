@@ -31,6 +31,7 @@ type App struct {
 	Domain      string    `toml:"domain"`
 	Aliases     []string  `toml:"aliases,omitempty"`
 	Domains     []string  `toml:"domains,omitempty"`
+	Embedding   Embedding `toml:"embedding,omitempty"`
 	HealthCheck string    `toml:"health_check,omitempty"`
 	BuildOrder  string    `toml:"build_order,omitempty"`
 	Web         Web       `toml:"web,omitempty"`
@@ -39,6 +40,11 @@ type App struct {
 	Nightwatch  Component `toml:"nightwatch,omitempty"`
 	InertiaSSR  Component `toml:"inertia_ssr,omitempty"`
 	Database    Database  `toml:"database,omitempty"`
+}
+
+type Embedding struct {
+	Paths   []string `toml:"paths,omitempty"`
+	Origins []string `toml:"origins,omitempty"`
 }
 
 type Web struct {
@@ -166,6 +172,9 @@ func (a App) Validate() error {
 		if !validDomain(d) {
 			return fmt.Errorf("invalid domain %q", d)
 		}
+	}
+	if err := a.Embedding.Validate(); err != nil {
+		return err
 	}
 	if a.HealthCheck != "" {
 		u, err := url.Parse(a.HealthCheck)
