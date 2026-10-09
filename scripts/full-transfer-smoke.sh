@@ -10,7 +10,11 @@ sudo install -d -m 755 "$full_git_fixture"
 full_apps=(fixture-php fixture-octane fixture-ssr fixture-spa)
 for full_app in "${full_apps[@]}"; do
   full_directory=/srv/apps/$full_app
-  sudo runuser -u "abr-$full_app" -- /usr/bin/git -C "$full_directory" remote add origin "git@github.com:fixture/$full_app.git"
+  if sudo runuser -u "abr-$full_app" -- /usr/bin/git -C "$full_directory" remote get-url origin >/dev/null 2>&1; then
+    sudo runuser -u "abr-$full_app" -- /usr/bin/git -C "$full_directory" remote set-url origin "git@github.com:fixture/$full_app.git"
+  else
+    sudo runuser -u "abr-$full_app" -- /usr/bin/git -C "$full_directory" remote add origin "git@github.com:fixture/$full_app.git"
+  fi
   sudo runuser -u "abr-$full_app" -- /usr/bin/git -C "$full_directory" bundle create "$full_directory/.git/full-fixture.bundle" --all
   sudo /usr/bin/git clone --bare "$full_directory/.git/full-fixture.bundle" "$full_git_fixture/$full_app.git"
   sudo rm "$full_directory/.git/full-fixture.bundle"
