@@ -753,39 +753,6 @@ func (h Host) Status(name string) error {
 	return h.command("systemctl", append([]string{"status", "--no-pager", "--full"}, units...)...)
 }
 
-func (h Host) Logs(name, service string, follow bool) error {
-	if err := h.guard(); err != nil {
-		return err
-	}
-	a, _, err := h.application(name)
-	if err != nil {
-		return err
-	}
-	m, exists, err := h.loadManifest(a)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return fmt.Errorf("%s has no installed managed services", name)
-	}
-	units, err := selectedUnits(a, m, service)
-	if err != nil {
-		return err
-	}
-	units = stopUnits(units) // Include scheduler job output, not just timer events.
-	args := []string{"--no-pager", "-n", "100"}
-	if follow {
-		args = append(args, "--follow")
-	}
-	for _, unit := range units {
-		args = append(args, "--unit", unit)
-	}
-	if len(units) == 0 {
-		return fmt.Errorf("no journal units for %s", name)
-	}
-	return h.command("journalctl", args...)
-}
-
 func selectedUnits(a config.App, m manifest, service string) ([]string, error) {
 	if service == "web" && m.FPM {
 		return []string{"php" + services.PHPVersion + "-fpm"}, nil

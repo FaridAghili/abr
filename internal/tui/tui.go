@@ -243,12 +243,16 @@ func (m *model) toolsMenu() tea.Cmd {
 			return m.deployForm("")
 		case "backup":
 			return m.databaseBackupForm("")
+		case "logs":
+			return m.allLogsMenu()
+		case "disk":
+			return m.diskForm("")
 		case "ports":
 			return m.start(action{title: "Port reservations", args: []string{"ports"}})
 		case "validate":
 			return m.start(action{title: "Validate configuration", args: []string{"config", "validate"}})
 		case "doctor":
-			return m.start(action{title: "Check configuration and ports", args: []string{"doctor"}, note: "Running app services may already occupy their reserved ports."})
+			return m.start(action{title: "Check configuration and ports", args: []string{"doctor"}, note: "Checks reserved TCP ports and expected app services."})
 		case "allocate":
 			return m.review(action{title: "Reconcile ports", args: []string{"ports", "--allocate"}, note: "Reserve missing ports after configuration edits. Existing assignments stay fixed. Preview is unavailable."})
 		}
@@ -256,6 +260,8 @@ func (m *model) toolsMenu() tea.Cmd {
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Maintenance").Options(
 		huh.NewOption("Deploy all applications", "deploy"),
 		huh.NewOption("Back up databases", "backup"),
+		huh.NewOption("Logs for all applications", "logs"),
+		huh.NewOption("Disk usage for all applications", "disk"),
 		huh.NewOption("Port reservations", "ports"),
 		huh.NewOption("Validate configuration", "validate"),
 		huh.NewOption("Check configuration and ports", "doctor"),
@@ -269,7 +275,7 @@ func (m *model) appMenu(app config.App) tea.Cmd {
 	m.context = clean(app.Domain + " · User: " + app.User)
 	choices := []huh.Option[string]{
 		huh.NewOption("Deploy", "deploy"), huh.NewOption("Service status", "status"),
-		huh.NewOption("Restart services", "restart"), huh.NewOption("Recent logs", "logs"),
+		huh.NewOption("Restart services", "restart"), huh.NewOption("Read logs", "logs"),
 	}
 	if app.Database.Enabled {
 		choices = append(choices, huh.NewOption("Database", "database-menu"))
@@ -308,6 +314,8 @@ func (m *model) moreAppMenu(app config.App) tea.Cmd {
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Manage application").Options(
 		huh.NewOption("Ubuntu user & paths", "user"),
 		huh.NewOption("Edit settings", "edit"),
+		huh.NewOption("Clear logs", "clear-logs"),
+		huh.NewOption("Disk usage", "disk"),
 		huh.NewOption("Enable services", "enable"),
 		huh.NewOption("Disable services", "disable"),
 		huh.NewOption("Remove application", "remove"),
@@ -321,6 +329,10 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 		return m.appDetails(app)
 	case "edit":
 		return m.editMenu(app)
+	case "clear-logs":
+		return m.clearLogsForm(app.Name)
+	case "disk":
+		return m.diskForm(app.Name)
 	case "back":
 		return m.goBack()
 	case "database-menu":
@@ -329,7 +341,9 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 		return m.moreAppMenu(app)
 	case "deploy":
 		return m.deployForm(app.Name)
-	case "restart", "logs":
+	case "logs":
+		return m.readLogsForm(&app)
+	case "restart":
 		return m.serviceForm(app, selected)
 	case "status":
 		return m.start(action{title: app.Name + " / status", args: args})
@@ -352,18 +366,18 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 }
 
 func (m *model) removeForm(app config.App) tea.Cmd {
-	var purge bool
+	purge := true
 	return m.setForm("form", "Remove "+app.Name, func() tea.Cmd {
 		a := action{title: "Remove " + app.Name, args: []string{"remove", app.Name}, note: "Stops this app and removes its managed services, user, configuration and port reservations. Project files, uploads, home, database and credentials are kept."}
 		if purge {
 			a.title = "Fully delete " + app.Name
 			a.args = append(a.args, "--purge", "--yes")
-			a.note = "Permanently delete " + app.Directory + " (including .env and uploads), the app's home, managed database and DB user, credentials, deployment history, services, configuration and port reservations. This cannot be undone. Shared server tools and shared Composer/Git credentials stay."
+			a.note = "Permanently delete " + app.Directory + " (including .env and uploads), the app's home, managed database and DB user, credentials, deployment history, services, configuration and port reservations. This cannot be undone. Shared server tools, shared Composer/Git credentials, self-managed databases and separately exported backups stay."
 		}
 		return m.review(a)
 	}, huh.NewGroup(huh.NewSelect[bool]().Title("What should be removed?").Description("Keep data for later, or permanently delete this app and its data.\nExample: full deletion for an app you no longer need.").Options(
-		huh.NewOption("Remove services; keep files and database", false),
-		huh.NewOption("Fully delete app and data", true)).Value(&purge)))
+		huh.NewOption("Fully delete app and data", true),
+		huh.NewOption("Remove services; keep files and database", false)).Value(&purge)))
 }
 
 func (m *model) serviceForm(app config.App, command string) tea.Cmd {
@@ -390,12 +404,15 @@ func (m *model) serviceForm(app config.App, command string) tea.Cmd {
 	var selected string
 	return m.setForm("form", command+" / "+app.Name, func() tea.Cmd {
 		args := []string{command, app.Name}
+		if command == "logs" && app.Name == "clear" {
+			args = []string{"logs", "--", app.Name}
+		}
 		if selected != "" {
 			args = append(args, selected)
 		}
 		a := action{title: command + " / " + app.Name, args: args}
 		if command == "logs" {
-			a.note = "Recent journal snapshot. For live streaming, use abr logs APP --follow outside the menu."
+			a.note = "Recent journal snapshot · r refresh · CLI --follow streams journals."
 			return m.start(a)
 		}
 		return m.review(a)
@@ -579,6 +596,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, m.goBack()
 		}
+		if m.page == "output" && !m.busy && key == "r" && isLogView(m.current.args) {
+			return m, m.start(m.current)
+		}
 		if m.page == "output" || m.page == "confirm" || m.page == "details" {
 			switch key {
 			case "home":
@@ -650,14 +670,23 @@ func (m *model) View() tea.View {
 		if !m.busy {
 			if m.result != nil {
 				status = danger.Render("Command failed · error shown below")
+				if len(m.current.args) > 0 && m.current.args[0] == "doctor" {
+					status = danger.Render("Checks need attention · details below")
+				}
 			} else if m.options.DryRun {
 				status = success.Render("Preview finished")
 			} else {
 				status = success.Render("Command completed")
+				if len(m.current.args) > 0 && m.current.args[0] == "doctor" {
+					status = success.Render("Checks passed")
+				}
 			}
 		}
 		body = lipgloss.NewStyle().Width(width).Render(status) + "\n" + m.viewport.View()
 		footer = "↑/↓ scroll"
+		if !m.busy && isLogView(m.current.args) {
+			footer += " · r refresh"
+		}
 		if !m.busy {
 			if m.current.continueWith != nil && m.result == nil && !m.options.DryRun {
 				footer += " · Enter continue · Esc cancel"
@@ -715,6 +744,12 @@ func nextStep(args []string) string {
 	switch args[0] {
 	case "edit":
 		return "Choose Deploy to apply saved settings. Database credentials and data are retained when a component is disabled."
+	case "disk":
+		return "Choose Disk usage again and Refresh now for a new app scan. Clear logs from More actions or Tools when needed."
+	case "logs":
+		if len(args) > 1 && args[1] == "clear" {
+			return "Choose Read logs to inspect app activity. New file logs continue to be written by the app."
+		}
 	case "setup":
 		return "Open Server & credentials to set up the GitHub key, then clone your project. MySQL admin shows your TablePlus login."
 	case "update":

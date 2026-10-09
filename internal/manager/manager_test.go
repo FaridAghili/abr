@@ -24,6 +24,14 @@ func testApp(name string) config.App {
 	return config.App{Name: name, Directory: "/srv/" + name, User: name, Type: "laravel", Domain: name + ".test", Web: config.Web{Driver: "octane"}}
 }
 
+func checkManagerReservations(m Manager) error {
+	c, r, err := m.Snapshot()
+	if err != nil {
+		return err
+	}
+	return CheckReservations(c, r)
+}
+
 func TestConcurrentRegistrations(t *testing.T) {
 	m := testManager(t)
 	var wg sync.WaitGroup
@@ -86,7 +94,7 @@ func TestConfigurationEditsRetainPorts(t *testing.T) {
 	if err := storage.AtomicWrite(m.ConfigPath, data); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Doctor(); err == nil || !strings.Contains(err.Error(), "no reservation") {
+	if err := checkManagerReservations(m); err == nil || !strings.Contains(err.Error(), "no reservation") {
 		t.Fatalf("got %v", err)
 	}
 	second, err := m.Allocate()
@@ -101,12 +109,12 @@ func TestConfigurationEditsRetainPorts(t *testing.T) {
 			t.Fatal("disabled reservation lost")
 		}
 	}
-	if err := m.Doctor(); err != nil {
+	if err := checkManagerReservations(m); err != nil {
 		t.Fatal(err)
 	}
 	m.Probe = func(int) error { return ports.ErrOccupied }
-	if err := m.Doctor(); err == nil || !strings.Contains(err.Error(), "occupied") {
-		t.Fatalf("got %v", err)
+	if err := checkManagerReservations(m); err != nil {
+		t.Fatalf("portable reservation validation must not inspect listeners: %v", err)
 	}
 }
 

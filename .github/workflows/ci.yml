@@ -64,7 +64,7 @@ jobs:
       - name: Check templates and proxy headers with installed Caddy
         run: |
           command -v caddy
-          go test ./internal/services -run '^TestCaddy(TemplatesAdapt|ProxyHeaders)$' -count=1
+          go test ./internal/services -run '^TestCaddy(TemplatesAdapt|ProxyHeaders|ImageCaching)$' -count=1
       - name: Host diagnostics on failure
         if: failure() && steps.host.outcome == 'failure'
         run: |

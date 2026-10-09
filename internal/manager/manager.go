@@ -186,25 +186,17 @@ func (m Manager) Snapshot() (config.Config, ports.Registry, error) {
 	return c, r, err
 }
 
-// Doctor is limited to portable config/state/port checks. It cannot identify
-// which process owns a listener and does not inspect systemd, Caddy, or PHP.
-func (m Manager) Doctor() error {
-	c, r, err := m.Snapshot()
-	if err != nil {
-		return err
-	}
+// CheckReservations checks the configuration/registry relationship without
+// probing live ports. Listener ownership belongs to the host diagnostic.
+func CheckReservations(c config.Config, r ports.Registry) error {
 	var issues []error
 	names := map[string]bool{}
 	for _, a := range c.Apps {
 		names[a.Name] = true
 		for _, p := range a.Endpoints() {
-			port, ok := r.Lookup(a.Name, p)
+			_, ok := r.Lookup(a.Name, p)
 			if !ok {
 				issues = append(issues, fmt.Errorf("%s/%s has no reservation; run abr ports --allocate", a.Name, p))
-				continue
-			}
-			if err := m.probe()(port); err != nil {
-				issues = append(issues, fmt.Errorf("%s/%s at %d: %w", a.Name, p, port, err))
 			}
 		}
 	}

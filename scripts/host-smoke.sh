@@ -9,7 +9,7 @@ abr_binary_source=$(realpath "${1:-bin/abr}")
 abr_binary_directory=$(mktemp -d)
 fixture_source=''
 fixture_git_shim=0
-trap 'if [[ -S "$abr_binary_directory/admin-tunnel" ]]; then sudo ssh -S "$abr_binary_directory/admin-tunnel" -O exit root@127.0.0.1; fi; sudo rm -rf "$abr_binary_directory"; if [[ -n $fixture_source ]]; then sudo rm -rf "$fixture_source"; fi; if [[ $fixture_git_shim == 1 ]]; then sudo rm -f /usr/local/bin/git; fi' EXIT
+trap 'sudo systemctl stop abr-ci-foreign-listener.service >/dev/null 2>&1 || true; if [[ -S "$abr_binary_directory/admin-tunnel" ]]; then sudo ssh -S "$abr_binary_directory/admin-tunnel" -O exit root@127.0.0.1; fi; sudo rm -rf "$abr_binary_directory"; if [[ -n $fixture_source ]]; then sudo rm -rf "$fixture_source"; fi; if [[ $fixture_git_shim == 1 ]]; then sudo rm -f /usr/local/bin/git; fi' EXIT
 install -m 755 "$abr_binary_source" "$abr_binary_directory/abr"
 abr_test_binary="$abr_binary_directory/abr"
 abr_ci() {
@@ -69,6 +69,26 @@ fixture_missing_assets() {
         echo 'Missing asset received immutable caching' >&2; exit 1
       fi
     done
+  done
+}
+fixture_image_cache() {
+  # Verify real Caddy-user access to images created by the dedicated app user.
+  local domain=$1 root=$2 app_user=$3 ext method
+  for ext in png jpg jpeg gif avif webp svg PNG; do
+    sudo runuser -u "$app_user" -- sh -c 'printf "public image fixture" > "$1"' sh "$root/abr-image.$ext"
+    for method in GET HEAD; do
+      local request=(--request "$method")
+      if [[ $method == HEAD ]]; then request=(--head); fi
+      curl --fail --silent --show-error --insecure --resolve "$domain:443:127.0.0.1" \
+        "${request[@]}" -D "$fixture_source/image-headers" -o "$fixture_source/image-body" \
+        "https://$domain/abr-image.$ext?v=1"
+      tr -d '\r' < "$fixture_source/image-headers" | grep -Fix 'Cache-Control: public, max-age=86400'
+      fixture_security_headers "$fixture_source/image-headers"
+      if [[ $method == GET ]]; then
+        test "$(cat "$fixture_source/image-body")" = 'public image fixture'
+      fi
+    done
+    sudo runuser -u "$app_user" -- rm -- "$root/abr-image.$ext"
   done
 }
 fixture_redirect() {
@@ -518,6 +538,13 @@ test "$php_missing_status" = 404
 fixture_security_headers "$fixture_source/php-missing-headers"
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"opcache":"1"'
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"unprivileged":true,"no_new_privs":true'
+fixture_image_cache fixture-php.localhost /srv/apps/fixture-php/public abr-fixture-php
+sudo runuser -u abr-fixture-php -- sh -c 'printf "public upload fixture" > /srv/apps/fixture-php/storage/app/public/abr-upload.png'
+curl --fail --silent --show-error --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
+  -D "$fixture_source/upload-headers" https://fixture-php.localhost/storage/abr-upload.png -o "$fixture_source/upload-body"
+tr -d '\r' < "$fixture_source/upload-headers" | grep -Fix 'Cache-Control: public, max-age=86400'
+test "$(cat "$fixture_source/upload-body")" = 'public upload fixture'
+sudo runuser -u abr-fixture-php -- rm /srv/apps/fixture-php/storage/app/public/abr-upload.png
 # A generated hashed asset is served with Brotli and immutable caching.
 asset_path=$(sudo find /srv/apps/fixture-php/public/build/assets -name 'app-*.css' -print -quit)
 sudo test -f "$asset_path.br"
@@ -589,6 +616,7 @@ sudo grep -Fx 'APP_DEBUG=false' /srv/apps/fixture-octane/.env
 abr_ci deploy fixture-octane --no-pull
 fixture_https www.fixture-octane.localhost -D "$fixture_source/octane-headers" | grep -F 'Laravel fixture database=1'
 fixture_security_headers "$fixture_source/octane-headers"
+fixture_image_cache www.fixture-octane.localhost /srv/apps/fixture-octane/public abr-fixture-octane
 fixture_redirect www.fixture-octane.localhost www.fixture-octane.localhost http
 fixture_redirect fixture-octane.localhost www.fixture-octane.localhost
 sudo test ! -f /srv/apps/fixture-octane/rr
@@ -596,6 +624,7 @@ sudo test -x /usr/local/bin/rr
 abr_ci restart fixture-octane web
 # Exercise Caddy's error route while the disposable upstream is unavailable.
 sudo systemctl stop abr-fixture-octane-octane.service
+fixture_refused 'expected listener is missing' doctor
 error_status=$(curl --silent --show-error --insecure --resolve www.fixture-octane.localhost:443:127.0.0.1 \
   -D "$fixture_source/error-headers" -o /dev/null --write-out '%{http_code}' https://www.fixture-octane.localhost/)
 test "$error_status" = 502
@@ -652,6 +681,7 @@ for rendering in true false; do
   fixture_redirect "$app_domain" "$app_domain" http
   fixture_https "$app_domain" -D "$fixture_source/nuxt-page-headers" -o "$fixture_source/$app.html"
   fixture_security_headers "$fixture_source/nuxt-page-headers"
+  fixture_image_cache "$app_domain" "$dir/.output/public" "abr-$app"
   if [[ $rendering == true ]]; then grep -Fq 'Abr Nuxt fixture' "$fixture_source/$app.html"; else grep -Fq '__nuxt' "$fixture_source/$app.html"; fi
   nuxt_asset=$(sudo find "$dir/.output/public/_nuxt" -type f -name '*.js' -size +511c -print -quit)
   sudo test -f "$nuxt_asset.br"
@@ -669,6 +699,141 @@ for rendering in true false; do
   abr_ci restart "$app" web
 done
 abr_ci ports
+# Real services own their occupied ports, including RoadRunner's child processes.
+abr_ci doctor > "$fixture_source/doctor-healthy.log"
+grep -F 'listening, owned by active abr-fixture-octane-octane.service' "$fixture_source/doctor-healthy.log"
+grep -F 'listening, owned by active abr-fixture-spa-nuxt.service' "$fixture_source/doctor-healthy.log"
+grep -F 'app endpoint checks passed' "$fixture_source/doctor-healthy.log"
+# A foreign listener on another loopback address must fail even while the app
+# remains active and owns its normal listener on the same reserved port.
+doctor_port=$(abr_ci ports | awk '$1 == "fixture-spa" && $2 == "nuxt-http" {print $3}')
+test -n "$doctor_port"
+sudo systemd-run --unit=abr-ci-foreign-listener --collect /usr/bin/python3 -c \
+  'import pathlib,socket,sys,time; s=socket.socket(); s.bind(("127.0.0.2",int(sys.argv[1]))); s.listen(); pathlib.Path(sys.argv[2]).touch(); time.sleep(3600)' \
+  "$doctor_port" "$fixture_source/doctor-listener-ready"
+for attempt in {1..50}; do
+  if sudo test -f "$fixture_source/doctor-listener-ready"; then break; fi
+  sleep 0.1
+done
+sudo test -f "$fixture_source/doctor-listener-ready"
+fixture_refused 'port conflict: listener PID' doctor
+sudo systemctl stop abr-ci-foreign-listener.service
+abr_ci disable fixture-spa
+abr_ci doctor > "$fixture_source/doctor-disabled.log"
+grep -F "fixture-spa/nuxt-http at $doctor_port: available (app disabled)" "$fixture_source/doctor-disabled.log"
+abr_ci enable fixture-spa
+abr_ci doctor
+# File-log maintenance on real app-owned Laravel/Nuxt paths. Clearing retains
+# the inode, permissions, open writers, uploads, history and shared journal.
+sudo runuser -u abr-fixture-php -- mkdir -p /srv/apps/fixture-php/storage/logs
+sudo runuser -u abr-fixture-spa -- mkdir -p /srv/apps/fixture-spa/logs
+sudo runuser -u abr-fixture-php -- sh -c 'printf "Laravel log fixture\n" > "$1"; printf "Keep uploaded log\n" > "$2"' sh \
+  /srv/apps/fixture-php/storage/logs/abr-clear.log /srv/apps/fixture-php/storage/app/public/abr-upload.log
+sudo runuser -u abr-fixture-spa -- sh -c 'printf "Nuxt log fixture\n" > "$1"' sh /srv/apps/fixture-spa/logs/abr-clear.log
+printf 'Deployment log fixture\n' | sudo tee /var/lib/abr-ci/deployments/fixture-php/abr-clear.log >/dev/null
+printf '{"fixture":"keep history"}\n' | sudo tee /var/lib/abr-ci/deployments/fixture-php/abr-clear.json >/dev/null
+sudo logger -t abr-log-clear-fixture 'journal preserved'
+fixture_log_identity=$(sudo stat -c '%i:%u:%g:%a' /srv/apps/fixture-php/storage/logs/abr-clear.log)
+fixture_refused 'use --yes to confirm' logs clear fixture-php
+abr_ci logs clear fixture-php --dry-run
+sudo test -s /srv/apps/fixture-php/storage/logs/abr-clear.log
+abr_ci logs clear fixture-php --type application --yes
+sudo test ! -s /srv/apps/fixture-php/storage/logs/abr-clear.log
+test "$(sudo stat -c '%i:%u:%g:%a' /srv/apps/fixture-php/storage/logs/abr-clear.log)" = "$fixture_log_identity"
+sudo test -s /srv/apps/fixture-spa/logs/abr-clear.log
+sudo test -s /var/lib/abr-ci/deployments/fixture-php/abr-clear.log
+# Keep an actual runtime-user writer open across truncation.
+sudo runuser -u abr-fixture-php -- bash -c '
+  exec 3>>"$1"
+  touch "$2"
+  while [[ ! -e $3 ]]; do sleep 0.1; done
+  printf "Writer survived\n" >&3
+' bash /srv/apps/fixture-php/storage/logs/abr-clear.log \
+  /srv/apps/fixture-php/storage/logs/writer-ready /srv/apps/fixture-php/storage/logs/writer-go &
+fixture_writer_pid=$!
+for fixture_writer_attempt in $(seq 1 50); do
+  if sudo test -e /srv/apps/fixture-php/storage/logs/writer-ready; then break; fi
+  sleep 0.1
+done
+sudo test -e /srv/apps/fixture-php/storage/logs/writer-ready
+abr_ci logs clear --all --yes
+sudo test ! -s /srv/apps/fixture-spa/logs/abr-clear.log
+sudo test ! -s /var/lib/abr-ci/deployments/fixture-php/abr-clear.log
+sudo touch /srv/apps/fixture-php/storage/logs/writer-go
+wait "$fixture_writer_pid"
+sudo grep -Fx 'Writer survived' /srv/apps/fixture-php/storage/logs/abr-clear.log
+sudo test -s /srv/apps/fixture-php/storage/app/public/abr-upload.log
+sudo test -s /var/lib/abr-ci/deployments/fixture-php/abr-clear.json
+sudo test -s /srv/apps/fixture-php/.env
+sudo journalctl --no-pager -t abr-log-clear-fixture | grep -F 'journal preserved'
+sudo rm /srv/apps/fixture-php/storage/logs/writer-ready /srv/apps/fixture-php/storage/logs/writer-go
+# Refuse a same-filesystem bind mount so external data cannot be truncated.
+mkdir -p "$fixture_source/external-logs"
+printf 'Keep external log\n' > "$fixture_source/external-logs/external.log"
+sudo mkdir /srv/apps/fixture-php/storage/logs/mounted
+sudo mount --bind "$fixture_source/external-logs" /srv/apps/fixture-php/storage/logs/mounted
+fixture_refused 'before clearing logs' logs clear fixture-php --type application --yes
+test -s "$fixture_source/external-logs/external.log"
+sudo umount /srv/apps/fixture-php/storage/logs/mounted
+sudo rmdir /srv/apps/fixture-php/storage/logs/mounted
+# Exercise native GNU du, live statfs and one metadata query on the real hosts.
+abr_ci disk --refresh --json > "$fixture_source/disk-fresh.json"
+abr_ci disk --json > "$fixture_source/disk-cached.json"
+abr_ci disk --filesystem-only --json > "$fixture_source/disk-filesystems.json"
+python3 - "$fixture_source" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+fresh = json.loads((root / "disk-fresh.json").read_text())
+cached = json.loads((root / "disk-cached.json").read_text())
+filesystems = json.loads((root / "disk-filesystems.json").read_text())
+assert not fresh["cached"] and cached["cached"]
+assert fresh["measured_at"] == cached["measured_at"]
+assert fresh["total_estimated_bytes"] == cached["total_estimated_bytes"]
+apps = {a["name"]: a for a in fresh["apps"]}
+assert set(apps) == {"fixture-php", "fixture-octane", "fixture-spa", "fixture-ssr"}
+assert apps["fixture-php"]["database_estimated_bytes"] > 0
+assert apps["fixture-php"]["home_bytes"] > 0
+assert not apps["fixture-spa"]["database_managed"]
+assert fresh["files_bytes"] == sum(a["files_bytes"] for a in apps.values())
+assert fresh["total_estimated_bytes"] == fresh["files_bytes"] + fresh["database_estimated_bytes"]
+assert not filesystems["apps"]
+for report in (fresh, cached, filesystems):
+    assert report["filesystems"]
+    for fs in report["filesystems"]:
+        assert fs["capacity_bytes"] > 0
+        assert 0 <= fs["available_bytes"] <= fs["capacity_bytes"]
+PY
+# An empty 1 GiB sparse file should not add 1 GiB of actual allocated space.
+sudo runuser -u abr-fixture-php -- truncate -s 1G /srv/apps/fixture-php/storage/logs/abr-sparse.bin
+abr_ci disk fixture-php --refresh --json > "$fixture_source/disk-single.json"
+python3 - "$fixture_source" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+all_apps = json.loads((root / "disk-fresh.json").read_text())["apps"]
+single = json.loads((root / "disk-single.json").read_text())
+assert len(single["apps"]) == 1 and single["apps"][0]["name"] == "fixture-php"
+before = next(a["project_bytes"] for a in all_apps if a["name"] == "fixture-php")
+assert single["apps"][0]["project_bytes"] - before < 32 * 1024 * 1024
+PY
+sudo runuser -u abr-fixture-php -- rm /srv/apps/fixture-php/storage/logs/abr-sparse.bin
+# Real file readers and a combined journal query without any persisted log copy.
+sudo runuser -u abr-fixture-php -- sh -c 'printf "Old reader fixture\nLaravel reader fixture\n" > "$1"' sh /srv/apps/fixture-php/storage/logs/abr-reader.log
+sudo runuser -u abr-fixture-spa -- sh -c 'printf "Nuxt reader fixture\n" > "$1"' sh /srv/apps/fixture-spa/logs/abr-reader.log
+printf 'Deployment reader fixture\n' | sudo tee /var/lib/abr-ci/deployments/fixture-php/abr-reader.log >/dev/null
+abr_ci logs fixture-php --type application --lines 1 > "$fixture_source/log-single.txt"
+grep -F 'Laravel reader fixture' "$fixture_source/log-single.txt"
+if grep -F 'Old reader fixture' "$fixture_source/log-single.txt"; then
+  echo 'Log reader ignored its line limit' >&2; exit 1
+fi
+abr_ci logs --all --type application > "$fixture_source/log-all.txt"
+grep -F '== fixture-php / application logs ==' "$fixture_source/log-all.txt"
+grep -F '== fixture-spa / application logs ==' "$fixture_source/log-all.txt"
+grep -F 'Laravel reader fixture' "$fixture_source/log-all.txt"
+grep -F 'Nuxt reader fixture' "$fixture_source/log-all.txt"
+abr_ci logs --all --type deployment > "$fixture_source/log-deployments.txt"
+grep -F 'Deployment reader fixture' "$fixture_source/log-deployments.txt"
+abr_ci logs --all --lines 20 > "$fixture_source/log-journals.txt"
+grep -F 'Read recent service journals' "$fixture_source/log-journals.txt"
 abr_ci remove fixture-ssr --purge --yes
 sudo test ! -e /srv/apps/fixture-ssr
 sudo test ! -e /var/lib/abr-users/abr-fixture-ssr

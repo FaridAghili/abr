@@ -40,6 +40,34 @@ func TestCaddyProxyHeaders(t *testing.T) {
 	dir := t.TempDir()
 	a := config.App{Name: "app", User: "abr-app", Directory: dir, Type: "nuxt", Domain: "app.test"}
 	r := ports.Registry{Version: 1, Assignments: []ports.Assignment{{App: "app", Purpose: "nuxt-http", Port: upstreamPort}}}
+	address := startCaddyFixture(t, caddy, a, r)
+	client := &http.Client{Timeout: time.Second}
+	for _, test := range []struct {
+		path string
+		code int
+	}{{"/", 200}, {"/missing-page", 404}, {"/_nuxt/missing-AbCd1234.css", 404}} {
+		response, err := client.Get("http://" + address + test.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != test.code {
+			t.Fatalf("%s: status %d; want %d", test.path, response.StatusCode, test.code)
+		}
+		for _, name := range []string{"Server", "Via", "X-Powered-By"} {
+			if values := response.Header.Values(name); len(values) > 0 {
+				t.Errorf("%s: leaked %s: %v", test.path, name, values)
+			}
+		}
+		if test.path == "/" && response.Header.Get("Cache-Control") != "no-cache, private" {
+			t.Fatal("changed the application's cache policy")
+		}
+	}
+}
+
+func startCaddyFixture(t *testing.T, caddy string, a config.App, r ports.Registry) string {
+	t.Helper()
+	dir := t.TempDir()
 	plan, err := Render(a, r, "../../templates", dir)
 	if err != nil {
 		t.Fatal(err)
@@ -63,41 +91,161 @@ func TestCaddyProxyHeaders(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{\n admin off\n auto_https off\n}\n"+site), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// Production formats generated files before validating and loading them.
+	if output, err := exec.Command(caddy, "fmt", "--overwrite", path).CombinedOutput(); err != nil {
+		t.Fatalf("Caddy could not format fixture: %v\n%s", err, output)
+	}
 	cmd := exec.Command(caddy, "run", "--config", path, "--adapter", "caddyfile")
 	cmd.Env = append(os.Environ(), "HOME="+dir, "XDG_DATA_HOME="+dir, "XDG_CONFIG_HOME="+dir)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
 	client := &http.Client{Timeout: time.Second}
-	for _, test := range []struct {
-		path string
-		code int
-	}{{"/", 200}, {"/missing-page", 404}, {"/_nuxt/missing-AbCd1234.css", 404}} {
-		deadline := time.Now().Add(5 * time.Second)
-		var response *http.Response
-		for {
-			response, err = client.Get("http://" + address + test.path)
-			if err == nil || time.Now().After(deadline) {
-				break
-			}
-			time.Sleep(20 * time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		response, err := client.Get("http://" + address + "/.git")
+		if err == nil {
+			_ = response.Body.Close()
+			return address
 		}
-		if err != nil {
+		if time.Now().After(deadline) {
 			t.Fatal(err)
 		}
-		_ = response.Body.Close()
-		if response.StatusCode != test.code {
-			t.Fatalf("%s: status %d; want %d", test.path, response.StatusCode, test.code)
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestCaddyImageCaching(t *testing.T) {
+	caddy, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("Caddy is not installed")
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, no-store")
+		if strings.Contains(r.URL.Path, "missing") {
+			w.WriteHeader(http.StatusNotFound)
 		}
-		for _, name := range []string{"Server", "Via", "X-Powered-By"} {
-			if values := response.Header.Values(name); len(values) > 0 {
-				t.Errorf("%s: leaked %s: %v", test.path, name, values)
+		_, _ = io.WriteString(w, "dynamic response")
+	}))
+	defer upstream.Close()
+	_, port, _ := net.SplitHostPort(strings.TrimPrefix(upstream.URL, "http://"))
+	upstreamPort, _ := strconv.Atoi(port)
+	for _, kind := range []string{"fpm", "octane", "nuxt"} {
+		t.Run(kind, func(t *testing.T) {
+			a := config.App{Name: "app", User: "abr-app", Directory: t.TempDir(), Type: "laravel", Domain: "app.test"}
+			root, build := filepath.Join(a.Directory, "public"), "/build/assets"
+			purpose := "octane-http"
+			if kind == "nuxt" {
+				a.Type = kind
+				root, build, purpose = filepath.Join(a.Directory, ".output/public"), "/_nuxt", "nuxt-http"
+			} else {
+				a.Web.Driver = kind
 			}
-		}
-		if test.path == "/" && response.Header.Get("Cache-Control") != "no-cache, private" {
-			t.Fatal("changed the application's cache policy")
-		}
+			r := ports.Empty()
+			for _, endpoint := range a.Endpoints() {
+				endpointPort := upstreamPort
+				if endpoint != purpose {
+					endpointPort++
+				}
+				r.Assignments = append(r.Assignments, ports.Assignment{App: a.Name, Purpose: endpoint, Port: endpointPort})
+			}
+			write := func(path string) {
+				t.Helper()
+				path = filepath.Join(root, path)
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("public image fixture"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			paths := map[string]string{}
+			for _, ext := range []string{"png", "jpg", "jpeg", "gif", "avif", "webp", "svg", "PNG"} {
+				for _, path := range []string{"/images/logo." + ext, build + "/plain." + ext} {
+					write(path)
+					paths[path] = "public, max-age=86400"
+				}
+				if ext != "PNG" {
+					path := build + "/logo-AbCd1234." + ext
+					write(path)
+					paths[path] = "public, max-age=31536000, immutable"
+				}
+			}
+			write("/.git/logo.png")
+			write("/.env.logo.png")
+			if kind != "nuxt" {
+				storage := filepath.Join(a.Directory, "storage/app/public")
+				if err := os.MkdirAll(storage, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(storage, filepath.Join(root, "storage")); err != nil {
+					t.Fatal(err)
+				}
+				write("/storage/upload.png")
+				paths["/storage/upload.png"] = "public, max-age=86400"
+			}
+			address := startCaddyFixture(t, caddy, a, r)
+			client := &http.Client{Timeout: time.Second}
+			request := func(method, path string, headers map[string]string) *http.Response {
+				t.Helper()
+				req, err := http.NewRequest(method, "http://"+address+path, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for key, value := range headers {
+					req.Header.Set(key, value)
+				}
+				response, err := client.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = response.Body.Close() })
+				return response
+			}
+			for path, cache := range paths {
+				for _, method := range []string{"GET", "HEAD"} {
+					response := request(method, path+"?v=1", nil)
+					if response.StatusCode != 200 || response.Header.Get("Cache-Control") != cache {
+						t.Fatalf("%s %s: status=%d cache=%q; want %q", method, path, response.StatusCode, response.Header.Get("Cache-Control"), cache)
+					}
+					if method == "GET" {
+						body, _ := io.ReadAll(response.Body)
+						if string(body) != "public image fixture" {
+							t.Fatalf("image was sent to an application worker: %s", path)
+						}
+					}
+					_ = response.Body.Close()
+				}
+			}
+			image := "/images/logo.png"
+			etag := request("HEAD", image, nil).Header.Get("Etag")
+			for _, test := range []struct {
+				headers map[string]string
+				status  int
+			}{{map[string]string{"If-None-Match": etag}, 304}, {map[string]string{"Range": "bytes=0-3"}, 206}} {
+				response := request("GET", image, test.headers)
+				if response.StatusCode != test.status || response.Header.Get("Cache-Control") != "public, max-age=86400" {
+					t.Fatal("conditional/partial image response lost caching", response.StatusCode, response.Header)
+				}
+			}
+			for _, path := range []string{build + "/missing-AbCd1234.png", "/.git/logo.png", "/.env.logo.png"} {
+				response := request("GET", path, nil)
+				if response.StatusCode != 404 || response.Header.Get("Cache-Control") != "" {
+					t.Fatal("missing or private image was publicly cached", path, response.StatusCode, response.Header)
+				}
+			}
+			for _, path := range []string{"/dynamic.png", "/missing.png"} {
+				response := request("GET", path, nil)
+				if strings.Contains(response.Header.Get("Cache-Control"), "public") || (kind != "fpm" && response.Header.Get("Cache-Control") != "private, no-store") {
+					t.Fatal("dynamic image cache policy was overwritten", path, response.Header)
+				}
+			}
+			response := request("POST", image, nil)
+			if strings.Contains(response.Header.Get("Cache-Control"), "public") {
+				t.Fatal("non-read image request was publicly cached")
+			}
+		})
 	}
 }
 
@@ -276,6 +424,9 @@ func TestCaddyTemplatesAdapt(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "Caddyfile")
 				if err := os.WriteFile(path, file.Data, 0600); err != nil {
 					t.Fatal(err)
+				}
+				if output, err := exec.Command(caddy, "fmt", "--overwrite", path).CombinedOutput(); err != nil {
+					t.Fatalf("Caddy could not format %s template: %v\n%s", kind, err, output)
 				}
 				// Adapt only: never start a listener, request certificates or
 				// connect to PHP-FPM/application processes during this test.

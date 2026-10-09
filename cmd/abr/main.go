@@ -45,7 +45,7 @@ Commands:
   edit APP         Save app settings; deploy afterward to apply them
                    --domain HOST --queue-workers N --scheduler=true|false, etc.
   ports            Show reservations (--allocate reconciles config edits)
-  doctor           Portable config/registry/port checks
+  doctor           Check configuration, reservations and app TCP listener ownership
   update           Upgrade apt packages, Composer, global npm tools, Oh My Zsh and shell plugins
   setup            Install shared VPS packages, Caddy, Node 24, RoadRunner and root's Zsh
                    Prompts for VPS name; --hostname NAME is scriptable
@@ -65,8 +65,14 @@ Commands:
   remove APP       Remove managed services/user; retain projects and databases
                    --purge --yes permanently deletes this app and its data
   status [APP]     Show actual service status
+  disk [APP]       App sizes/totals and live filesystem capacity/used/available space
+                   --refresh rescans; --json is scriptable; --filesystem-only skips app scans
   restart APP [SERVICE]  Restart managed services (web, queue, queue@1, etc.)
   logs APP [SERVICE]     Show journal (--follow streams it)
+  logs --all            Read all apps' journals in one timeline
+                   --type journal|application|deployment --lines N (default 100)
+  logs clear APP... | --all --yes
+                   Clear file logs (--type all|application|deployment; default all)
   deploy APP...    Pull, install dependencies, build, migrate, enable
   deploy --all     Deploy sequentially
 
@@ -117,8 +123,11 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "database" && len(args) > 0 && (args[0] == "backup" || args[0] == "import") {
 		command, args = "database "+args[0], args[1:]
 	}
+	if command == "logs" && len(args) > 0 && args[0] == "clear" {
+		command, args = "logs clear", args[1:]
+	}
 	switch command {
-	case "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "restart", "logs", "deploy":
+	case "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -126,7 +135,7 @@ func run(args []string, out, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	pathFlags(fs, &m, m.ConfigPath, m.StateDir)
 	hostFlags(fs, &h, h.TemplatesDir, h.AppsDir, h.DryRun)
-	var allocate, configOnly, noDatabase, show, follow, databaseAdmin bool
+	var allocate, configOnly, noDatabase, show, databaseAdmin bool
 	var app config.App
 	var imports portFlags
 	var setup host.SetupOptions
@@ -137,7 +146,15 @@ func run(args []string, out, stderr io.Writer) error {
 	var composerHost, composerUsername string
 	var passwordStdin bool
 	var changes config.AppChanges
+	var clearLogs host.ClearLogsOptions
+	var readLogs host.ReadLogsOptions
+	var diskUsage host.DiskOptions
 	switch command {
+	case "disk":
+		fs.BoolVar(&diskUsage.All, "all", false, "report all registered apps (default without APP)")
+		fs.BoolVar(&diskUsage.Refresh, "refresh", false, "bypass the one-minute app-size cache")
+		fs.BoolVar(&diskUsage.JSON, "json", false, "print structured measurements in bytes")
+		fs.BoolVar(&diskUsage.FilesystemOnly, "filesystem-only", false, "read live filesystem space without scanning apps or querying MySQL")
 	case "edit":
 		fs.StringVar(&app.Domain, "domain", "", "primary domain")
 		fs.StringVar(&canonicalHost, "canonical-host", "", "as-entered, www or non-www")
@@ -201,7 +218,14 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&databaseAdmin, "admin", false, "show server admin connection details instead of an app database")
 		fs.BoolVar(&show, "show", false, "print existing/generated credentials explicitly")
 	case "logs":
-		fs.BoolVar(&follow, "follow", false, "stream the journal")
+		fs.BoolVar(&readLogs.Follow, "follow", false, "stream journal logs (CLI only)")
+		fs.BoolVar(&readLogs.All, "all", false, "read all registered apps' logs in one view")
+		fs.StringVar(&readLogs.Type, "type", "journal", "logs to read: journal, application or deployment")
+		fs.IntVar(&readLogs.Lines, "lines", 100, "recent lines per file or combined journal (1-1000; byte limits also apply)")
+	case "logs clear":
+		fs.BoolVar(&clearLogs.All, "all", false, "clear file logs for all registered apps")
+		fs.BoolVar(&clearLogs.Yes, "yes", false, "confirm permanent loss of selected log contents")
+		fs.StringVar(&clearLogs.Type, "type", "all", "file logs to clear: all, application or deployment")
 	case "deploy":
 		fs.BoolVar(&deploy.All, "all", false, "deploy all apps sequentially")
 		fs.BoolVar(&deploy.NoPull, "no-pull", false, "deploy current checkout without git pull")
@@ -230,6 +254,10 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 	}
 	switch command {
+	case "logs clear":
+		if clearLogs.All == (len(positional) > 0) {
+			return fmt.Errorf("use abr logs clear APP... --yes, or abr logs clear --all --yes")
+		}
 	case "database backup":
 		if backupAll == (len(positional) > 0) || backupDirectory == "" {
 			return fmt.Errorf("use abr database backup APP... --output-dir DIR, or --all --output-dir DIR")
@@ -250,13 +278,20 @@ func run(args []string, out, stderr io.Writer) error {
 		if len(positional) != 1 {
 			return fmt.Errorf("use abr %s APP", command)
 		}
-	case "restart", "logs":
+	case "logs":
+		if readLogs.Lines < 1 || readLogs.Lines > 1000 {
+			return fmt.Errorf("--lines must be between 1 and 1000")
+		}
+		if (readLogs.All && len(positional) != 0) || (!readLogs.All && (len(positional) < 1 || len(positional) > 2)) {
+			return fmt.Errorf("use abr logs APP [SERVICE], or abr logs --all [--type journal|application|deployment]")
+		}
+	case "restart":
 		if len(positional) < 1 || len(positional) > 2 {
 			return fmt.Errorf("use abr %s APP [SERVICE]", command)
 		}
-	case "status":
+	case "status", "disk":
 		if len(positional) > 1 {
-			return fmt.Errorf("use abr status [APP]")
+			return fmt.Errorf("use abr %s [APP]", command)
 		}
 	case "deploy":
 	default:
@@ -276,6 +311,12 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	h.Manager = m
 	switch command {
+	case "disk":
+		name := ""
+		if len(positional) == 1 {
+			name = positional[0]
+		}
+		return h.DiskUsage(name, diskUsage)
 	case "edit":
 		if configOnly {
 			if err := m.Edit(positional[0], changes, !h.DryRun); err != nil {
@@ -422,10 +463,7 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		return printPorts(out, r.Assignments)
 	case "doctor":
-		if err := m.Doctor(); err != nil {
-			return err
-		}
-		fmt.Fprintln(out, "Portable checks passed: config, registry, required reservations, and TCP availability")
+		return h.Doctor()
 	case "setup":
 		name, err := setupHostname(os.Stdin, stderr, setup.Hostname, terminalAvailable(out))
 		if err != nil {
@@ -460,6 +498,8 @@ func run(args []string, out, stderr io.Writer) error {
 		return h.Remove(positional[0])
 	case "deploy":
 		return h.Deploy(positional, deploy)
+	case "logs clear":
+		return h.ClearLogs(positional, clearLogs)
 	case "restart", "logs":
 		service := ""
 		if len(positional) == 2 {
@@ -468,7 +508,11 @@ func run(args []string, out, stderr io.Writer) error {
 		if command == "restart" {
 			return h.Restart(positional[0], service)
 		}
-		return h.Logs(positional[0], service, follow)
+		name := ""
+		if len(positional) > 0 {
+			name = positional[0]
+		}
+		return h.ReadLogs(name, service, readLogs)
 	case "status":
 		if len(positional) == 1 {
 			return h.Status(positional[0])

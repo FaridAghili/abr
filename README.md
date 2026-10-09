@@ -258,8 +258,98 @@ sudo abr disable api
 sudo abr enable api
 ```
 
+Read logs for one app or all registered apps:
+
+```sh
+sudo abr logs api                            # Managed service journals
+sudo abr logs api --type application         # Laravel/project file logs
+sudo abr logs api --type deployment          # Abr deployment file logs
+sudo abr logs --all                          # Combined service journal timeline
+sudo abr logs --all --type application       # File tails labeled by app and file
+sudo abr logs --all --type deployment
+sudo abr logs --all --lines 200 --follow     # Live journals outside the TUI
+```
+
+In the TUI, use **App → Read logs** or **Tools → Logs for all applications →
+Read logs**, then choose service journals, application files or deployment files.
+For one app's journals you can select a service. All-app journals use one combined
+query, with timestamps and service unit names; PHP-FPM logs are shared between
+pools, and the viewer identifies that scope. App file logs use the same
+`logs/` and Laravel `storage/logs/` directories as clearing. Deployment files come
+from the app's recorded deployment directory.
+
+The reader shows recent snapshots: scroll with the arrow/Page Up/Page Down keys,
+use Home/End to reach either end, and press **r** to refresh the same selection.
+Enter/Esc returns to the originating menu and clears the displayed log buffer.
+File views show the three most recently modified `*.log` files per app, with
+up to 100 lines per file by default; `--lines` accepts 1–1000. Tail reads are
+bounded to 16 KiB per file and 96 KiB of file content across an all-app view.
+Journal snapshots are also capped at 96 KiB; the TUI retains 128 KiB of output.
+Omitted content is marked. Custom log paths and other extensions are outside the
+file reader's scope. Raw logs display only in your terminal, without being saved
+to Abr's deployment history. Live journal streaming uses `--follow` in the CLI.
+
+Clear file logs for one app, several apps, or all registered apps:
+
+```sh
+sudo abr logs clear api --dry-run
+sudo abr logs clear api --yes
+sudo abr logs clear api web --type application --yes
+sudo abr logs clear --all --yes
+sudo abr logs clear --all --type deployment --yes
+```
+
+`--type all` is the default. Application logs are `*.log` files in each project's
+`logs/` directory and Laravel's `storage/logs/`, including subdirectories.
+Deployment logs are `*.log` files in `/var/lib/abr/deployments/APP/` (or the chosen
+state directory). Files are emptied in place, preserving ownership, permissions
+and open writers. Missing log directories are harmless; symlink directories,
+symlink log files, hard links, special log files and mounts under the log paths
+are refused. Secrets, uploads,
+databases and deployment JSON history are preserved. Custom log paths and rotated
+files with other extensions are outside this command's scope.
+
+Log contents are permanently lost, so the CLI requires `--yes` except in preview.
+In the TUI, use **More actions → Clear logs** for an app or **Tools → Logs for all
+applications → Clear logs**, choose the log type, then confirm. Service logs shown by
+`abr logs APP` remain in the shared system journal: journal storage cannot be
+cleared selectively per app, so this command retains it.
+
 Cloning and registration use `/srv/apps/NAME` automatically. Enter the same app
 name for both; the TUI does not ask for a project path.
+
+Inspect app sizes and server disk space:
+
+```sh
+sudo abr disk                         # Each app, combined total, and filesystem space
+sudo abr disk api                     # One app
+sudo abr disk --refresh               # Force a new measurement
+sudo abr disk --json                  # Scriptable byte counts
+sudo abr disk --filesystem-only       # Live capacity/used/available; no app scan or MySQL
+```
+
+The report includes project files (dependencies, builds, uploads and file logs),
+recorded runtime homes/caches, deployment logs/history, and recorded managed
+database sizes. Database values and combined totals marked `~` use MySQL's
+data/index metadata estimates; they exclude shared MySQL files. File measurements
+use allocated blocks, so sparse files do not appear to occupy their logical size.
+Symlink targets and nested filesystems are excluded. Hard links count once per
+scan, attributed to the first path in app-name order. Shared runtimes, system
+journals and separately exported backups are outside app totals.
+
+App sizes are measured on demand in one native `du` pass, with at most one
+metadata query for managed databases. Measurements are cached for one minute;
+the report shows their timestamp and whether they were cached. Repeated requests
+for the same selection share a scan lock; disk scans do not take the deployment
+lock. `--refresh` bypasses the cache. Filesystem capacity, used and available space
+are always live and each filesystem is shown once. Available space excludes
+reserved blocks. Initial/refresh scan time depends on the number of files; file
+contents are never read. Missing app directories occupy zero bytes; failed scans
+return an error instead of a partial successful report.
+
+In the TUI, choose **More actions → Disk usage** for an app or **Tools → Disk
+usage for all applications**, then use the recent scan or refresh now. Viewing
+the ordinary app menus does not scan disks.
 
 `--alias DOMAIN` redirects to the main domain; `--serving-domain DOMAIN` serves the
 same app. Both are repeatable. Independent subdomain apps are supported; wildcards
@@ -268,7 +358,7 @@ are not. Edit `/etc/abr/config.toml` to change settings, then run `abr ports
 and reservations while preserving the project, secrets, home and database.
 
 To permanently delete an app and its data, choose **Remove application → Fully
-delete app and data** in the TUI, or run:
+delete app and data** (selected by default, with confirmation) in the TUI, or run:
 
 ```sh
 sudo abr remove api --purge --dry-run
@@ -411,7 +501,11 @@ Caddy strips Server/Via/X-Powered-By headers, compresses dynamic responses with
 [zstd/gzip](https://caddyserver.com/docs/caddyfile/directives/encode), and serves
 [precompressed Brotli](https://caddyserver.com/docs/caddyfile/directives/file_server)
 for built assets generated during deploy. Versioned Vite/Nuxt assets get immutable
-browser caching; HTML/API/SSR responses keep the application's cache policy.
+browser caching. Existing public PNG, JPG/JPEG, GIF, AVIF, WebP and SVG files
+(including Laravel public storage) are served directly by Caddy with one-day
+browser caching. Stable image filenames are not marked immutable; hashed build
+images keep the one-year immutable policy. Dynamic image routes and HTML/API/SSR
+responses keep the application's cache policy.
 Missing files in `/build/assets/` (Laravel) and `/_nuxt/` (Nuxt) return a direct
 Caddy 404 without calling application workers. Only successful versioned asset
 responses receive the immutable cache policy.
@@ -432,7 +526,8 @@ Deployment history identifies failed commands. Composer download failures sugges
 `abr composer auth` for private-package credentials; inspect application logs privately
 when investigating failures. Secret-file reads reject symlinks/special files and
 are limited to 1 MiB. Deployment logs and backups have no automatic retention;
-monitor disk space and archive them deliberately.
+monitor disk space, archive them deliberately, and use `abr logs clear` to empty
+selected file logs when needed.
 
 ## Development
 
@@ -456,7 +551,17 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/abr-linux-amd64 ./cmd/abr
 
 [config.example.toml](config.example.toml) documents the configuration;
 `abr config example` prints the embedded copy without changing live settings.
-`abr help` lists commands; `abr doctor` checks portable config/registry/port availability.
+`abr help` lists commands. On the Ubuntu host, `sudo abr doctor` checks configuration,
+port reservations and TCP endpoint services. A listener owned by the expected active
+systemd service (including its child processes) is `OK`. Free ports are `OK` for
+disabled or undeployed services. Foreign listeners, missing listeners for enabled
+apps, and invalid state are `ERROR`; owners that cannot be verified are `UNVERIFIED`.
+Errors and unverified results exit nonzero. The TUI's **Tools → Check configuration
+and ports** runs the same check and shows **Checks passed** or **Checks need attention**.
+The check uses one systemd query and one listener snapshot, makes no service changes,
+and checks neither HTTPS responses nor databases nor services without TCP endpoints.
+On macOS it reports local port availability only and explicitly notes that app health
+was not checked. `--dry-run` validates configuration and previews the host checks.
 CI uses one Ubuntu runner to check formatting/vet/race tests, scan reachable Go
 dependency vulnerabilities, build the standalone Linux AMD64 binary,
 and run actual setup/deployment/backup/restore tests from an isolated binary.

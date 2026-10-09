@@ -85,11 +85,16 @@ func TestFullRemovalChoiceAndConfirmation(t *testing.T) {
 	m := newModel(o)
 	m.appAction(app, "remove")
 	m.next()
-	if strings.Join(m.current.args, " ") != "remove example" || m.approved || m.page != "confirm" {
-		t.Fatal("ordinary removal did not remain the default")
+	if strings.Join(m.current.args, " ") != "remove example --purge --yes" || m.approved || m.page != "confirm" {
+		t.Fatal("full removal must be selected by default and require confirmation")
 	}
 	m.removeForm(app)
 	press(m, tea.KeyDown)
+	m.next()
+	if strings.Join(m.current.args, " ") != "remove example" || !strings.Contains(m.reviewText, "are kept") || m.approved || m.busy {
+		t.Fatal("data-preserving removal is unavailable or skipped review")
+	}
+	m.removeForm(app)
 	m.next()
 	if strings.Join(m.current.args, " ") != "remove example --purge --yes" || !strings.Contains(m.reviewText, app.Directory) || !strings.Contains(m.reviewText, "cannot be undone") || m.approved || m.busy {
 		t.Fatalf("full deletion skipped review: %s %v", m.reviewText, m.current.args)
@@ -101,7 +106,6 @@ func TestFullRemovalChoiceAndConfirmation(t *testing.T) {
 	default:
 	}
 	m.removeForm(app)
-	press(m, tea.KeyDown)
 	m.next()
 	press(m, 'y')
 	press(m, tea.KeyEnter)
