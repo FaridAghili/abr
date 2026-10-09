@@ -54,7 +54,7 @@
             }
             handle {
                 header @images {
-                    Cache-Control "public, max-age=86400"
+                    Cache-Control "public, max-age=2592000"
                     match status 200 206 304
                 }
                 file_server {
@@ -70,7 +70,7 @@
     # Stable filenames get a short cache lifetime so replacements can refresh.
     handle @images {
         header {
-            Cache-Control "public, max-age=86400"
+            Cache-Control "public, max-age=2592000"
             match status 200 206 304
         }
         file_server {
