@@ -246,6 +246,28 @@ review dependencies and commit lockfiles. This is not a sandbox for hostile apps
 Initial clones use `_apt` and a temporary SSH identity; root publishes the
 checkout before registration assigns it to the dedicated app user.
 
+For Laravel apps, choose **Artisan shell** from the app menu. Run commands such
+as `artisan cache:clear`, `artisan db:seed`, or your project's admin creation
+command; interactive prompts work normally. Type `exit` to return to the menu.
+`php artisan ...` also uses Abr's managed PHP version in this shell. Commands run
+in the app directory as its recorded Ubuntu user, with the same production
+environment as its services. Laravel reads the project's `.env`; shell history
+is not saved. Changes and generated files use the app user's permissions.
+
+The CLI also supports `sudo abr shell api` and scriptable commands:
+
+```sh
+sudo abr artisan api cache:clear
+sudo abr artisan api db:seed --force --no-interaction
+sudo abr artisan api your:admin-command
+```
+
+Put Abr flags before the app name, for example
+`sudo abr artisan --dry-run api cache:clear`. Arguments after the app name pass
+directly to Artisan without shell evaluation. Enter passwords through your
+command's prompts instead of command arguments. Abr does not record these
+sessions in deployment logs.
+
 ```sh
 sudo abr clone git@github.com:OWNER/WEB.git web
 sudo abr register --name web --type nuxt --domain example.com

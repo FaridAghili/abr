@@ -33,6 +33,7 @@ type Options struct {
 	RunCommand                                           func([]string, io.Writer) error
 	ComposerAuth                                         func(string, string, string, io.Writer) error
 	EnvEditor                                            func(string) (*exec.Cmd, error)
+	ArtisanShell                                         func(string) (*exec.Cmd, error)
 }
 
 func Run(o Options) error {
@@ -280,6 +281,9 @@ func (m *model) appMenu(app config.App) tea.Cmd {
 	if app.Database.Enabled {
 		choices = append(choices, huh.NewOption("Database", "database-menu"))
 	}
+	if app.Type == "laravel" {
+		choices = append(choices, huh.NewOption("Artisan shell", "artisan-shell"))
+	}
 	choices = append(choices, huh.NewOption("More actions", "more"), huh.NewOption("Back", "back"))
 	var selected string
 	return m.setForm("app", app.Name, func() tea.Cmd {
@@ -337,6 +341,8 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 		return m.goBack()
 	case "database-menu":
 		return m.databaseMenu(app)
+	case "artisan-shell":
+		return m.artisanShell(app)
 	case "more":
 		return m.moreAppMenu(app)
 	case "deploy":
@@ -509,6 +515,12 @@ func (m *model) start(a action) tea.Cmd {
 }
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case artisanShellFinished:
+		m.busy = false
+		if msg.err != nil {
+			return m, m.workflowError("Artisan shell: "+msg.name, msg.err)
+		}
+		return m, m.appDestination(msg.name, m.appMenu)()
 	case editorFinished:
 		if msg.err != nil {
 			return m, m.workflowError("Edit .env: "+msg.name, msg.err)

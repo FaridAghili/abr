@@ -387,6 +387,22 @@ fixture_git() {
 sudo tee /srv/apps/fixture-php/public/banner.html >/dev/null <<'HTML'
 <!doctype html><html><body>static banner fixture</body></html>
 HTML
+sudo tee -a /srv/apps/fixture-php/routes/console.php >/dev/null <<'PHP'
+
+\Illuminate\Support\Facades\Artisan::command('abr:access-check {value}', function () {
+    if (posix_geteuid() !== posix_getpwnam('abr-fixture-php')['uid'] ||
+        posix_getegid() !== posix_getpwnam('abr-fixture-php')['gid'] ||
+        getcwd() !== '/srv/apps/fixture-php' || getenv('HOME') !== '/var/lib/abr-users/abr-fixture-php' ||
+        getenv('APP_ENV') !== 'production' || getenv('APP_DEBUG') !== 'false' ||
+        !preg_match('/^NoNewPrivs:\s+1$/m', file_get_contents('/proc/self/status')) ||
+        $this->argument('value') !== 'literal $(id) value' || $this->ask('Fixture input') !== 'stdin works') {
+        $this->error('Artisan access check failed');
+        return 1;
+    }
+    file_put_contents(storage_path('abr-access-check'), 'app-owned');
+    $this->info('Artisan access verified');
+});
+PHP
 fixture_git /srv/apps/fixture-php
 abr_ci register --name fixture-php --type laravel --domain fixture-php.localhost --serving-domain extra.fixture-php.localhost --canonical-host non-www --scheduler --build-order composer-first --embed-path /banner.html --embed-path '/ads/*' --embed-origin '*'
 # Database identities use the database name, separately from Ubuntu app users.
@@ -418,6 +434,10 @@ sudo grep -Fx 'APP_ENV=production' /srv/apps/fixture-php/.env
 sudo grep -Fx 'APP_DEBUG=false' /srv/apps/fixture-php/.env
 sudo test ! -f /srv/apps/fixture-php/vendor/autoload.php
 abr_ci deploy fixture-php --no-pull
+printf 'stdin works\n' | abr_ci artisan fixture-php abr:access-check 'literal $(id) value'
+test "$(sudo stat -c '%U:%G' /srv/apps/fixture-php/storage/abr-access-check)" = abr-fixture-php:abr-fixture-php
+abr_ci artisan fixture-php cache:clear --no-interaction
+fixture_refused 'not defined' artisan fixture-php abr:missing-command
 sudo cp /srv/apps/fixture-php/.env "$abr_binary_directory/prepared-php.env"
 abr_ci env fixture-php
 sudo cmp /srv/apps/fixture-php/.env "$abr_binary_directory/prepared-php.env"

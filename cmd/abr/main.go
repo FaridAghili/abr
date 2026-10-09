@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -75,6 +76,8 @@ Commands:
                    Clear file logs (--type all|application|deployment; default all)
   deploy APP...    Pull, install dependencies, build, migrate, enable
   deploy --all     Deploy sequentially
+  artisan APP [COMMAND...]  Run Artisan as the Laravel app user (flags pass through)
+  shell APP        Open a Laravel app shell; artisan cache:clear; exit to return
 
 Paths: --config /etc/abr/config.toml --state-dir /var/lib/abr
        --templates-dir /etc/abr/templates --apps-dir /srv/apps
@@ -127,7 +130,7 @@ func run(args []string, out, stderr io.Writer) error {
 		command, args = "logs clear", args[1:]
 	}
 	switch command {
-	case "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy":
+	case "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -234,7 +237,13 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&deploy.All, "all", false, "deploy all apps sequentially")
 		fs.BoolVar(&deploy.NoPull, "no-pull", false, "deploy current checkout without git pull")
 	}
-	if err := fs.Parse(reorderFlags(args, fs)); err != nil {
+	parseArgs := reorderFlags(args, fs)
+	if command == "artisan" {
+		// Parse Abr options only before APP. Every argument after APP belongs
+		// to Artisan, including --force, --help and flags named like Abr options.
+		parseArgs = args
+	}
+	if err := fs.Parse(parseArgs); err != nil {
 		return helpError(err)
 	}
 	positional := fs.Args()
@@ -263,6 +272,10 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 	}
 	switch command {
+	case "artisan":
+		if len(positional) < 1 {
+			return fmt.Errorf("use abr artisan APP [COMMAND...] (Abr flags go before APP)")
+		}
 	case "logs clear":
 		if clearLogs.All == (len(positional) > 0) {
 			return fmt.Errorf("use abr logs clear APP... --yes, or abr logs clear --all --yes")
@@ -283,7 +296,7 @@ func run(args []string, out, stderr io.Writer) error {
 		if (databaseAdmin && len(positional) != 0) || (!databaseAdmin && len(positional) != 1) {
 			return fmt.Errorf("use abr database APP [--show] or abr database --admin [--show]")
 		}
-	case "enable", "disable", "remove", "edit", "env":
+	case "enable", "disable", "remove", "edit", "env", "shell":
 		if len(positional) != 1 {
 			return fmt.Errorf("use abr %s APP", command)
 		}
@@ -320,6 +333,16 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	h.Manager = m
 	switch command {
+	case "artisan", "shell":
+		if command == "shell" && !h.DryRun && !terminalAvailable(out) {
+			return fmt.Errorf("shell requires a terminal; use abr artisan APP COMMAND for scripts")
+		}
+		process, err := h.LaravelProcess(positional[0], positional[1:], command == "shell")
+		if err != nil || process == nil {
+			return err
+		}
+		process.Stdin, process.Stdout, process.Stderr = os.Stdin, out, stderr
+		return process.Run()
 	case "disk":
 		name := ""
 		if len(positional) == 1 {
@@ -374,6 +397,9 @@ func run(args []string, out, stderr io.Writer) error {
 				return run(append(append([]string(nil), base...), command...), output, output)
 			},
 			EnvEditor: editorHost.EnvEditor,
+			ArtisanShell: func(name string) (*exec.Cmd, error) {
+				return editorHost.LaravelProcess(name, nil, true)
+			},
 			ComposerAuth: func(repository, username, password string, output io.Writer) error {
 				commandHost := h
 				commandHost.Output = output

@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"abr/internal/config"
@@ -152,10 +154,17 @@ func (h Host) environmentAccount(a config.App) (userRecord, error) {
 }
 
 func environmentProcess(a config.App, program string, args ...string) *exec.Cmd {
+	return appProcess(a, nil, program, args...)
+}
+
+func appProcess(a config.App, environment map[string]string, program string, args ...string) *exec.Cmd {
 	command := []string{"--user", a.User, "--", "env", "-i", "HOME=/var/lib/abr-users/" + a.User, "USER=" + a.User, "LOGNAME=" + a.User, "LANG=C.UTF-8", "PATH=/usr/local/bin:/usr/bin:/bin"}
-	if program == "/usr/bin/nano" {
-		command = append(command, "TERM="+os.Getenv("TERM"))
+	for _, key := range slices.Sorted(maps.Keys(environment)) {
+		if key != "PATH" && key != "HOME" && key != "USER" && key != "LOGNAME" {
+			command = append(command, key+"="+environment[key])
+		}
 	}
+	command = append(command, "TERM="+os.Getenv("TERM"))
 	command = append(command, "/usr/bin/setpriv", "--no-new-privs", "--", program)
 	command = append(command, args...)
 	cmd := exec.Command("/usr/sbin/runuser", command...)
