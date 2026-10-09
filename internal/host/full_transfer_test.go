@@ -336,6 +336,9 @@ func TestRestoreApplicationOrderingCredentialsAndBuildFailures(t *testing.T) {
 			t.Run(order+map[bool]string{false: "/success", true: "/failure"}[failBuild], func(t *testing.T) {
 				source, _, output, cleanup := fullFixture(t, false)
 				defer cleanup()
+				if err := source.ComposerAuth("packages.example.invalid", "fixture", "fixture-token"); err != nil {
+					t.Fatal(err)
+				}
 				a, _, err := source.application("app")
 				if err != nil {
 					t.Fatal(err)
@@ -377,6 +380,17 @@ func TestRestoreApplicationOrderingCredentialsAndBuildFailures(t *testing.T) {
 				runner := &fullRunner{base: base, cloneSource: repository, freshRoot: h.root}
 				imported := false
 				runner.onCommand = func(c Command) error {
+					if c.Name == "setfacl" && strings.HasSuffix(c.Args[len(c.Args)-1], "/composer/.htaccess") {
+						guard := h.path(filepath.Join(h.composerDir(), ".htaccess"))
+						data, err := os.ReadFile(guard)
+						if err != nil || string(data) != "Deny from all\n" {
+							t.Fatal("Composer access granted before restoring its home guard", err)
+						}
+						info, err := os.Stat(guard)
+						if err != nil || info.Mode().Perm() != 0600 {
+							t.Fatal("Composer home guard is not private", err)
+						}
+					}
 					if c.Name == "mysql" && c.Stdin != nil {
 						imported = true
 						if !c.Private || strings.Contains(strings.Join(c.Args, " "), creds.Password) {

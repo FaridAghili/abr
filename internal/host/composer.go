@@ -54,12 +54,16 @@ func (h Host) ComposerAuth(repository, username, password string) error {
 			return err
 		}
 		// Composer's home is root-owned/read-only to apps. Caches stay per user.
-		if err := h.write(filepath.Join(h.composerDir(), ".htaccess"), []byte("Deny from all\n"), 0600); err != nil {
+		if err := h.writeComposerGuard(); err != nil {
 			return err
 		}
 		h.say("Saved shared Composer credentials for %s; future deployments reuse them", repository)
 		return nil
 	})
+}
+
+func (h Host) writeComposerGuard() error {
+	return h.write(filepath.Join(h.composerDir(), ".htaccess"), []byte("Deny from all\n"), 0600)
 }
 
 func (h Host) composerPath(path string, directory bool) error {

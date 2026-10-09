@@ -544,6 +544,13 @@ func (h Host) restoreApplications(m backup.Manifest, stage string) (result error
 		if err := h.write(filepath.Join(h.Manager.StateDir, name), data, 0600); err != nil {
 			return err
 		}
+		if name == "composer/auth.json" {
+			// The backup records credentials; recreate Composer's generated home
+			// guard before deployments grant apps read access to that home.
+			if err := h.writeComposerGuard(); err != nil {
+				return err
+			}
+		}
 	}
 	for _, a := range m.Config.Apps {
 		record := m.Apps[slices.IndexFunc(m.Apps, func(record backup.App) bool { return record.Name == a.Name })]
