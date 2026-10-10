@@ -89,6 +89,10 @@ PY
   sudo useradd --no-create-home --shell /bin/sh abr-backup-fixture
   printf 'abr-backup-fixture:ci-backup-password\n' | sudo chpasswd
   sudo install -d -m 700 -o abr-backup-fixture -g abr-backup-fixture "$app_backup_password_remote"
+  # Use a separate host identity: OpenSSH can reuse a trusted default-port key
+  # on another port, which would bypass the unknown-host error fixture.
+  sudo ssh-keygen -q -t ed25519 -N '' -f "$abr_binary_directory/backup-sshd-host-key"
+  app_backup_password_fingerprint=$(sudo ssh-keygen -lf "$abr_binary_directory/backup-sshd-host-key.pub" -E sha256 | awk '{print $2}')
   app_backup_port=$(python3 - <<'PY'
 import socket
 with socket.socket() as s:
@@ -99,7 +103,7 @@ PY
   cat > "$abr_binary_directory/backup-sshd.conf" <<EOF
 Port $app_backup_port
 ListenAddress 127.0.0.1
-HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey $abr_binary_directory/backup-sshd-host-key
 PidFile $abr_binary_directory/backup-sshd.pid
 PasswordAuthentication yes
 KbdInteractiveAuthentication no
@@ -113,7 +117,7 @@ EOF
     --path "$app_backup_password_remote" --ssh-port "$app_backup_port" --password-stdin
   fixture_refused 'SSH host key is not trusted' backup test
   abr_ci backup host-key
-  abr_ci backup trust --fingerprint "$app_backup_fingerprint"
+  abr_ci backup trust --fingerprint "$app_backup_password_fingerprint"
   printf 'ci-incorrect-password\n' | abr_ci backup configure --host 127.0.0.1 --user abr-backup-fixture \
     --path "$app_backup_password_remote" --ssh-port "$app_backup_port" --password-stdin
   fixture_refused 'SSH password authentication failed' backup test
