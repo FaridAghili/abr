@@ -25,6 +25,7 @@ type Command struct {
 	Input      []byte
 	Stdin      io.Reader  // Stream SQL imports without retaining them in memory.
 	Stdout     io.Writer  // Stream dumps directly to a private file, never logs.
+	Stderr     io.Writer  // Optional private diagnostic capture, separate from results and logs.
 	Stream     bool       // Commands whose return output is unused must not accumulate it.
 	Private    bool       // Never display SQL or its error output, which can contain credentials.
 	ExtraFiles []*os.File // Private descriptors, e.g. SSH password input; never args/environment.
@@ -119,6 +120,9 @@ func (r ExecRunner) Run(c Command) ([]byte, error) {
 	cmd.Stderr = io.Discard
 	if log != nil {
 		cmd.Stderr = log
+	}
+	if c.Stderr != nil {
+		cmd.Stderr = c.Stderr
 	}
 	if err := cmd.Run(); err != nil {
 		// Output is streamed/logged for ordinary commands; never put it in errors.

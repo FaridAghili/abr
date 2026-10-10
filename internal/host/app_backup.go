@@ -361,7 +361,8 @@ func (h Host) backupSSH(o BackupOptions, command string, input io.Reader) ([]byt
 	if o.Password != "" {
 		args = append(args, "-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no", "-o", "NumberOfPasswordPrompts=1")
 	}
-	c := Command{Name: "ssh", Args: append(args, "--", o.Remote, command), Stdin: input, Private: true}
+	var diagnostics commandOutput
+	c := Command{Name: "ssh", Args: append(args, "--", o.Remote, command), Stdin: input, Stderr: &diagnostics, Private: true}
 	if o.Password != "" {
 		secret, err := os.CreateTemp(h.path(h.Manager.StateDir), ".ssh-password-")
 		if err != nil {
@@ -377,5 +378,9 @@ func (h Host) backupSSH(o BackupOptions, command string, input io.Reader) ([]byt
 		}
 		c.Name, c.Args, c.ExtraFiles = "sshpass", append([]string{"-d", "3", "/usr/bin/ssh"}, c.Args...), []*os.File{secret}
 	}
-	return h.run("Transfer or verify private backup destination", c)
+	out, err := h.run("Transfer or verify private backup destination", c)
+	if err != nil {
+		return out, backupSSHError(o, diagnostics.Bytes(), err)
+	}
+	return out, nil
 }

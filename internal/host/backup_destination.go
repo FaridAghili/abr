@@ -160,7 +160,7 @@ func (h Host) backupOptions(o BackupOptions) (BackupOptions, error) {
 	} else {
 		o.KeyFile = h.path(h.backupIdentity())
 		if err := h.gitFile(o.KeyFile, false); err != nil {
-			return o, err
+			return o, fmt.Errorf("backup SSH private key %s: %w", o.KeyFile, err)
 		}
 	}
 	return o, nil
@@ -179,20 +179,19 @@ func (h Host) TestBackupDestination() error {
 			h.say("Would verify SSH access and private remote directory; no connection made")
 			return nil
 		}
-		command := "sh -c " + shellQuote(`set -eu
-directory=$1
-test -d "$directory"
-test "$(realpath -e -- "$directory")" = "$directory"
-test "$(stat -c '%u:%a' -- "$directory")" = "$(id -u):700"
-test -w "$directory"
-printf 'ABR_DESTINATION_OK\n'
-`) + " abr-backup " + shellQuote(o.RemoteDir)
+		command := "sh -c " + shellQuote(backupDestinationCheck) + " abr-backup " + shellQuote(o.RemoteDir)
 		out, err := h.backupSSH(o, command, nil)
+		if checkErr := backupDestinationError(o, out); checkErr != nil {
+			if err != nil && strings.TrimSpace(string(out)) == "ABR_DESTINATION_ERROR write" {
+				return fmt.Errorf("%w: %v", checkErr, err)
+			}
+			return checkErr
+		}
 		if err != nil {
-			return fmt.Errorf("SSH destination check failed; verify credentials, SSH host fingerprint and remote directory ownership/mode: %w", err)
+			return err
 		}
 		if strings.TrimSpace(string(out)) != "ABR_DESTINATION_OK" {
-			return fmt.Errorf("backup destination verification receipt invalid")
+			return fmt.Errorf("backup server did not return a valid directory check result; check the SSH account's shell and login scripts")
 		}
 		h.say("Backup destination verified: %s:%s", o.Remote, o.RemoteDir)
 		return nil

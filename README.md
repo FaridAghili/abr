@@ -514,6 +514,13 @@ and tests SSH access and the directory, without a manual SSH login. Already
 trusted keys need no new confirmation; changed keys are refused and existing
 trust is preserved. Saving settings alone does not verify a connection.
 
+The test reports the failing check and how to fix it: SSH authentication or
+connectivity, a missing directory, symlinked path, incorrect owner, permissions
+other than 0700, or inability to create and remove a small test file. For example,
+a directory with mode 0750 reports its current mode and the `chmod 700` command
+to run on the backup server. SSH diagnostics are kept private; passwords and
+server banners are never included in these error messages.
+
 The same setup is scriptable:
 
 ```sh

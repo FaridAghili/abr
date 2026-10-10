@@ -21,7 +21,20 @@
   sudo cp /root/.ssh/known_hosts "$abr_binary_directory/backup-known-hosts-before"
   abr_ci backup trust --fingerprint "$app_backup_fingerprint"
   sudo cmp /root/.ssh/known_hosts "$abr_binary_directory/backup-known-hosts-before"
+  sudo chmod 750 "$app_backup_remote"
+  fixture_refused 'has mode 0750; required mode is 0700' backup test
+  sudo chmod 700 "$app_backup_remote"
+  abr_ci backup configure --host 127.0.0.1 --user root --path "$app_backup_remote/missing"
+  fixture_refused 'does not exist' backup test
+  sudo ln -s "$app_backup_remote" "$abr_binary_directory/backup-alias"
+  abr_ci backup configure --host 127.0.0.1 --user root --path "$abr_binary_directory/backup-alias"
+  fixture_refused 'resolves through a symlink' backup test
+  printf 'preserved fixture data\n' > "$abr_binary_directory/backup-not-directory"
+  abr_ci backup configure --host 127.0.0.1 --user root --path "$abr_binary_directory/backup-not-directory"
+  fixture_refused 'is not a directory' backup test
+  abr_ci backup configure --host 127.0.0.1 --user root --path "$app_backup_remote"
   abr_ci backup test
+  sudo test -z "$(sudo find "$app_backup_remote" -maxdepth 1 -name '.abr-destination-check-*' -print)"
   sudo systemctl show caddy php8.5-fpm redis-server abr-fixture-php-queue@1.service \
     --property=Id,MainPID,ActiveState > "$abr_binary_directory/app-services-before"
   abr_ci backup --all --transfer --output-dir "$app_backup_local"
@@ -98,13 +111,33 @@ EOF
   app_backup_sshd_pid=$(sudo cat "$abr_binary_directory/backup-sshd.pid")
   printf 'ci-backup-password\n' | abr_ci backup configure --host 127.0.0.1 --user abr-backup-fixture \
     --path "$app_backup_password_remote" --ssh-port "$app_backup_port" --password-stdin
+  fixture_refused 'SSH host key is not trusted' backup test
   abr_ci backup host-key
   abr_ci backup trust --fingerprint "$app_backup_fingerprint"
+  printf 'ci-incorrect-password\n' | abr_ci backup configure --host 127.0.0.1 --user abr-backup-fixture \
+    --path "$app_backup_password_remote" --ssh-port "$app_backup_port" --password-stdin
+  fixture_refused 'SSH password authentication failed' backup test
+  printf 'ci-backup-password\n' | abr_ci backup configure --host 127.0.0.1 --user abr-backup-fixture \
+    --path "$app_backup_password_remote" --ssh-port "$app_backup_port" --password-stdin
+  sudo chown root "$app_backup_password_remote"
+  fixture_refused 'is owned by UID 0; SSH user abr-backup-fixture has UID' backup test
+  sudo chown abr-backup-fixture "$app_backup_password_remote"
+  sudo install -d -m 700 "$abr_binary_directory/backup-inaccessible-parent"
+  sudo install -d -m 700 -o abr-backup-fixture -g abr-backup-fixture "$abr_binary_directory/backup-inaccessible-parent/archives"
+  printf 'ci-backup-password\n' | abr_ci backup configure --host 127.0.0.1 --user abr-backup-fixture \
+    --path "$abr_binary_directory/backup-inaccessible-parent/archives" --ssh-port "$app_backup_port" --password-stdin
+  fixture_refused 'lacks execute permission on a parent directory' backup test
+  printf 'ci-backup-password\n' | abr_ci backup configure --host 127.0.0.1 --user abr-backup-fixture \
+    --path "$app_backup_password_remote" --ssh-port "$app_backup_port" --password-stdin
   abr_ci backup test
   abr_ci backup fixture-octane --transfer --output-dir "$app_backup_local"
   sudo test "$(sudo find "$app_backup_password_remote" -maxdepth 1 -name '*.tar.gz' | wc -l)" = 1
+  sudo test -z "$(sudo find "$app_backup_password_remote" -maxdepth 1 -name '.abr-destination-check-*' -print)"
+  sudo kill "$app_backup_sshd_pid"
+  app_backup_sshd_pid=''
+  fixture_refused 'SSH connection was refused' backup test
   # Clear only this test's destination so the following full-server round trip
   # continues without depending on the temporary SSH daemon.
   sudo rm /var/lib/abr-ci/backup-destination.json
-  echo 'Online app backup, verified SSH transfer, password auth and failure retention passed.'
+  echo 'Online app backup, verified SSH transfer, password auth, destination diagnostics and failure retention passed.'
 )

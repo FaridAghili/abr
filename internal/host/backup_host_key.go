@@ -39,9 +39,10 @@ func (h Host) backupHostKey() (backup.HostKey, error) {
 		key.Known = true
 		return key, nil
 	}
-	out, err := h.run("Read backup server ED25519 host key", Command{Name: "ssh-keyscan", Args: []string{"-T", "15", "-p", strconv.Itoa(d.Port), "-t", "ed25519", d.Host}, Private: true})
+	var diagnostics commandOutput
+	out, err := h.run("Read backup server ED25519 host key", Command{Name: "ssh-keyscan", Args: []string{"-T", "15", "-p", strconv.Itoa(d.Port), "-t", "ed25519", d.Host}, Stderr: &diagnostics, Private: true})
 	if err != nil {
-		return key, fmt.Errorf("cannot read backup server host key; check its address, SSH port and connectivity: %w", err)
+		return key, fmt.Errorf("cannot read backup server host key; check its address, SSH port and connectivity: %w", backupSSHError(BackupOptions{Remote: d.User + "@" + d.Host, SSHPort: d.Port}, diagnostics.Bytes(), err))
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
@@ -52,6 +53,9 @@ func (h Host) backupHostKey() (backup.HostKey, error) {
 			return key, fmt.Errorf("unexpected or conflicting backup server host keys")
 		}
 		key.Key = fields[2]
+	}
+	if key.Key == "" {
+		return key, fmt.Errorf("backup server %s did not provide an ED25519 host key; check that sshd is running on port %d and has an ED25519 host key", d.Host, d.Port)
 	}
 	key.Fingerprint, err = backup.ED25519Fingerprint(key.Key)
 	if err != nil {

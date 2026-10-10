@@ -53,11 +53,11 @@ func TestFullTransferFormsReviewAndNavigation(t *testing.T) {
 }
 
 func TestBackupHostIdentityWorkflow(t *testing.T) {
-	for _, scenario := range []string{"unknown", "known", "cancel", "scan-failure", "trust-failure", "preview"} {
+	for _, scenario := range []string{"unknown", "known", "cancel", "scan-failure", "trust-failure", "test-failure", "preview"} {
 		t.Run(scenario, func(t *testing.T) {
 			o := testOptions(t)
 			o.DryRun = scenario == "preview"
-			key := backup.HostKey{Address: "[192.0.2.10]:2222", Fingerprint: "SHA256:fixture-fingerprint", Known: scenario == "known"}
+			key := backup.HostKey{Address: "[192.0.2.10]:2222", Fingerprint: "SHA256:fixture-fingerprint", Known: scenario == "known" || scenario == "test-failure"}
 			var calls []string
 			o.BackupHostKey = func(io.Writer) (backup.HostKey, error) {
 				calls = append(calls, "inspect")
@@ -78,6 +78,9 @@ func TestBackupHostIdentityWorkflow(t *testing.T) {
 			}
 			o.RunCommand = func(args []string, _ io.Writer) error {
 				calls = append(calls, strings.Join(args, " "))
+				if scenario == "test-failure" {
+					return errors.New("backup directory has mode 0750; required mode is 0700. On the backup server, run: chmod 700 /srv/backups/abr")
+				}
 				return nil
 			}
 			m := newModel(o)
@@ -91,10 +94,13 @@ func TestBackupHostIdentityWorkflow(t *testing.T) {
 				}
 				return
 			}
-			if scenario == "known" {
+			if scenario == "known" || scenario == "test-failure" {
 				finishStep(t, m)
 				if strings.Join(calls, ",") != "inspect,backup test" {
 					t.Fatal("known host was prompted/trusted again", calls)
+				}
+				if scenario == "test-failure" && (m.result == nil || !strings.Contains(m.output, "has mode 0750; required mode is 0700") || !strings.Contains(m.View().Content, "Command failed") || strings.Contains(m.output, "Next:")) {
+					t.Fatal("destination failure lost detail or showed success guidance", m.output)
 				}
 				return
 			}
