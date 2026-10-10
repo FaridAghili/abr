@@ -117,7 +117,7 @@ func (h Host) BackupApps(names []string, o BackupOptions) error {
 					return err
 				}
 			}
-			stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
+			stamp := time.Now().UTC().Format("20060102150405")
 			for _, a := range selected {
 				output := filepath.Join(o.OutputDir, a.Name+"-"+stamp+".tar.gz")
 				if err := h.captureAppBackup(a, c, r, settings, shared, output); err != nil {

@@ -133,7 +133,7 @@ func TestOnlineAppBackupReviewAndRestoreDirectory(t *testing.T) {
 		t.Fatal("online transfer review inaccurate")
 	}
 	directory := t.TempDir()
-	for _, name := range []string{"api-20261010T020000Z.tar.gz", "portal-20261010T020000Z.tar.gz", "ignored.sql"} {
+	for _, name := range []string{"api-20261010020000.tar.gz", "portal-20261010020000.tar.gz", "ignored.sql"} {
 		if err := os.WriteFile(filepath.Join(directory, name), nil, 0600); err != nil {
 			t.Fatal(err)
 		}

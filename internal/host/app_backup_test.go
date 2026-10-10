@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -58,8 +59,8 @@ func TestAppBackupSequentialVerifiedCleanupAndMerge(t *testing.T) {
 		}
 		f := c.Stdin.(*os.File)
 		name := filepath.Base(f.Name())
-		if !strings.HasSuffix(name, "Z.tar.gz") || !strings.Contains(name, "-20") {
-			t.Fatal("archive lacks app/timestamp", name)
+		if !regexp.MustCompile(`^(app|second)-[0-9]{14}\.tar\.gz$`).MatchString(name) {
+			t.Fatal("archive lacks compact app/timestamp filename", name)
 		}
 		path := filepath.Join(remote, name)
 		if err := os.WriteFile(path, data, 0600); err != nil {

@@ -538,7 +538,7 @@ archive and stops the run. Already transferred apps remain backed up. No existin
 remote file is overwritten, and partial uploads are not published.
 
 Names include the app and a UTC run timestamp, for example
-`api-20261010T020000.123456789Z.tar.gz`. Local staging is removed after each app;
+`api-20261010020000.tar.gz`. Local staging is removed after each app;
 peak local space covers one app's uncompressed capture and compressed archive,
 plus small shared recovery settings. The default archive directory is
 `/var/backups/abr/apps`; `--output-dir` overrides it. Remote archives are private

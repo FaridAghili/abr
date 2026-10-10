@@ -29,7 +29,7 @@
     --property=Id,MainPID,ActiveState > "$abr_binary_directory/app-services-after"
   cmp "$abr_binary_directory/app-services-before" "$abr_binary_directory/app-services-after"
   sudo python3 - "$app_backup_local" "$app_backup_remote" <<'PY'
-import json, sys, tarfile
+import json, re, sys, tarfile
 from pathlib import Path
 local, remote = map(Path, sys.argv[1:])
 assert not list(local.glob('*.tar.gz'))
@@ -40,7 +40,7 @@ for archive in archives:
     with tarfile.open(archive) as tar:
         m = json.load(tar.extractfile('manifest.json'))
         app = m['apps'][0]['name']
-        assert archive.name.startswith(app + '-20')
+        assert re.fullmatch(re.escape(app) + r'-[0-9]{14}\.tar\.gz', archive.name)
         assert m['scope'] == 'app'
         assert len(m['apps']) == 1
         assert len(m['apps'][0]['commit']) == 40
