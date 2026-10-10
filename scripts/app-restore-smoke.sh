@@ -7,6 +7,13 @@
   set -euo pipefail
   mapfile -t app_restore_archives < <(sudo find /var/backups/abr-ci-app-remote -maxdepth 1 -name '*.tar.gz' | sort)
   test "${#app_restore_archives[@]}" = 4
+  # Validate the combined archives only after the disposable target is fresh.
+  abr_ci restore "${app_restore_archives[@]}" --dry-run
+  sudo test ! -e /var/lib/abr-ci/setup.json
+  sudo test ! -e /etc/abr-ci/config.toml
+  for app_restore_name in fixture-php fixture-octane fixture-ssr fixture-spa; do
+    sudo test ! -e "/srv/apps/$app_restore_name"
+  done
   abr_ci restore "${app_restore_archives[@]}" --yes --admin-user root --ssh-port 22
   sudo cmp /srv/apps/fixture-php/.env "$abr_binary_directory/full-env-before"
   sudo cmp /var/lib/abr-ci/databases/fixture-php.json "$abr_binary_directory/full-db-before"

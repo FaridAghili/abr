@@ -46,10 +46,15 @@ for archive in archives:
             assert tar.extractfile(f'apps/{app}/storage/app/custom/data.txt').read() == b'saved custom storage\n'
         assert not any(n.startswith(('redis/', 'caddy/')) for n in tar.getnames())
 PY
-  # Validate all separate archives as one restore without changing this host.
+  # Empty abr state alone is not a fresh target: existing projects must still
+  # prevent a restore preview, without creating state or changing the apps.
   mapfile -t app_backup_archives < <(sudo find "$app_backup_remote" -maxdepth 1 -name '*.tar.gz' | sort)
-  sudo "$abr_test_binary" --config "$abr_binary_directory/app-restore/config.toml" \
-    --state-dir "$abr_binary_directory/app-restore/state" restore "${app_backup_archives[@]}" --dry-run
+  if sudo "$abr_test_binary" --config "$abr_binary_directory/app-restore/config.toml" \
+    --state-dir "$abr_binary_directory/app-restore/state" restore "${app_backup_archives[@]}" --dry-run \
+    > "$abr_binary_directory/app-restore-refusal.log" 2>&1; then
+    echo 'Restore preview accepted existing projects' >&2; exit 1
+  fi
+  grep -F 'restore target already exists: /srv/apps/' "$abr_binary_directory/app-restore-refusal.log"
   sudo test ! -e "$abr_binary_directory/app-restore/state"
   # Fail on a nonexistent remote directory, retain the first local archive and
   # never advance to the second selected app.

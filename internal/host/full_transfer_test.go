@@ -185,7 +185,12 @@ func readFullArchive(t *testing.T, path string) (backup.Manifest, string) {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	stage := t.TempDir()
+	// macOS temporary paths can include /var, a system symlink. Model the
+	// canonical staging path required by the restore file checks.
+	stage, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	m, err := backup.Extract(f, stage)
 	if err != nil {
 		t.Fatal(err)
