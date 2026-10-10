@@ -12,7 +12,7 @@ func (m *model) footer() string {
 	case "details":
 		return "↑/↓ scroll · Enter / Esc back"
 	case "confirm":
-		return "←/→ choose · enter confirm · esc cancel"
+		return "←/→ choose · Enter confirm · Esc back"
 	case "output":
 		footer := "↑/↓ scroll"
 		if !m.busy && isLogView(m.current.args) {
@@ -36,9 +36,9 @@ func (m *model) footer() string {
 		if m.form != nil {
 			switch m.form.GetFocusedField().(type) {
 			case *huh.MultiSelect[string]:
-				footer = "Space toggle · Enter next · Esc cancel"
+				footer = "Space toggle · Enter next\nShift+Tab back · Esc cancel"
 			case *huh.Select[string], *huh.Select[bool]:
-				footer = "↑/↓ choose · Enter next · Esc cancel"
+				footer = "↑/↓ choose · Enter next\nShift+Tab back · Esc cancel"
 			}
 		}
 	}

@@ -17,7 +17,7 @@ Abr 1.0.0 is the initial release for fresh Ubuntu 26.04 LTS AMD64 servers.
 
 Download `abr-linux-amd64` for standalone installation. The
 `abr_1.0.0_linux_amd64.tar.gz` bundle contains the same executable as `abr`, editable
-templates, the generic example config and the README. `SHA256SUMS` covers both
+templates, the generic example config and documentation. `SHA256SUMS` covers both
 downloads. The executable embeds its default templates and example config.
 
 Follow the README's fresh-VPS setup instructions. Release publishing requires

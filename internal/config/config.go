@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -137,16 +138,22 @@ func (c Config) Validate() error {
 			domains[d] = a.Name
 		}
 	}
-	// Separate runtime users and directory trees prevent cross-app ownership changes.
-	for i, a := range c.Apps {
-		for _, b := range c.Apps[i+1:] {
-			if a.User == b.User {
-				return fmt.Errorf("apps %q and %q share runtime user %q", a.Name, b.Name, a.User)
-			}
-			left, right := filepath.Clean(a.Directory)+string(filepath.Separator), filepath.Clean(b.Directory)+string(filepath.Separator)
-			if strings.HasPrefix(left, right) || strings.HasPrefix(right, left) {
-				return fmt.Errorf("apps %q and %q have overlapping directory trees", a.Name, b.Name)
-			}
+	// Sorted, separator-terminated paths put a parent immediately before its
+	// first child. Avoid comparing every pair each time a menu loads config.
+	users := make(map[string]string, len(c.Apps))
+	paths := make([]string, 0, len(c.Apps))
+	for _, a := range c.Apps {
+		if owner, ok := users[a.User]; ok {
+			return fmt.Errorf("apps %q and %q share runtime user %q", owner, a.Name, a.User)
+		}
+		users[a.User] = a.Name
+		path := strings.TrimSuffix(filepath.Clean(a.Directory), string(filepath.Separator)) + string(filepath.Separator)
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	for i := 1; i < len(paths); i++ {
+		if strings.HasPrefix(paths[i], paths[i-1]) {
+			return fmt.Errorf("apps %q and %q have overlapping directory trees", directories[filepath.Clean(paths[i-1])], directories[filepath.Clean(paths[i])])
 		}
 	}
 	return nil

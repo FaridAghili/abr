@@ -398,7 +398,7 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 }
 
 func (m *model) removeForm(app config.App) tea.Cmd {
-	purge := true
+	purge := false
 	return m.setForm("form", "Remove "+app.Name, func() tea.Cmd {
 		a := action{title: "Remove " + app.Name, args: []string{"remove", app.Name}, note: "Stops this app and removes its managed services, user, configuration and port reservations. Project files, uploads, home, database and credentials are kept."}
 		if purge {
@@ -407,9 +407,9 @@ func (m *model) removeForm(app config.App) tea.Cmd {
 			a.note = "Permanently delete " + app.Directory + " (including .env and uploads), the app's home, managed database and DB user, credentials, deployment history, services, configuration and port reservations. This cannot be undone. Shared server tools, shared Composer/Git credentials, self-managed databases and separately exported backups stay."
 		}
 		return m.review(a)
-	}, huh.NewGroup(huh.NewSelect[bool]().Title("What should be removed?").Description("Keep data for later, or permanently delete this app and its data.\nExample: full deletion for an app you no longer need.").Options(
-		huh.NewOption("Fully delete app and data", true),
-		huh.NewOption("Remove services; keep files and database", false)).Value(&purge)))
+	}, huh.NewGroup(huh.NewSelect[bool]().Title("What should be removed?").Description("Keep your data, or permanently delete it.\nExample: keep files and the database to use them later.").Options(
+		huh.NewOption("Remove services; keep data (default)", false),
+		huh.NewOption("Permanently delete app and data", true)).Value(&purge)))
 }
 
 func (m *model) serviceForm(app config.App, command string) tea.Cmd {
@@ -846,11 +846,12 @@ func (m *model) appendOutput(s string) {
 	}
 	m.output += text.String()
 	if len(m.output) > outputLimit {
-		cut := len(m.output) - outputLimit
+		const omitted = "[Earlier output omitted]\n"
+		cut := len(m.output) - outputLimit + len(omitted)
 		for cut < len(m.output) && !utf8.RuneStart(m.output[cut]) {
 			cut++
 		}
-		m.output = "[Earlier output omitted]\n" + m.output[cut:]
+		m.output = omitted + m.output[cut:]
 	}
 	m.viewport.SetContent(m.output)
 }

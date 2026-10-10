@@ -2,11 +2,32 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func BenchmarkValidateApps(b *testing.B) {
+	for _, count := range []int{10, 100, 1000} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			c := Default()
+			for i := range count {
+				a := testApp()
+				a.Name = fmt.Sprintf("app-%d", i)
+				a.User, a.Directory, a.Domain = a.Name, "/srv/apps/"+a.Name, a.Name+".example.com"
+				c.Apps = append(c.Apps, a)
+			}
+			b.ResetTimer()
+			for b.Loop() {
+				if err := c.Validate(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
 func testApp() App {
 	return App{Name: "test", Directory: "/srv/test", User: "test", Type: "laravel", Domain: "test.example.com", Web: Web{Driver: "fpm"}}
@@ -124,5 +145,36 @@ func TestBuildOrderValidation(t *testing.T) {
 	a := App{Name: "nuxt", Directory: "/srv/nuxt", User: "nuxt", Type: "nuxt", Domain: "nuxt.test", BuildOrder: BuildComposerFirst}
 	if err := a.Validate(); err == nil {
 		t.Fatal("accepted Composer build order for Nuxt")
+	}
+}
+
+func TestAppIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		name, left, right string
+		sharedUser, valid bool
+	}{
+		{"siblings", "/srv/app", "/srv/app-other", false, true},
+		{"nested", "/srv/app", "/srv/app/storage", false, false},
+		{"reverse", "/srv/app/storage", "/srv/app", false, false},
+		{"cleaned", "/srv/app", "/srv/other/../app/storage", false, false},
+		{"root", "/", "/srv/app", false, false},
+		{"shared user", "/srv/one", "/srv/two", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := testApp(), testApp()
+			a.Directory, b.Directory = tc.left, tc.right
+			b.Name, b.User, b.Domain = "other", "other", "other.example.com"
+			if tc.sharedUser {
+				b.User = a.User
+			}
+			c := Default()
+			c.Apps = []App{a, b}
+			if err := c.Validate(); (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, error=%v", tc.valid, err)
+			}
+			if !reflect.DeepEqual(c.Apps, []App{a, b}) {
+				t.Fatal("validation reordered apps")
+			}
+		})
 	}
 }

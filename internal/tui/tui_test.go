@@ -85,16 +85,16 @@ func TestFullRemovalChoiceAndConfirmation(t *testing.T) {
 	m := newModel(o)
 	m.appAction(app, "remove")
 	m.next()
-	if strings.Join(m.current.args, " ") != "remove example --purge --yes" || m.approved || m.page != "confirm" {
-		t.Fatal("full removal must be selected by default and require confirmation")
+	if strings.Join(m.current.args, " ") != "remove example" || m.approved || m.page != "confirm" {
+		t.Fatal("data-preserving removal must be the default and require confirmation")
 	}
 	m.removeForm(app)
-	press(m, tea.KeyDown)
 	m.next()
 	if strings.Join(m.current.args, " ") != "remove example" || !strings.Contains(m.reviewText, "are kept") || m.approved || m.busy {
 		t.Fatal("data-preserving removal is unavailable or skipped review")
 	}
 	m.removeForm(app)
+	press(m, tea.KeyDown)
 	m.next()
 	if strings.Join(m.current.args, " ") != "remove example --purge --yes" || !strings.Contains(m.reviewText, app.Directory) || !strings.Contains(m.reviewText, "cannot be undone") || m.approved || m.busy {
 		t.Fatalf("full deletion skipped review: %s %v", m.reviewText, m.current.args)
@@ -106,6 +106,7 @@ func TestFullRemovalChoiceAndConfirmation(t *testing.T) {
 	default:
 	}
 	m.removeForm(app)
+	press(m, tea.KeyDown)
 	m.next()
 	press(m, 'y')
 	press(m, tea.KeyEnter)
@@ -149,7 +150,7 @@ func TestOutputIsBoundedSanitizedAndCleared(t *testing.T) {
 	m.start(action{title: "Credentials", args: []string{"database", "app", "--show"}})
 	for !receive(t, m).done {
 	}
-	if len(m.output) > outputLimit+64 || !utf8.ValidString(m.output) {
+	if len(m.output) > outputLimit || !utf8.ValidString(m.output) {
 		t.Fatal("output not bounded / invalid UTF-8")
 	}
 	if strings.ContainsAny(m.output, "\x1b\a") {
@@ -172,7 +173,7 @@ func TestTerminalSizingAndScrollableReview(t *testing.T) {
 		if lipgloss.Height(view) > size.Height || lipgloss.Width(view) > size.Width {
 			t.Fatalf("view exceeds terminal %dx%d", size.Width, size.Height)
 		}
-		if !strings.Contains(view, "[ Cancel ]") || !strings.Contains(view, "enter confirm") {
+		if !strings.Contains(view, "[ Cancel ]") || !strings.Contains(view, "Enter confirm") {
 			t.Fatalf("confirmation controls not visible at %dx%d", size.Width, size.Height)
 		}
 		before := m.viewport.YOffset()

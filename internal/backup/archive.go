@@ -26,6 +26,8 @@ import (
 const manifestName = "manifest.json"
 const maxManifest = 8 << 20
 
+var commitPattern = regexp.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`)
+
 type App struct {
 	Name       string `json:"name"`
 	Repository string `json:"repository"`
@@ -86,18 +88,16 @@ func (m Manifest) Validate() error {
 	if len(m.Apps) != len(m.Config.Apps) {
 		return fmt.Errorf("backup app selection differs from config")
 	}
+	configured := make(map[string]bool, len(m.Config.Apps))
+	for _, app := range m.Config.Apps {
+		configured[app.Name] = true
+	}
 	seen := map[string]bool{}
 	for _, a := range m.Apps {
-		if seen[a.Name] || a.Repository == "" || a.Branch == "" || !regexp.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`).MatchString(a.Commit) || strings.ContainsAny(a.Repository+a.Branch, "\x00\r\n") {
+		if seen[a.Name] || a.Repository == "" || a.Branch == "" || !commitPattern.MatchString(a.Commit) || strings.ContainsAny(a.Repository+a.Branch, "\x00\r\n") {
 			return fmt.Errorf("invalid backup repository record")
 		}
-		exists := false
-		for _, c := range m.Config.Apps {
-			if c.Name == a.Name {
-				exists = true
-			}
-		}
-		if !exists {
+		if !configured[a.Name] {
 			return fmt.Errorf("unknown backup app")
 		}
 		seen[a.Name] = true

@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+var destinationHostPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.-]*$`)
+var destinationUserPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]*$`)
+
 // Destination is stored privately, outside the editable example configuration.
 type Destination struct {
 	Host      string `json:"host"`
@@ -19,10 +22,10 @@ type Destination struct {
 }
 
 func (d Destination) Validate() error {
-	if net.ParseIP(d.Host) == nil && !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.-]*$`).MatchString(d.Host) {
+	if net.ParseIP(d.Host) == nil && !destinationHostPattern.MatchString(d.Host) {
 		return fmt.Errorf("use a server IP address or hostname")
 	}
-	if !regexp.MustCompile(`^[a-z_][a-z0-9_-]*$`).MatchString(d.User) {
+	if !destinationUserPattern.MatchString(d.User) {
 		return fmt.Errorf("invalid backup SSH username")
 	}
 	if d.Port < 1 || d.Port > 65535 {
