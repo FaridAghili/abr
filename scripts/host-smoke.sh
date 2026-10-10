@@ -72,24 +72,43 @@ fixture_missing_assets() {
     done
   done
 }
-fixture_image_cache() {
-  # Verify real Caddy-user access to images created by the dedicated app user.
-  local domain=$1 root=$2 app_user=$3 ext method
-  for ext in png jpg jpeg gif avif webp svg PNG; do
-    sudo runuser -u "$app_user" -- sh -c 'printf "public image fixture" > "$1"' sh "$root/abr-image.$ext"
-    for method in GET HEAD; do
-      local request=(--request "$method")
-      if [[ $method == HEAD ]]; then request=(--head); fi
-      curl --fail --silent --show-error --insecure --resolve "$domain:443:127.0.0.1" \
-        "${request[@]}" -D "$fixture_source/image-headers" -o "$fixture_source/image-body" \
-        "https://$domain/abr-image.$ext?v=1"
-      tr -d '\r' < "$fixture_source/image-headers" | grep -Fix 'Cache-Control: public, max-age=2592000'
-      fixture_security_headers "$fixture_source/image-headers"
-      if [[ $method == GET ]]; then
-        test "$(cat "$fixture_source/image-body")" = 'public image fixture'
+fixture_static_cache() {
+  # Verify both cache lifetimes and real Caddy-user access to app-owned files.
+  local domain=$1 root=$2 app_user=$3 ext method variant file uri expected
+  for ext in css js woff woff2 ttf otf eot png jpg jpeg gif avif webp svg PNG json xml; do
+    for variant in stable query hashed; do
+      file="abr-static.$ext"
+      uri="/$file"
+      expected='public, max-age=2592000'
+      case "$variant" in
+        stable)
+          if [[ $ext == json || $ext == xml ]]; then expected='no-cache'; fi
+          ;;
+        query) uri="$uri?id=8ea5922c" ;;
+        hashed) file="abr-static-8ea5922c.$ext"; uri="/$file" ;;
+      esac
+      if [[ $variant != stable && $ext != json && $ext != xml ]]; then
+        expected='public, max-age=31536000, immutable'
       fi
+      sudo runuser -u "$app_user" -- sh -c 'printf "public static fixture" > "$1"' sh "$root/$file"
+      for method in GET HEAD; do
+        local request=(--request "$method")
+        if [[ $method == HEAD ]]; then request=(--head); fi
+        curl --fail --silent --show-error --insecure --resolve "$domain:443:127.0.0.1" \
+          "${request[@]}" -D "$fixture_source/static-headers" -o "$fixture_source/static-body" \
+          "https://$domain$uri"
+        if ! tr -d '\r' < "$fixture_source/static-headers" | grep -Fix "Cache-Control: $expected"; then
+          echo "$method $domain$uri: expected Cache-Control: $expected" >&2
+          grep -Ei '^(HTTP/|cache-control:)' "$fixture_source/static-headers" >&2 || true
+          exit 1
+        fi
+        fixture_security_headers "$fixture_source/static-headers"
+        if [[ $method == GET ]]; then
+          test "$(cat "$fixture_source/static-body")" = 'public static fixture'
+        fi
+      done
+      sudo runuser -u "$app_user" -- rm -- "$root/$file"
     done
-    sudo runuser -u "$app_user" -- rm -- "$root/abr-image.$ext"
   done
 }
 fixture_redirect() {
@@ -612,7 +631,7 @@ test "$php_missing_status" = 404
 fixture_security_headers "$fixture_source/php-missing-headers"
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"opcache":"1"'
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/php-config | grep -F '"unprivileged":true,"no_new_privs":true'
-fixture_image_cache fixture-php.localhost /srv/apps/fixture-php/public abr-fixture-php
+fixture_static_cache fixture-php.localhost /srv/apps/fixture-php/public abr-fixture-php
 sudo runuser -u abr-fixture-php -- sh -c 'printf "public upload fixture" > /srv/apps/fixture-php/storage/app/public/abr-upload.png'
 curl --fail --silent --show-error --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
   -D "$fixture_source/upload-headers" https://fixture-php.localhost/storage/abr-upload.png -o "$fixture_source/upload-body"
@@ -650,6 +669,7 @@ printf 'body { color: black; }\n' | sudo tee /srv/apps/fixture-php/public/build/
 curl --fail --silent --show-error --insecure --resolve fixture-php.localhost:443:127.0.0.1 \
   -D "$fixture_source/plain-headers" https://fixture-php.localhost/build/assets/plain.css -o /dev/null
 fixture_security_headers "$fixture_source/plain-headers"
+tr -d '\r' < "$fixture_source/plain-headers" | grep -Fix 'Cache-Control: public, max-age=2592000'
 if grep -Ei '^cache-control:.*(immutable|max-age=31536000)' "$fixture_source/plain-headers"; then
   echo 'Unversioned asset received immutable caching' >&2; exit 1
 fi
@@ -690,7 +710,7 @@ sudo grep -Fx 'APP_DEBUG=false' /srv/apps/fixture-octane/.env
 abr_ci deploy fixture-octane --no-pull
 fixture_https www.fixture-octane.localhost -D "$fixture_source/octane-headers" | grep -F 'Laravel fixture database=1'
 fixture_security_headers "$fixture_source/octane-headers"
-fixture_image_cache www.fixture-octane.localhost /srv/apps/fixture-octane/public abr-fixture-octane
+fixture_static_cache www.fixture-octane.localhost /srv/apps/fixture-octane/public abr-fixture-octane
 fixture_redirect www.fixture-octane.localhost www.fixture-octane.localhost http
 fixture_redirect fixture-octane.localhost www.fixture-octane.localhost
 sudo test ! -f /srv/apps/fixture-octane/rr
@@ -755,7 +775,7 @@ for rendering in true false; do
   fixture_redirect "$app_domain" "$app_domain" http
   fixture_https "$app_domain" -D "$fixture_source/nuxt-page-headers" -o "$fixture_source/$app.html"
   fixture_security_headers "$fixture_source/nuxt-page-headers"
-  fixture_image_cache "$app_domain" "$dir/.output/public" "abr-$app"
+  fixture_static_cache "$app_domain" "$dir/.output/public" "abr-$app"
   if [[ $rendering == true ]]; then grep -Fq 'Abr Nuxt fixture' "$fixture_source/$app.html"; else grep -Fq '__nuxt' "$fixture_source/$app.html"; fi
   nuxt_asset=$(sudo find "$dir/.output/public/_nuxt" -type f -name '*.js' -size +511c -print -quit)
   sudo test -f "$nuxt_asset.br"
