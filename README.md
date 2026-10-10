@@ -505,10 +505,14 @@ installs Ubuntu's `sshpass` package and passes its password through a private fi
 descriptor, never a command argument or environment variable. These destination
 settings and credentials are not included in backup archives.
 
-Create the remote directory owned by the SSH account with mode 0700. Verify the
-backup server's SSH host fingerprint with `sudo ssh -p PORT USER@HOST` once;
-Abr requires a known host key and refuses changed or unknown keys. Then choose
-**Test backup destination**. Saving settings alone does not verify a connection.
+Create the remote directory owned by the SSH account with mode 0700. Then choose
+**Test backup destination**. Abr retrieves the server's ED25519 host key and, if
+it is new, displays its SHA256 fingerprint for confirmation. Compare it with
+`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the backup server's console.
+Confirm only if they match. Abr saves the confirmed key in root's `known_hosts`
+and tests SSH access and the directory, without a manual SSH login. Already
+trusted keys need no new confirmation; changed keys are refused and existing
+trust is preserved. Saving settings alone does not verify a connection.
 
 The same setup is scriptable:
 
@@ -516,6 +520,9 @@ The same setup is scriptable:
 sudo abr backup configure --host 192.0.2.10 --user backup --path /srv/backups/abr
 # Optional existing private key: add --key /root/.ssh/backup_ed25519.
 # Password authentication: supply the password through stdin with --password-stdin.
+sudo abr backup host-key
+# Confirm the fingerprint against the backup server's console, then pin it:
+sudo abr backup trust --fingerprint SHA256:CONFIRMED_FINGERPRINT
 sudo abr backup test
 sudo abr backup --all --transfer
 sudo abr backup api portal --transfer

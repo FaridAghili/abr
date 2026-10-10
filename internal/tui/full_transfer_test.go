@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"abr/internal/backup"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -45,6 +49,75 @@ func TestFullTransferFormsReviewAndNavigation(t *testing.T) {
 		if archivePath(path) == nil {
 			t.Fatal("invalid archive path accepted")
 		}
+	}
+}
+
+func TestBackupHostIdentityWorkflow(t *testing.T) {
+	for _, scenario := range []string{"unknown", "known", "cancel", "scan-failure", "trust-failure", "preview"} {
+		t.Run(scenario, func(t *testing.T) {
+			o := testOptions(t)
+			o.DryRun = scenario == "preview"
+			key := backup.HostKey{Address: "[192.0.2.10]:2222", Fingerprint: "SHA256:fixture-fingerprint", Known: scenario == "known"}
+			var calls []string
+			o.BackupHostKey = func(io.Writer) (backup.HostKey, error) {
+				calls = append(calls, "inspect")
+				if scenario == "scan-failure" {
+					return key, errors.New("host key changed")
+				}
+				return key, nil
+			}
+			o.BackupTrust = func(fingerprint string, _ io.Writer) error {
+				if fingerprint != key.Fingerprint {
+					t.Error("trusted an unreviewed fingerprint")
+				}
+				calls = append(calls, "trust")
+				if scenario == "trust-failure" {
+					return errors.New("fingerprint changed before confirmation")
+				}
+				return nil
+			}
+			o.RunCommand = func(args []string, _ io.Writer) error {
+				calls = append(calls, strings.Join(args, " "))
+				return nil
+			}
+			m := newModel(o)
+			m.fullTransferMenu()
+			m.backupTestReview()
+			approve(m)
+			finishStep(t, m)
+			if scenario == "scan-failure" || scenario == "preview" {
+				if len(calls) != 1 || m.page != "output" {
+					t.Fatal("failure/preview proceeded to trust or test", calls)
+				}
+				return
+			}
+			if scenario == "known" {
+				finishStep(t, m)
+				if strings.Join(calls, ",") != "inspect,backup test" {
+					t.Fatal("known host was prompted/trusted again", calls)
+				}
+				return
+			}
+			if m.page != "confirm" || m.approved || !strings.Contains(m.reviewText, key.Address) || !strings.Contains(m.reviewText, key.Fingerprint) || !strings.Contains(m.reviewText, "ssh-keygen -lf") || len(calls) != 1 {
+				t.Fatal("unknown host bypassed fingerprint confirmation", calls, m.reviewText)
+			}
+			if scenario == "cancel" {
+				press(m, tea.KeyEnter)
+				if len(calls) != 1 || m.busy {
+					t.Fatal("cancel trusted or tested host", calls)
+				}
+				return
+			}
+			approve(m)
+			finishStep(t, m)
+			want := "inspect,trust,backup test"
+			if scenario == "trust-failure" {
+				want = "inspect,trust"
+			}
+			if strings.Join(calls, ",") != want {
+				t.Fatal("test ran before successful explicit trust", calls)
+			}
+		})
 	}
 }
 

@@ -11,11 +11,16 @@
   app_backup_sshd_pid=''
   trap 'if [[ -n $app_backup_sshd_pid ]]; then sudo kill "$app_backup_sshd_pid" || true; fi; sudo userdel abr-backup-fixture >/dev/null 2>&1 || true' EXIT
   sudo install -d -m 700 "$app_backup_remote"
-  # The normal host test installed this local SSH key and host identity already.
-  sudo install -d -m 700 /root/.ssh
-  sudo sh -c 'printf "127.0.0.1 "; cat /etc/ssh/ssh_host_ed25519_key.pub' | sudo tee -a /root/.ssh/known_hosts >/dev/null
-  sudo chmod 600 /root/.ssh/known_hosts
+  # Pin the independently known disposable host fingerprint through Abr;
+  # no manual SSH login or direct known_hosts edit is needed.
+  app_backup_fingerprint=$(sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256 | awk '{print $2}')
   abr_ci backup configure --host 127.0.0.1 --user root --path "$app_backup_remote" --key /root/.ssh/abr-fixture-ssh
+  abr_ci backup host-key
+  fixture_refused 'does not match the confirmed fingerprint' backup trust --fingerprint SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  abr_ci backup trust --fingerprint "$app_backup_fingerprint"
+  sudo cp /root/.ssh/known_hosts "$abr_binary_directory/backup-known-hosts-before"
+  abr_ci backup trust --fingerprint "$app_backup_fingerprint"
+  sudo cmp /root/.ssh/known_hosts "$abr_binary_directory/backup-known-hosts-before"
   abr_ci backup test
   sudo systemctl show caddy php8.5-fpm redis-server abr-fixture-php-queue@1.service \
     --property=Id,MainPID,ActiveState > "$abr_binary_directory/app-services-before"
@@ -91,9 +96,10 @@ AllowUsers abr-backup-fixture
 EOF
   sudo /usr/sbin/sshd -f "$abr_binary_directory/backup-sshd.conf" -E "$abr_binary_directory/backup-sshd.log"
   app_backup_sshd_pid=$(sudo cat "$abr_binary_directory/backup-sshd.pid")
-  sudo sh -c 'printf "[127.0.0.1]:%s " "$1"; cat /etc/ssh/ssh_host_ed25519_key.pub' sh "$app_backup_port" | sudo tee -a /root/.ssh/known_hosts >/dev/null
   printf 'ci-backup-password\n' | abr_ci backup configure --host 127.0.0.1 --user abr-backup-fixture \
     --path "$app_backup_password_remote" --ssh-port "$app_backup_port" --password-stdin
+  abr_ci backup host-key
+  abr_ci backup trust --fingerprint "$app_backup_fingerprint"
   abr_ci backup test
   abr_ci backup fixture-octane --transfer --output-dir "$app_backup_local"
   sudo test "$(sudo find "$app_backup_password_remote" -maxdepth 1 -name '*.tar.gz' | wc -l)" = 1

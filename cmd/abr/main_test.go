@@ -20,6 +20,26 @@ func invoke(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
+func TestBackupTrustRequiresFingerprintAndPreviewDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state"), "--dry-run"}
+	for _, args := range [][]string{{"backup", "trust"}, {"backup", "trust", "--fingerprint", "invalid"}} {
+		if _, err := invoke(t, append(paths, args...)...); err == nil || !strings.Contains(err.Error(), "--fingerprint") {
+			t.Fatal("host trust accepted missing/invalid approval", err)
+		}
+	}
+	out, err := invoke(t, append(paths, "backup", "trust", "--fingerprint", "SHA256:"+strings.Repeat("A", 43))...)
+	if err != nil || !strings.Contains(out, "no connection made or known_hosts changed") {
+		t.Fatal("host trust preview failed", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "state")); !os.IsNotExist(err) {
+		t.Fatal("preview created host state")
+	}
+	if _, err := invoke(t, append(paths, "backup", "host-key", "unexpected")...); err == nil {
+		t.Fatal("host-key accepted unexpected args")
+	}
+}
+
 func TestEnvironmentCommandIsScriptableAndPreviewDoesNotWrite(t *testing.T) {
 	dir := t.TempDir()
 	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state"), "--apps-dir", filepath.Join(dir, "apps")}

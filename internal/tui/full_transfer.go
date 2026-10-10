@@ -25,7 +25,7 @@ func (m *model) fullTransferMenu() tea.Cmd {
 		case "configure":
 			return m.backupDestinationForm()
 		case "test":
-			return m.review(action{title: "Test backup destination", args: []string{"backup", "test"}, note: "Verify saved SSH credentials and the remote private directory. No app services are stopped."})
+			return m.backupTestReview()
 		case "full":
 			return m.fullBackupForm()
 		case "restore":
@@ -39,6 +39,29 @@ func (m *model) fullTransferMenu() tea.Cmd {
 		huh.NewOption("Full server archive (local)", "full"),
 		huh.NewOption("Restore onto a fresh server", "restore"),
 		huh.NewOption("Back", "back")).Value(&selected)))
+}
+
+func (m *model) backupTestReview() tea.Cmd {
+	if m.options.BackupHostKey == nil || m.options.BackupTrust == nil {
+		return m.workflowError("Test backup destination", errors.New("Backup server identity verification is unavailable"))
+	}
+	var key backup.HostKey
+	inspect, trust, run := m.options.BackupHostKey, m.options.BackupTrust, m.options.RunCommand
+	return m.review(action{title: "Test backup destination", args: []string{"backup", "host-key"}, note: "Check the backup server identity, then verify SSH access and the private backup directory. A new host key requires your fingerprint confirmation. No app services are stopped.", run: func(output io.Writer) error {
+		var err error
+		key, err = inspect(output)
+		return err
+	}, after: func() tea.Cmd {
+		if key.Known {
+			return m.start(action{title: "Test backup destination", args: []string{"backup", "test"}})
+		}
+		return m.review(action{title: "Trust backup server and test", args: []string{"backup", "trust", "--fingerprint", key.Fingerprint}, note: fmt.Sprintf("Backup server: %s\nKey type: ED25519\nFingerprint: %s\n\nCompare this fingerprint with the output on your backup server:\nssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub\n\nConfirm only if they match. Save this host key in root's known_hosts, then test SSH access and the private directory. No manual SSH login is needed.", key.Address, key.Fingerprint), run: func(output io.Writer) error {
+			if err := trust(key.Fingerprint, output); err != nil {
+				return err
+			}
+			return run([]string{"backup", "test"}, output)
+		}})
+	}})
 }
 
 func archivePath(s string) error {
@@ -130,7 +153,7 @@ func (m *model) backupDestinationForm() tea.Cmd {
 			return m.workflowError("Backup configuration", errors.New("Backup destination saving is unavailable"))
 		}
 		save := m.options.BackupConfigure
-		return m.review(action{title: "Save backup server", args: []string{"backup", "configure", "--host", d.Host, "--user", d.User, "--path", d.Directory}, note: fmt.Sprintf("Server: %s@%s\nDirectory: %s\nSSH port: %d\nAuthentication: %s\n\nSave private connection settings. Key mode generates a dedicated key when no private key is supplied, then displays its public key for installation on the backup server. Password mode installs sshpass and stores the password in root-only state. Verify the server's SSH host fingerprint and create the destination with mode 0700 before testing the connection.", d.User, d.Host, d.Directory, d.Port, d.Auth), run: func(output io.Writer) error {
+		return m.review(action{title: "Save backup server", args: []string{"backup", "configure", "--host", d.Host, "--user", d.User, "--path", d.Directory}, note: fmt.Sprintf("Server: %s@%s\nDirectory: %s\nSSH port: %d\nAuthentication: %s\n\nSave private connection settings. Key mode generates a dedicated key when no private key is supplied, then displays its public key for installation on the backup server. Password mode installs sshpass and stores the password in root-only state. Create the destination with mode 0700, then choose Test backup destination to confirm its host fingerprint and check access.", d.User, d.Host, d.Directory, d.Port, d.Auth), run: func(output io.Writer) error {
 			defer func() { d.Password = "" }()
 			return save(d, key, output)
 		}})

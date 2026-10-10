@@ -105,7 +105,7 @@ func (h Host) ConfigureBackup(d backup.Destination, source string) error {
 		if len(public) > 0 {
 			h.say("Add this public key to %s's ~/.ssh/authorized_keys on the backup server:\n%s", d.User, strings.TrimSpace(string(public)))
 		}
-		h.say("On the backup server, create %s owned by %s with mode 0700. Verify its SSH host fingerprint using sudo ssh -p %d %s@%s before the first backup.", d.Directory, d.User, d.Port, d.User, d.Host)
+		h.say("On the backup server, create %s owned by %s with mode 0700. Choose Test backup destination in the TUI to confirm its host fingerprint, or use abr backup host-key and abr backup trust --fingerprint SHA256:... in the CLI.", d.Directory, d.User)
 		return nil
 	})
 }

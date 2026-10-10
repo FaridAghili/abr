@@ -64,6 +64,9 @@ Commands:
   backup configure --host HOST --user USER --path DIR [--key FILE | --password-stdin]
                    Save backup server settings; generates a dedicated key by default
   backup test      Verify the saved SSH destination and private backup directory
+  backup host-key  Show the backup server's SSH host fingerprint without trusting it
+  backup trust --fingerprint SHA256:...
+                   Pin a fingerprint verified against the backup server's console
   backup --output FILE.tar.gz
                    Online full-server backup including shared Redis and Caddy data
   restore FILE.tar.gz --yes
@@ -140,11 +143,11 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "logs" && len(args) > 0 && args[0] == "clear" {
 		command, args = "logs clear", args[1:]
 	}
-	if command == "backup" && len(args) > 0 && (args[0] == "configure" || args[0] == "test") {
+	if command == "backup" && len(args) > 0 && (args[0] == "configure" || args[0] == "test" || args[0] == "host-key" || args[0] == "trust") {
 		command, args = "backup "+args[0], args[1:]
 	}
 	switch command {
-	case "backup", "backup configure", "backup test", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
+	case "backup", "backup configure", "backup test", "backup host-key", "backup trust", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -158,6 +161,7 @@ func run(args []string, out, stderr io.Writer) error {
 	var setup host.SetupOptions
 	var deploy host.DeployOptions
 	var gitKey, backupDirectory, fullBackupOutput string
+	var hostFingerprint string
 	var restore host.RestoreOptions
 	var appBackup host.BackupOptions
 	var destination backup.Destination
@@ -185,6 +189,8 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.IntVar(&destination.Port, "ssh-port", 22, "backup server SSH port")
 		fs.StringVar(&gitKey, "key", "", "import an unencrypted SSH private key; blank generates/reuses a dedicated key")
 		fs.BoolVar(&passwordStdin, "password-stdin", false, "read the backup SSH password from stdin; never pass it as an argument")
+	case "backup trust":
+		fs.StringVar(&hostFingerprint, "fingerprint", "", "SHA256 host fingerprint verified against the backup server's console")
 	case "restore":
 		fs.BoolVar(&restore.Yes, "yes", false, "confirm full SQL and Redis restore on a fresh server")
 		fs.StringVar(&restore.AdminUser, "admin-user", "", "existing administrator on this new server")
@@ -409,6 +415,11 @@ func run(args []string, out, stderr io.Writer) error {
 		return h.ConfigureBackup(destination, gitKey)
 	case "backup test":
 		return h.TestBackupDestination()
+	case "backup host-key":
+		_, err := h.BackupHostKey()
+		return err
+	case "backup trust":
+		return h.TrustBackupHostKey(hostFingerprint)
 	case "restore":
 		return h.RestoreArchives(positional, restore)
 	case "artisan", "shell":
@@ -487,6 +498,16 @@ func run(args []string, out, stderr io.Writer) error {
 				commandHost := h
 				commandHost.Output = output
 				return commandHost.ConfigureBackup(destination, key)
+			},
+			BackupHostKey: func(output io.Writer) (backup.HostKey, error) {
+				commandHost := h
+				commandHost.Output = output
+				return commandHost.BackupHostKey()
+			},
+			BackupTrust: func(fingerprint string, output io.Writer) error {
+				commandHost := h
+				commandHost.Output = output
+				return commandHost.TrustBackupHostKey(fingerprint)
 			},
 		})
 	case "version":

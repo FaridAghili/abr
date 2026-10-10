@@ -34,6 +34,8 @@ type Options struct {
 	RunCommand                                           func([]string, io.Writer) error
 	ComposerAuth                                         func(string, string, string, io.Writer) error
 	BackupConfigure                                      func(backup.Destination, string, io.Writer) error
+	BackupHostKey                                        func(io.Writer) (backup.HostKey, error)
+	BackupTrust                                          func(string, io.Writer) error
 	EnvEditor                                            func(string) (*exec.Cmd, func() (bool, error), error)
 	ArtisanShell                                         func(string) (*exec.Cmd, error)
 }
@@ -774,9 +776,12 @@ func nextStep(args []string) string {
 			return "Check the archives on your backup server and test a restore on a disposable server."
 		}
 		if len(args) > 1 && args[1] == "configure" {
-			return "Install the displayed public key on the backup server if using keys, verify its SSH host fingerprint, then choose Test backup destination."
+			return "Install the displayed public key on the backup server if using keys, then choose Test backup destination to confirm the server fingerprint and check access."
 		}
-		if len(args) > 1 && args[1] == "test" {
+		if len(args) > 1 && args[1] == "host-key" {
+			return "Compare the fingerprint with the backup server's console before confirming trust."
+		}
+		if len(args) > 1 && (args[1] == "test" || args[1] == "trust") {
 			return "Choose Back up apps to transfer one archive at a time to the verified destination."
 		}
 		return "Copy the private backup archive to storage outside this VPS."
