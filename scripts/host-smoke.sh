@@ -377,7 +377,11 @@ fixture_source=$(mktemp -d)
 composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel:^13.0' "$fixture_source/laravel"
 (
   cd "$fixture_source/laravel"
-  composer require laravel/octane spiral/roadrunner-cli spiral/roadrunner-http --no-update --no-scripts --no-interaction
+  # Match Abr's shared 2025.1 runtime. HTTP 4.2 requires the old 3.0
+  # metapackage, which Composer correctly blocks for a security advisory.
+  composer require laravel/octane spiral/roadrunner-cli \
+    'spiral/roadrunner-http:~4.1.0' 'spiral/roadrunner:~2025.1.0' \
+    --no-update --no-scripts --no-interaction
   composer update --no-install --no-scripts --no-interaction
   # The skeleton pins concurrently's vulnerable shell-quote dependency.
   npm pkg set overrides.shell-quote=1.12.0
