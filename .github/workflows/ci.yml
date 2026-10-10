@@ -57,7 +57,7 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath -ldflags '-s -w' -o dist/abr-linux-amd64 ./cmd/abr
-      - name: Setup, deploy and full backup/restore on disposable Ubuntu
+      - name: Setup, deploy, online backups, SSH transfers and restore on disposable Ubuntu
         id: host
         timeout-minutes: 55
         env:

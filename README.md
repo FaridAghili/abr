@@ -489,18 +489,90 @@ enables MySQL `skip_name_resolve` to distinguish this TCP account from socket
 root; existing hostname-based grants or an unrecorded loopback root account
 require manual review before setup changes accounts.
 
-## Full backup and fresh-server restore
+## Online app backups and SSH transfer
 
-Choose **Server & credentials → Full backup & restore**, or use:
+Choose **Server & credentials → Backup & restore → Configure backup server**.
+Enter the server IP/hostname, SSH username, remote backup directory and either
+password or key authentication. Key mode generates a dedicated SSH identity and
+displays its public key; install that key in the backup account's
+`~/.ssh/authorized_keys`. Advanced settings allow a different SSH port or an
+existing unencrypted private key. A public key is installed on the receiving
+server; authentication on this server requires its matching private key.
+
+The destination is saved under abr's state directory in root-only (0600)
+`backup-destination.json`; backup identities use `backup-ssh/`. Password mode
+installs Ubuntu's `sshpass` package and passes its password through a private file
+descriptor, never a command argument or environment variable. These destination
+settings and credentials are not included in backup archives.
+
+Create the remote directory owned by the SSH account with mode 0700. Verify the
+backup server's SSH host fingerprint with `sudo ssh -p PORT USER@HOST` once;
+Abr requires a known host key and refuses changed or unknown keys. Then choose
+**Test backup destination**. Saving settings alone does not verify a connection.
+
+The same setup is scriptable:
+
+```sh
+sudo abr backup configure --host 192.0.2.10 --user backup --path /srv/backups/abr
+# Optional existing private key: add --key /root/.ssh/backup_ed25519.
+# Password authentication: supply the password through stdin with --password-stdin.
+sudo abr backup test
+sudo abr backup --all --transfer
+sudo abr backup api portal --transfer
+```
+
+**Every app and shared service keeps running.** For each selected app Abr captures
+its saved project source, managed SQL database, `.env`, entire Laravel
+`storage/app` directory and recovery
+settings, compresses one archive, transfers it over SSH, verifies its SHA256 on
+the receiving server and publishes it there, then removes only that local archive
+before starting the next app. A failed transfer or verification retains the local
+archive and stops the run. Already transferred apps remain backed up. No existing
+remote file is overwritten, and partial uploads are not published.
+
+Names include the app and a UTC run timestamp, for example
+`api-20261010T020000.123456789Z.tar.gz`. Local staging is removed after each app;
+peak local space covers one app's uncompressed capture and compressed archive,
+plus small shared recovery settings. The default archive directory is
+`/var/backups/abr/apps`; `--output-dir` overrides it. Remote archives are private
+(0600), compressed and checksummed, but not encrypted at rest.
+
+The SQL dump uses an online InnoDB consistent snapshot. Avoid schema changes
+during capture. Nontransactional tables and files copied while uploads change do
+not share that snapshot; SQL, files and different apps can represent different
+times. Nighttime scheduling reduces activity but does not stop workers or timers.
+Abr does not install a backup schedule or a retention policy.
+
+App archives include a self-contained Git bundle of the deployed branch and commit,
+the current working files (including local modifications, deletions and ignored
+local configuration), lockfiles, saved app settings/ports, domains and SSL configuration,
+templates and shared Git/Composer/MySQL recovery credentials. Known
+dependencies/build/cache directories, logs, external databases and files outside the project or
+Laravel `storage/app` are excluded. Source symlinks and Git submodules are refused
+rather than followed. **Shared Redis persistence and
+Caddy certificate storage are excluded from app archives.** Restoring them
+recreates shared runtimes with fresh Redis data and regenerated certificates.
+Use the separate full-server archive below when that shared data is required.
+
+`--transfer` requires a configured destination. Without it, `backup` still uses a
+saved destination when present; without saved settings it keeps archives locally.
+For a one-off key-based destination use `--remote USER@HOST --remote-dir DIR`
+(optional `--ssh-port PORT`); this uses the administrator's default SSH keys.
+
+## Full-server archive and fresh-server restore
+
+Choose **Server & credentials → Backup & restore → Full server archive (local)**,
+or use:
 
 ```sh
 sudo abr backup --output /var/backups/abr/full.tar.gz
 ```
 
-The archive includes every registered app's settings, repository URL and current
-branch, port reservations, edited templates, shared Git/Composer credentials and
+The archive includes every registered app's saved source code and lockfiles,
+settings, repository URL, current branch/commit, port reservations, edited
+templates, shared Git/Composer credentials and
 MySQL admin credentials. Laravel contributes its exact `.env`,
-`storage/app/public`, `storage/app/private` when present, and a SQL dump with its
+entire `storage/app` directory when present, and a SQL dump with its
 recorded database/account password. Recorded databases retained after disabling
 an app's database component are included too. Nuxt contributes `.env` when
 present. Managed Redis persistence (all logical DBs), Caddy certificates/storage,
@@ -508,17 +580,17 @@ the shared Caddyfile and abr-managed PHP/MySQL/Redis runtime configuration are
 included. User ownership records and generated app services are recreated on the
 target; numeric UIDs need not match.
 
-Project source, `.git`, dependencies, build output, logs and caches on disk are
-rebuilt or omitted. All Laravel apps must have recorded abr-managed MySQL
-credentials. External/unregistered databases, uploads outside the two Laravel
-directories, unrelated server files and administrator SSH access are outside this
+Git history travels in the bundle; dependencies, build output, logs and caches on
+disk are rebuilt or omitted. All Laravel apps must have recorded abr-managed MySQL
+credentials. External/unregistered databases, uploads outside Laravel
+`storage/app`, unrelated server files and administrator SSH access are outside this
 backup's scope.
 
-Backup pauses managed app services, Caddy, PHP-FPM and Redis while taking the SQL,
-upload and Redis snapshots. Stop external database writers first; remaining
-processes under managed app users cause capture to fail. Previously enabled apps
-resume after capture, before compression. Previously disabled apps remain
-disabled. A failed capture attempts the same recovery and reports recovery errors.
+Full-server backup also keeps apps, Caddy, PHP-FPM and Redis running. Redis is
+captured as an online RDB snapshot through `redis-cli --rdb`; live AOF files are
+not copied. SQL, uploads, Redis and Caddy storage are separate online captures,
+not a coordinated point-in-time snapshot. Avoid schema changes during SQL export.
+Enabled/disabled app states are recorded and remain unchanged during backup.
 Only complete archives are published; existing files are never overwritten.
 The output must be an absolute `.tar.gz` path outside app, state, template and
 other captured data directories. Capture needs temporary disk space under abr's
@@ -535,6 +607,8 @@ that server, then run restore directly; do not run `abr setup` first:
 ```sh
 sudo abr restore /var/backups/abr/full.tar.gz --dry-run
 sudo abr restore /var/backups/abr/full.tar.gz --yes
+# Or restore one archive per app together (same recovery settings, no duplicates):
+sudo abr restore /var/backups/abr/restore/*.tar.gz --yes
 ```
 
 `--admin-user USER` and `--ssh-port PORT` refer to the **new** server's SSH access;
@@ -544,12 +618,24 @@ archive and checks target users, project paths and port conflicts before
 provisioning. Existing abr apps/state are refused. Preview validates the archive
 in a temporary private directory without provisioning the host.
 
-Restore clones the **latest commit of each saved branch**, places `.env` and
-uploads, recreates MySQL accounts with their saved passwords and imports SQL,
-then restores Redis and shared configuration. It runs the standard deployment
+For multiple archives, all must be app backups with matching server settings and
+shared recovery files, and each app must appear once. Duplicate apps, conflicting
+ports or changed shared credentials/templates are refused before provisioning.
+The TUI accepts a directory containing the chosen app archives. Full-server
+archives are restored individually. Copy only the chosen recovery set into that
+directory, rather than every historical backup for each app.
+
+Restore clones the **saved commit from each archived Git bundle**, applies the
+captured working source, places `.env` and storage files, recreates MySQL accounts
+with their saved passwords and imports SQL,
+then restores included shared data and configuration. It runs the standard deployment
 steps with saved build ordering: `npm ci`, frontend build, `composer install`,
 Laravel storage links, migrations, cache clearing and Artisan optimization.
-Dependency versions come from the latest repository's lockfiles. All apps stay
+Dependency versions come from the archived lockfiles. The original repository is
+not needed to restore source; internet access and saved credentials are still
+needed to install native runtimes and dependencies. App backups recreate HTTPS
+using saved domains/settings; point DNS at the new server for certificate issuance.
+All apps stay
 stopped until every import/build completes; previously enabled apps then start
 and run their configured health checks. If restore fails, abr attempts to stop
 all restored apps, reports stop failures and preserves partial data for inspection.

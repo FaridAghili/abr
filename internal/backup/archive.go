@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -29,6 +30,7 @@ type App struct {
 	Name       string `json:"name"`
 	Repository string `json:"repository"`
 	Branch     string `json:"branch"`
+	Commit     string `json:"commit"`
 	Enabled    bool   `json:"enabled"`
 }
 
@@ -49,6 +51,7 @@ type File struct {
 
 type Manifest struct {
 	Version   int             `json:"version"`
+	Scope     string          `json:"scope,omitempty"` // "app" excludes shared Redis/Caddy persistence.
 	CreatedAt time.Time       `json:"created_at"`
 	Config    config.Config   `json:"config"`
 	Ports     ports.Registry  `json:"ports"`
@@ -62,6 +65,9 @@ func safeName(name string) bool {
 }
 
 func (m Manifest) Validate() error {
+	if m.Scope != "" && m.Scope != "app" {
+		return fmt.Errorf("invalid backup scope")
+	}
 	if m.Version != 1 || m.CreatedAt.IsZero() || m.Files == nil {
 		return fmt.Errorf("invalid backup manifest")
 	}
@@ -82,7 +88,7 @@ func (m Manifest) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, a := range m.Apps {
-		if seen[a.Name] || a.Repository == "" || a.Branch == "" || strings.ContainsAny(a.Repository+a.Branch, "\x00\r\n") {
+		if seen[a.Name] || a.Repository == "" || a.Branch == "" || !regexp.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`).MatchString(a.Commit) || strings.ContainsAny(a.Repository+a.Branch, "\x00\r\n") {
 			return fmt.Errorf("invalid backup repository record")
 		}
 		exists := false

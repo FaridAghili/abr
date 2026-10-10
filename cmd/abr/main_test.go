@@ -433,7 +433,7 @@ func TestFullTransferCLIValidationAndBackupPreview(t *testing.T) {
 	}
 	output := filepath.Join(dir, "full.tar.gz")
 	out, err := invoke(t, append(append([]string{}, paths...), "backup", "--output", output, "--dry-run")...)
-	if err != nil || !strings.Contains(out, "Laravel public/private uploads") || !strings.Contains(out, "Redis") {
+	if err != nil || !strings.Contains(out, "full Laravel storage/app and saved source") || !strings.Contains(out, "Redis") {
 		t.Fatal("incomplete backup preview", out, err)
 	}
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
@@ -448,5 +448,40 @@ func TestFullTransferCLIValidationAndBackupPreview(t *testing.T) {
 	help, err := invoke(t, "help")
 	if err != nil || !strings.Contains(help, "restore FILE.tar.gz --yes") {
 		t.Fatal("full transfer missing from help", err)
+	}
+}
+
+func TestOnlineAppBackupCLIAndDestinationPreview(t *testing.T) {
+	dir := t.TempDir()
+	paths := []string{"--config", filepath.Join(dir, "config.toml"), "--state-dir", filepath.Join(dir, "state")}
+	call := func(args ...string) (string, error) {
+		return invoke(t, append(append([]string{}, paths...), args...)...)
+	}
+	if _, err := call("register", "--config-only", "--name", "demo", "--dir", "/srv/apps/demo", "--type", "nuxt", "--domain", "demo.test"); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "archives")
+	out, err := call("backup", "--all", "--output-dir", output, "--remote", "backup@192.0.2.10", "--remote-dir", "/srv/backups/abr", "--dry-run")
+	if err != nil || !strings.Contains(out, "services remain running") || !strings.Contains(out, "verify SHA256") {
+		t.Fatal("incomplete online backup preview", out, err)
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatal("preview created archives")
+	}
+	out, err = call("backup", "configure", "--host", "192.0.2.10", "--user", "backup", "--path", "/srv/backups/abr", "--dry-run")
+	if err != nil || !strings.Contains(out, "no connection tested or settings saved") {
+		t.Fatal("destination preview inaccurate", out, err)
+	}
+	for _, args := range [][]string{
+		{"backup", "--all", "demo", "--dry-run"},
+		{"backup", "--all", "--output-dir", "relative", "--dry-run"},
+		{"backup", "--all", "--remote", "backup@192.0.2.10", "--dry-run"},
+		{"backup", "--all", "--remote", "-bad", "--remote-dir", "/srv/backups/abr", "--dry-run"},
+		{"backup", "--all", "--transfer", "--dry-run"},
+		{"backup", "configure", "--host", "192.0.2.10", "--user", "backup", "--path", "relative", "--dry-run"},
+	} {
+		if out, err := call(args...); err == nil || out != "" {
+			t.Fatal("invalid backup reported success", args, out, err)
+		}
 	}
 }

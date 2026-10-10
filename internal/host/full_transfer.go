@@ -79,6 +79,14 @@ func (h Host) backupRepositories(c config.Config) ([]backup.App, error) {
 			return nil, fmt.Errorf("%s: backup requires a named Git branch: %w", a.Name, err)
 		}
 		record := backup.App{Name: a.Name, Repository: strings.TrimSpace(string(repo)), Branch: strings.TrimSpace(string(branch))}
+		commit, err := h.asUser(a, nil, true, "git", "rev-parse", "--verify", "HEAD")
+		if err != nil {
+			return nil, err
+		}
+		record.Commit = strings.TrimSpace(string(commit))
+		if !regexp.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`).MatchString(record.Commit) {
+			return nil, fmt.Errorf("%s: invalid backup commit", a.Name)
+		}
 		if !githubRepository.MatchString(record.Repository) {
 			return nil, fmt.Errorf("%s: origin must be a GitHub SSH repository", a.Name)
 		}
@@ -165,20 +173,8 @@ func copyBackupTree(source, destination string, optional bool) error {
 	return backup.CopyTree(source, destination)
 }
 
-func (h Host) serviceActive(unit string) (bool, error) {
-	out, err := h.run("Read shared service state", Command{Name: "systemctl", Args: []string{"show", "--property=ActiveState", "--value", unit}, Private: true})
-	if err != nil {
-		return false, err
-	}
-	state := strings.TrimSpace(string(out))
-	if state != "active" && state != "inactive" && state != "failed" {
-		return false, fmt.Errorf("shared service %s is not in a stable state", unit)
-	}
-	return state == "active", nil
-}
-
 // FullBackup produces one complete, root-only archive. It publishes only after
-// every capture, checksum and service restart has succeeded.
+// every capture and checksum has succeeded. Services remain running.
 func (h Host) FullBackup(output string) error {
 	if !filepath.IsAbs(output) || !strings.HasSuffix(output, ".tar.gz") || strings.ContainsAny(output, "\x00\r\n") {
 		return fmt.Errorf("use an absolute --output FILE.tar.gz")
@@ -189,7 +185,7 @@ func (h Host) FullBackup(output string) error {
 			if err != nil {
 				return err
 			}
-			h.say("Would pause %d managed apps, capture MySQL, Redis, .env, Laravel public/private uploads, settings, templates and credentials into %s, then resume previously enabled apps; no files changed", len(c.Apps), output)
+			h.say("Would capture %d managed apps online: MySQL, Redis, .env, full Laravel storage/app and saved source, settings, templates and credentials into %s; services remain running; no files changed", len(c.Apps), output)
 			return nil
 		}
 		return h.Manager.WithSnapshot(func(c config.Config, r ports.Registry) (result error) {
@@ -251,7 +247,7 @@ func (h Host) FullBackup(output string) error {
 					dbRecords[a.Name] = creds
 				}
 			}
-			// Validate all shared credentials and templates before taking services down.
+			// Capture only recorded shared credentials and editable templates.
 			for _, name := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json"} {
 				if err := copyBackupFile(h.path(filepath.Join(h.Manager.StateDir, name)), filepath.Join(stage, "state", name), name != "git/id_ed25519" && name != "git/known_hosts"); err != nil {
 					return err
@@ -259,75 +255,6 @@ func (h Host) FullBackup(output string) error {
 			}
 			if err := h.copyBackupTemplates(filepath.Join(stage, "templates")); err != nil {
 				return err
-			}
-			sharedUnits := []string{"caddy", "php" + services.PHPVersion + "-fpm"}
-			if !settings.NoRedis {
-				sharedUnits = append(sharedUnits, "redis-server")
-			}
-			active := map[string]bool{}
-			for _, unit := range sharedUnits {
-				active[unit], err = h.serviceActive(unit)
-				if err != nil {
-					return err
-				}
-			}
-			if !settings.NoRedis && !active["redis-server"] {
-				return fmt.Errorf("managed Redis must be running before a full backup")
-			}
-			var paused []config.App
-			var stopped []string
-			resumed := false
-			resume := func() error {
-				var failures []error
-				// Shared services must be ready before app enable/reload operations.
-				for _, unit := range slices.Backward(stopped) {
-					if active[unit] {
-						if err := h.command("systemctl", "start", unit); err != nil {
-							failures = append(failures, err)
-						}
-					}
-				}
-				for _, a := range paused {
-					index := slices.IndexFunc(records, func(record backup.App) bool { return record.Name == a.Name })
-					if index >= 0 && records[index].Enabled {
-						if err := h.enable(a, r); err != nil {
-							failures = append(failures, fmt.Errorf("resume %s: %w", a.Name, err))
-						}
-					}
-				}
-				return errors.Join(failures...)
-			}
-			defer func() {
-				if !resumed {
-					result = errors.Join(result, resume())
-				}
-			}()
-			for _, a := range c.Apps {
-				paused = append(paused, a)
-				if err := h.disable(a); err != nil {
-					return err
-				}
-			}
-			for _, unit := range sharedUnits {
-				if unit == "redis-server" {
-					if _, err := h.run("Persist Redis snapshot", Command{Name: "redis-cli", Args: []string{"SAVE"}, Private: true}); err != nil {
-						return err
-					}
-				}
-				stopped = append(stopped, unit)
-				if err := h.command("systemctl", "stop", unit); err != nil {
-					return err
-				}
-			}
-			for _, a := range c.Apps {
-				_, err := h.run("Check remaining app writers", Command{Name: "pgrep", Args: []string{"-u", a.User}, Private: true})
-				var status interface{ ExitCode() int }
-				if err == nil {
-					return fmt.Errorf("%s still has processes; stop external app writers before backing up", a.User)
-				}
-				if !errors.As(err, &status) || status.ExitCode() != 1 {
-					return err
-				}
 			}
 			for name, creds := range dbRecords {
 				if err := os.MkdirAll(filepath.Join(stage, "sql"), 0700); err != nil {
@@ -348,14 +275,16 @@ func (h Host) FullBackup(output string) error {
 				}
 			}
 			for _, a := range c.Apps {
+				record := records[slices.IndexFunc(records, func(record backup.App) bool { return record.Name == a.Name })]
+				if err := h.captureBackupCode(a, record, stage); err != nil {
+					return err
+				}
 				if err := copyBackupFile(h.path(filepath.Join(a.Directory, ".env")), filepath.Join(stage, "apps", a.Name, ".env"), a.Type == "nuxt"); err != nil {
 					return err
 				}
 				if a.Type == "laravel" {
-					for _, kind := range []string{"public", "private"} {
-						if err := copyBackupTree(h.path(filepath.Join(a.Directory, "storage/app", kind)), filepath.Join(stage, "apps", a.Name, "storage/app", kind), true); err != nil {
-							return err
-						}
+					if err := copyBackupTree(h.path(filepath.Join(a.Directory, "storage/app")), filepath.Join(stage, "apps", a.Name, "storage/app"), true); err != nil {
+						return err
 					}
 				}
 			}
@@ -365,16 +294,15 @@ func (h Host) FullBackup(output string) error {
 				}
 			}
 			if !settings.NoRedis {
-				if err := copyBackupTree(h.path("/var/lib/redis"), filepath.Join(stage, "redis"), false); err != nil {
+				if err := os.MkdirAll(filepath.Join(stage, "redis"), 0700); err != nil {
+					return err
+				}
+				if _, err := h.run("Capture online Redis RDB snapshot", Command{Name: "redis-cli", Args: []string{"--rdb", filepath.Join(stage, "redis/dump.rdb")}, Private: true}); err != nil {
 					return err
 				}
 			}
 			if err := copyBackupTree(h.path("/var/lib/caddy/.local/share/caddy"), filepath.Join(stage, "caddy"), true); err != nil {
 				return err
-			}
-			resumed = true
-			if err := resume(); err != nil {
-				return fmt.Errorf("backup captured but app restart failed; archive not published: %w", err)
 			}
 			f, err := os.CreateTemp(filepath.Dir(output), ".abr-backup-")
 			if err != nil {
@@ -423,11 +351,20 @@ func appDirectories(c config.Config) []string {
 // FullRestore validates the complete archive before provisioning, and refuses to
 // replace existing projects or adopt existing users/databases.
 func (h Host) FullRestore(input string, o RestoreOptions) error {
+	return h.RestoreArchives([]string{input}, o)
+}
+
+func (h Host) RestoreArchives(inputs []string, o RestoreOptions) error {
 	if !o.Yes && !h.DryRun {
 		return fmt.Errorf("full restore imports SQL and Redis data; pass --yes to confirm")
 	}
-	if !filepath.IsAbs(input) || !strings.HasSuffix(input, ".tar.gz") || strings.ContainsAny(input, "\x00\r\n") {
-		return fmt.Errorf("use an absolute backup FILE.tar.gz")
+	if len(inputs) == 0 {
+		return fmt.Errorf("select at least one backup archive")
+	}
+	for _, input := range inputs {
+		if !filepath.IsAbs(input) || !strings.HasSuffix(input, ".tar.gz") || strings.ContainsAny(input, "\x00\r\n") {
+			return fmt.Errorf("use absolute backup FILE.tar.gz paths")
+		}
 	}
 	if o.SSHPort < 0 || o.SSHPort > 65535 {
 		return fmt.Errorf("invalid SSH port")
@@ -435,27 +372,17 @@ func (h Host) FullRestore(input string, o RestoreOptions) error {
 	if err := h.guard(); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(input, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("backup must be a regular file")
-	}
 	// A preview extracts only to an ephemeral private directory, never host paths.
 	stage, err := os.MkdirTemp("", "abr-restore-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(stage)
-	m, err := backup.Extract(f, stage)
-	if err != nil {
-		return fmt.Errorf("invalid full backup: %w", err)
+	var m backup.Manifest
+	for _, input := range inputs {
+		if err := h.extractRestoreArchive(input, stage, &m); err != nil {
+			return err
+		}
 	}
 	if err := validateFullBackup(m, stage); err != nil {
 		return err
@@ -470,11 +397,11 @@ func (h Host) FullRestore(input string, o RestoreOptions) error {
 		if err := h.freshRestoreTarget(m, false); err != nil {
 			return err
 		}
-		h.say("Restore preview: %d apps; hostname %s; MySQL dumps and credentials; Redis: %t; latest commits from saved branches", len(m.Apps), m.Settings.Hostname, !m.Settings.NoRedis)
+		h.say("Restore preview: %d apps; hostname %s; MySQL dumps and credentials; Redis data: %t; saved source commits", len(m.Apps), m.Settings.Hostname, !m.Settings.NoRedis && m.Scope != "app")
 		for _, record := range m.Apps {
-			h.say("Would clone latest %s branch %s into %s, restore .env/uploads/SQL, install dependencies and build with saved settings, migrate and optimize", record.Repository, record.Branch, filepath.Join(h.AppsDir, record.Name))
+			h.say("Would restore saved code %s on branch %s into %s from its bundled repository, restore .env/storage/SQL, install dependencies and build with saved settings, migrate and optimize", record.Commit, record.Branch, filepath.Join(h.AppsDir, record.Name))
 		}
-		h.say("Would provision Ubuntu shared runtimes, recreate users/accounts, regenerate services and ports, restore Redis and Caddy data, then enable previously enabled apps; no host changes")
+		h.say("Would provision Ubuntu shared runtimes, recreate users/accounts, regenerate services and ports, restore included shared data, then enable previously enabled apps; no host changes")
 		return nil
 	}
 	return h.locked(func() (result error) {
@@ -512,6 +439,34 @@ func (h Host) FullRestore(input string, o RestoreOptions) error {
 		}
 		return h.restoreApplications(m, stage)
 	})
+}
+
+func (h Host) extractRestoreArchive(input, destination string, combined *backup.Manifest) error {
+	f, err := os.OpenFile(input, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("backup must be a regular file")
+	}
+	stage, err := os.MkdirTemp("", "abr-archive-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	m, err := backup.Extract(f, stage)
+	if err != nil {
+		return fmt.Errorf("invalid backup: %w", err)
+	}
+	if err := validateFullBackup(m, stage); err != nil {
+		return err
+	}
+	return backup.Merge(combined, m, stage, destination)
 }
 
 // Shared runtimes and the empty-target snapshot are installed before this phase.
@@ -554,7 +509,7 @@ func (h Host) restoreApplications(m backup.Manifest, stage string) (result error
 	}
 	for _, a := range m.Config.Apps {
 		record := m.Apps[slices.IndexFunc(m.Apps, func(record backup.App) bool { return record.Name == a.Name })]
-		if err := h.Clone(record.Repository, a.Directory); err != nil {
+		if err := h.cloneRepository(record.Repository, a.Directory, filepath.Join(stage, "apps", a.Name, "repository.bundle"), record.Branch); err != nil {
 			return fmt.Errorf("clone %s: %w", a.Name, err)
 		}
 		if err := h.ensureUser(a); err != nil {
@@ -565,6 +520,16 @@ func (h Host) restoreApplications(m backup.Manifest, stage string) (result error
 		}
 		if _, err := h.asUser(a, nil, true, "git", "checkout", record.Branch); err != nil {
 			return fmt.Errorf("checkout %s: %w", a.Name, err)
+		}
+		commit, err := h.asUser(a, nil, true, "git", "rev-parse", "--verify", "HEAD")
+		if err != nil || strings.TrimSpace(string(commit)) != record.Commit {
+			return fmt.Errorf("%s: bundled source commit differs from manifest", a.Name)
+		}
+		if _, err := h.asUser(a, nil, true, "git", "remote", "set-url", "origin", record.Repository); err != nil {
+			return err
+		}
+		if err := h.restoreWorkingSource(stage, a, m); err != nil {
+			return err
 		}
 		if err := restoreAppFiles(stage, a, h); err != nil {
 			return err
@@ -611,7 +576,7 @@ func (h Host) restoreApplications(m backup.Manifest, stage string) (result error
 			}
 		}
 	}
-	h.say("Full restore complete: %d apps restored from latest Git branches. Check app health and point DNS at this server; keep the old server's workers stopped.", len(m.Apps))
+	h.say("Full restore complete: %d apps rebuilt from saved source commits. Check app health and point DNS at this server; keep the old server's workers stopped.", len(m.Apps))
 	return nil
 }
 
@@ -674,28 +639,24 @@ func restoreAppFiles(stage string, a config.App, h Host) error {
 	if a.Type == "laravel" {
 		// Copy while the fresh checkout is still solely under abr's control. Root
 		// operations are bounded by os.Root and never follow links outside the project.
-		for _, kind := range []string{"public", "private"} {
-			source := filepath.Join(stage, "apps", a.Name, "storage/app", kind)
-			if _, err := os.Lstat(source); os.IsNotExist(err) {
-				continue
-			} else if err != nil {
-				return err
-			}
-			projectRoot, err := os.OpenRoot(h.path(a.Directory))
-			if err != nil {
-				return err
-			}
-			target := filepath.Join("storage/app", kind)
-			var targetRoot *os.Root
-			targetRoot, err = openRestoreDirectory(projectRoot, target)
-			if err == nil {
-				err = copyIntoRoot(source, targetRoot)
-				targetRoot.Close()
-			}
-			projectRoot.Close()
-			if err != nil {
-				return err
-			}
+		source := filepath.Join(stage, "apps", a.Name, "storage/app")
+		if _, err := os.Lstat(source); os.IsNotExist(err) {
+			return h.permissions(a)
+		} else if err != nil {
+			return err
+		}
+		projectRoot, err := os.OpenRoot(h.path(a.Directory))
+		if err != nil {
+			return err
+		}
+		targetRoot, err := openRestoreDirectory(projectRoot, "storage/app")
+		if err == nil {
+			err = copyIntoRoot(source, targetRoot)
+			targetRoot.Close()
+		}
+		projectRoot.Close()
+		if err != nil {
+			return err
 		}
 	}
 	return h.permissions(a)
@@ -713,14 +674,23 @@ func copyIntoRoot(source string, target *os.Root) error {
 			return err
 		}
 		if entry.IsDir() {
-			return target.MkdirAll(rel, 0700)
+			directory, err := openRestoreDirectory(target, rel)
+			if err == nil {
+				err = directory.Close()
+			}
+			return err
 		}
 		f, err := os.Open(name)
 		if err != nil {
 			return err
 		}
 		defer f.Close()
-		out, err := target.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
+		parent, err := openRestoreDirectory(target, filepath.Dir(rel))
+		if err != nil {
+			return err
+		}
+		defer parent.Close()
+		out, err := parent.OpenFile(filepath.Base(rel), os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0600)
 		if err != nil {
 			return err
 		}
@@ -774,7 +744,7 @@ func (h Host) restoreSharedData(stage string, m backup.Manifest) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if !m.Settings.NoRedis {
+	if !m.Settings.NoRedis && m.Scope != "app" {
 		if err := h.command("systemctl", "stop", "redis-server"); err != nil {
 			return err
 		}
@@ -792,11 +762,18 @@ func (h Host) restoreSharedData(stage string, m backup.Manifest) error {
 		if err := h.command("chown", "-hR", "redis:redis", "--", target); err != nil {
 			return err
 		}
-		if err := h.command("systemctl", "start", "redis-server"); err != nil {
+		if err := h.startRestoredRedis(); err != nil {
 			return err
 		}
-		if _, err := h.run("Verify restored Redis", Command{Name: "redis-cli", Args: []string{"PING"}, Private: true}); err != nil {
-			return err
+	} else if !m.Settings.NoRedis && m.Scope == "app" {
+		// The fresh Redis data stays empty, but saved runtime settings must take effect.
+		if _, ok := m.Files["shared/redis.conf"]; ok {
+			if err := h.command("systemctl", "restart", "redis-server"); err != nil {
+				return err
+			}
+			if _, err := h.run("Verify fresh Redis", Command{Name: "redis-cli", Args: []string{"PING"}, Private: true}); err != nil {
+				return err
+			}
 		}
 	}
 	if _, ok := m.Files["shared/mysql.cnf"]; ok {
@@ -816,16 +793,62 @@ func (h Host) restoreSharedData(stage string, m backup.Manifest) error {
 	return h.command("systemctl", "start", "caddy", "php"+services.PHPVersion+"-fpm")
 }
 
+// Online full backups carry an RDB, not a live AOF. Redis must first load that
+// RDB with AOF disabled, then recreate its AOF from the loaded data.
+func (h Host) startRestoredRedis() (result error) {
+	name := "/etc/redis/abr.conf"
+	data, err := h.read(name)
+	if err != nil {
+		return err
+	}
+	directive := regexp.MustCompile(`(?m)^[ \t]*appendonly[ \t]+(yes|no)[ \t]*$`)
+	matches := directive.FindAllSubmatch(data, -1)
+	if len(matches) != 1 {
+		return fmt.Errorf("restoring Redis requires one managed appendonly setting")
+	}
+	enabled := string(matches[0][1]) == "yes"
+	writeConfig := func(contents []byte) error {
+		if err := h.write(name, contents, 0640); err != nil {
+			return err
+		}
+		return h.command("chown", "root:redis", name)
+	}
+	if enabled {
+		defer func() { result = errors.Join(result, writeConfig(data)) }()
+		if err := writeConfig(directive.ReplaceAll(data, []byte("appendonly no"))); err != nil {
+			return err
+		}
+	}
+	if err := h.command("systemctl", "start", "redis-server"); err != nil {
+		return err
+	}
+	if _, err := h.run("Verify restored Redis", Command{Name: "redis-cli", Args: []string{"PING"}, Private: true}); err != nil {
+		return err
+	}
+	if enabled {
+		if _, err := h.run("Recreate Redis AOF from restored snapshot", Command{Name: "redis-cli", Args: []string{"CONFIG", "SET", "appendonly", "yes"}, Private: true}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateFullBackup(m backup.Manifest, stage string) error {
 	if !regexp.MustCompile(`^(latest|[0-9]{4}\.[0-9]+\.[0-9]+)$`).MatchString(m.Settings.RoadRunnerVersion) {
 		return fmt.Errorf("invalid RoadRunner setting in backup")
 	}
 	for _, record := range m.Apps {
+		if !regexp.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`).MatchString(record.Commit) {
+			return fmt.Errorf("invalid backup source commit")
+		}
 		if !githubRepository.MatchString(record.Repository) || strings.HasPrefix(record.Branch, "-") || strings.ContainsAny(record.Branch, " ~^:?*[\\") || strings.Contains(record.Branch, "..") || strings.Contains(record.Branch, "@{") || strings.HasSuffix(record.Branch, ".lock") || strings.HasSuffix(record.Branch, "/") || strings.HasSuffix(record.Branch, ".") {
 			return fmt.Errorf("invalid backup repository or branch")
 		}
 	}
 	allowed := func(name string, directory bool) bool {
+		if m.Scope == "app" && (name == "redis" || name == "caddy" || strings.HasPrefix(name, "redis/") || strings.HasPrefix(name, "caddy/")) {
+			return false
+		}
 		if _, ok := sharedBackupFiles()[name]; ok {
 			return !directory
 		}
@@ -860,18 +883,24 @@ func validateFullBackup(m backup.Manifest, stage string) error {
 			if name == base+"/.env" {
 				return !directory
 			}
+			if name == base+"/repository.bundle" {
+				return !directory
+			}
+			if name == base+"/source-deleted.json" {
+				return !directory
+			}
+			if name == base+"/source" {
+				return directory
+			}
+			if strings.HasPrefix(name, base+"/source/") {
+				return validSourcePath(strings.TrimPrefix(name, base+"/source/"))
+			}
 			if a.Type == "laravel" {
 				if name == base+"/storage" || name == base+"/storage/app" {
 					return directory
 				}
-				for _, kind := range []string{"public", "private"} {
-					prefix := base + "/storage/app/" + kind
-					if name == prefix {
-						return directory
-					}
-					if strings.HasPrefix(name, prefix+"/") {
-						return true
-					}
+				if strings.HasPrefix(name, base+"/storage/app/") {
+					return true
 				}
 			}
 		}
@@ -895,6 +924,28 @@ func validateFullBackup(m backup.Manifest, stage string) error {
 		return err
 	}
 	for _, a := range m.Config.Apps {
+		if record, ok := m.Files["apps/"+a.Name+"/repository.bundle"]; !ok || record.Directory || record.Size == 0 {
+			return fmt.Errorf("%s: backup source bundle missing", a.Name)
+		}
+		if _, ok := m.Files["apps/"+a.Name+"/source"]; !ok {
+			return fmt.Errorf("%s: backup working source missing", a.Name)
+		}
+		if record, ok := m.Files["apps/"+a.Name+"/source-deleted.json"]; !ok || record.Directory || record.Size > 1<<20 {
+			return fmt.Errorf("%s: backup source deletion inventory missing or too large", a.Name)
+		}
+		data, err := readProjectFile(filepath.Join(stage, "apps", a.Name, "source-deleted.json"), 1<<20)
+		if err != nil {
+			return err
+		}
+		var deleted []string
+		if err := json.Unmarshal(data, &deleted); err != nil {
+			return fmt.Errorf("invalid source deletion inventory")
+		}
+		for _, name := range deleted {
+			if !validSourcePath(name) {
+				return fmt.Errorf("invalid deleted-source path")
+			}
+		}
 		if _, err := services.Render(a, m.Ports, filepath.Join(stage, "templates"), "/var/lib/abr"); err != nil {
 			return err
 		}
@@ -917,7 +968,7 @@ func validateFullBackup(m backup.Manifest, stage string) error {
 			return fmt.Errorf("backup Git credentials missing or too large")
 		}
 	}
-	if !m.Settings.NoRedis {
+	if !m.Settings.NoRedis && m.Scope != "app" {
 		if _, ok := m.Files["redis/dump.rdb"]; !ok {
 			return fmt.Errorf("backup Redis snapshot missing")
 		}

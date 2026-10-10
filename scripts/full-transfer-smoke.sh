@@ -52,6 +52,14 @@ printf '%s' 'saved private upload' | sudo runuser -u abr-fixture-php -- tee /srv
 printf '%s\n' 'NUXT_FULL_BACKUP=preserved' | sudo runuser -u abr-fixture-spa -- tee /srv/apps/fixture-spa/.env >/dev/null
 sudo runuser -u abr-fixture-spa -- chmod 600 /srv/apps/fixture-spa/.env
 sudo cp /srv/apps/fixture-php/.env "$abr_binary_directory/full-env-before"
+sudo runuser -u abr-fixture-php -- /usr/bin/git -C /srv/apps/fixture-php rev-parse HEAD > "$abr_binary_directory/full-head-before"
+# Include working source and arbitrary storage, not only committed files and
+# public/private uploads. A local config ignored by Git must survive too.
+printf '%s\n' 'saved working source' | sudo runuser -u abr-fixture-php -- tee /srv/apps/fixture-php/public/full-saved.txt >/dev/null
+printf '%s\n' 'full-local.ini' | sudo runuser -u abr-fixture-php -- tee -a /srv/apps/fixture-php/.git/info/exclude >/dev/null
+printf '%s\n' 'saved local configuration' | sudo runuser -u abr-fixture-php -- tee /srv/apps/fixture-php/full-local.ini >/dev/null
+sudo runuser -u abr-fixture-php -- mkdir -p /srv/apps/fixture-php/storage/app/custom
+printf '%s\n' 'saved custom storage' | sudo runuser -u abr-fixture-php -- tee /srv/apps/fixture-php/storage/app/custom/data.txt >/dev/null
 sudo cp /var/lib/abr-ci/databases/fixture-php.json "$abr_binary_directory/full-db-before"
 sudo cp /var/lib/abr-ci/git/id_ed25519 "$abr_binary_directory/full-git-before"
 abr_ci ports > "$abr_binary_directory/full-ports-before"
@@ -65,6 +73,7 @@ printf '\n; Full backup edited template fixture\n' | sudo tee -a /etc/abr/templa
 sudo cp /etc/abr/templates/php-cli.ini.tmpl "$abr_binary_directory/full-template-before"
 # Disabled applications must remain disabled after a successful round trip.
 abr_ci disable fixture-spa
+source "$abr_smoke_script_directory/app-backup-smoke.sh"
 abr_ci backup --output "$full_backup_fixture"
 sudo test "$(sudo stat -c '%a' "$full_backup_fixture")" = 600
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
@@ -75,7 +84,7 @@ sudo tar -tzf "$full_backup_fixture" > "$abr_binary_directory/full-inventory"
 if grep -E '(^|/)(vendor|node_modules|\.git|\.output)/' "$abr_binary_directory/full-inventory"; then
   echo 'Full backup included rebuildable project data' >&2; exit 1
 fi
-# Restore must use code newer than the backup, rather than the captured revision.
+# Change the remote after capture: restore must still use the saved source.
 full_worktree="$abr_binary_directory/full-latest-source"
 sudo /usr/bin/git -c safe.directory="$full_git_fixture/fixture-php.git" clone "$full_git_fixture/fixture-php.git" "$full_worktree"
 sudo /usr/bin/git -C "$full_worktree" config user.name 'Abr backup fixture'
@@ -102,6 +111,7 @@ SQL
 sudo redis-cli -n 5 DEL abr-full-state >/dev/null
 sudo systemctl stop caddy
 sudo rm -rf /var/lib/caddy/.local
+source "$abr_smoke_script_directory/app-restore-smoke.sh"
 abr_ci restore "$full_backup_fixture" --dry-run
 sudo test ! -e /var/lib/abr-ci/setup.json
 abr_ci restore "$full_backup_fixture" --yes --admin-user root --ssh-port 22
@@ -122,6 +132,11 @@ sudo grep -Fx 'NUXT_FULL_BACKUP=preserved' /srv/apps/fixture-spa/.env
 sudo test ! -e /srv/apps/fixture-ssr/.env
 sudo grep -Fx 'saved public upload' /srv/apps/fixture-php/storage/app/public/full-public.txt
 sudo grep -Fx 'saved private upload' /srv/apps/fixture-php/storage/app/private/full-private.txt
+sudo grep -Fx 'saved custom storage' /srv/apps/fixture-php/storage/app/custom/data.txt
+sudo grep -Fx 'saved local configuration' /srv/apps/fixture-php/full-local.ini
+sudo runuser -u abr-fixture-php -- /usr/bin/git -C /srv/apps/fixture-php rev-parse HEAD > "$abr_binary_directory/full-head-after"
+cmp "$abr_binary_directory/full-head-before" "$abr_binary_directory/full-head-after"
+sudo test ! -e /srv/apps/fixture-php/public/full-latest.txt
 sudo test "$(sudo stat -c '%U:%a' /srv/apps/fixture-php/.env)" = abr-fixture-php:600
 sudo test "$(sudo stat -c '%U' /srv/apps/fixture-php/storage/app/private/full-private.txt)" = abr-fixture-php
 fixture_denied nobody cat /srv/apps/fixture-php/storage/app/private/full-private.txt
@@ -130,7 +145,7 @@ SELECT id FROM abr_full_backup_probe;
 SQL
 sudo redis-cli -n 5 GET abr-full-state | grep -Fx saved-redis-state
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
-curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/full-latest.txt | grep -F 'latest restored Git code'
+curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/full-saved.txt | grep -F 'saved working source'
 fixture_https www.fixture-octane.localhost | grep -F 'Laravel fixture database=1'
 fixture_https api.fixture-octane.localhost | grep -F 'Abr Nuxt fixture'
 # App manifests must reference new resources, and disabled Nuxt must stay stopped.
@@ -147,4 +162,4 @@ abr_ci doctor
 sudo rm /usr/local/bin/git
 fixture_git_shim=0
 sudo rm -rf "$full_git_fixture"
-echo 'Full backup/latest-code restore round trip passed.'
+echo 'Full backup/saved-source restore round trip passed.'

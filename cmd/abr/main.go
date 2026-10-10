@@ -17,6 +17,7 @@ import (
 	"golang.org/x/term"
 
 	"abr"
+	"abr/internal/backup"
 	"abr/internal/config"
 	"abr/internal/host"
 	"abr/internal/manager"
@@ -57,9 +58,16 @@ Commands:
   env APP          Prepare .env when its example exists; fill managed Laravel MySQL values
   database APP     Create/verify MySQL database (--show prints credentials)
   database --admin TablePlus root connection details (--show prints password)
-  backup           Full backup of all apps/data/settings (--output FILE.tar.gz)
+  backup APP... | --all --output-dir DIR
+                   Back up apps sequentially online using the saved backup destination
+                   --remote USER@HOST --remote-dir DIR verifies transfer then deletes local archive
+  backup configure --host HOST --user USER --path DIR [--key FILE | --password-stdin]
+                   Save backup server settings; generates a dedicated key by default
+  backup test      Verify the saved SSH destination and private backup directory
+  backup --output FILE.tar.gz
+                   Online full-server backup including shared Redis and Caddy data
   restore FILE.tar.gz --yes
-                   Restore latest Git code and saved data onto a fresh server
+                   Restore saved source, databases, storage and settings on a fresh server
   database backup APP... | --all --output-dir DIR
                    Export selected/all managed databases as private SQL files
   database import APP FILE.sql --yes
@@ -132,8 +140,11 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "logs" && len(args) > 0 && args[0] == "clear" {
 		command, args = "logs clear", args[1:]
 	}
+	if command == "backup" && len(args) > 0 && (args[0] == "configure" || args[0] == "test") {
+		command, args = "backup "+args[0], args[1:]
+	}
 	switch command {
-	case "backup", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
+	case "backup", "backup configure", "backup test", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -148,6 +159,8 @@ func run(args []string, out, stderr io.Writer) error {
 	var deploy host.DeployOptions
 	var gitKey, backupDirectory, fullBackupOutput string
 	var restore host.RestoreOptions
+	var appBackup host.BackupOptions
+	var destination backup.Destination
 	var canonicalHost string
 	var backupAll, importYes, purge, removeYes bool
 	var composerHost, composerUsername string
@@ -158,7 +171,20 @@ func run(args []string, out, stderr io.Writer) error {
 	var diskUsage host.DiskOptions
 	switch command {
 	case "backup":
-		fs.StringVar(&fullBackupOutput, "output", "", "absolute private backup FILE.tar.gz (required)")
+		fs.StringVar(&fullBackupOutput, "output", "", "online full-server backup FILE.tar.gz including shared persistence")
+		fs.BoolVar(&appBackup.All, "all", false, "back up all registered apps sequentially")
+		fs.StringVar(&appBackup.OutputDir, "output-dir", "", "absolute private directory for per-app archives")
+		fs.StringVar(&appBackup.Remote, "remote", "", "backup SSH destination USER@HOST")
+		fs.StringVar(&appBackup.RemoteDir, "remote-dir", "", "existing private directory on the backup server (0700)")
+		fs.IntVar(&appBackup.SSHPort, "ssh-port", 0, "backup server SSH port (default: 22)")
+		fs.BoolVar(&appBackup.Transfer, "transfer", false, "require a remote destination; remove local archive only after verified transfer")
+	case "backup configure":
+		fs.StringVar(&destination.Host, "host", "", "backup server IP or hostname")
+		fs.StringVar(&destination.User, "user", "", "backup server SSH user")
+		fs.StringVar(&destination.Directory, "path", "", "private absolute backup directory on the backup server")
+		fs.IntVar(&destination.Port, "ssh-port", 22, "backup server SSH port")
+		fs.StringVar(&gitKey, "key", "", "import an unencrypted SSH private key; blank generates/reuses a dedicated key")
+		fs.BoolVar(&passwordStdin, "password-stdin", false, "read the backup SSH password from stdin; never pass it as an argument")
 	case "restore":
 		fs.BoolVar(&restore.Yes, "yes", false, "confirm full SQL and Redis restore on a fresh server")
 		fs.StringVar(&restore.AdminUser, "admin-user", "", "existing administrator on this new server")
@@ -283,11 +309,15 @@ func run(args []string, out, stderr io.Writer) error {
 	}
 	switch command {
 	case "backup":
-		if len(positional) != 0 || fullBackupOutput == "" {
-			return fmt.Errorf("use abr backup --output /absolute/backup.tar.gz")
+		if fullBackupOutput != "" {
+			if len(positional) != 0 || appBackup != (host.BackupOptions{}) {
+				return fmt.Errorf("--output is a separate full-server backup; use APP... or --all with --output-dir for app backups")
+			}
+		} else if err := appBackup.Validate(positional); err != nil {
+			return err
 		}
 	case "restore":
-		if len(positional) != 1 {
+		if len(positional) < 1 {
 			return fmt.Errorf("use abr restore /absolute/backup.tar.gz --yes")
 		}
 	case "artisan":
@@ -352,9 +382,35 @@ func run(args []string, out, stderr io.Writer) error {
 	h.Manager = m
 	switch command {
 	case "backup":
-		return h.FullBackup(fullBackupOutput)
+		if fullBackupOutput != "" {
+			return h.FullBackup(fullBackupOutput)
+		}
+		return h.BackupApps(positional, appBackup)
+	case "backup configure":
+		destination.Auth = "key"
+		if passwordStdin {
+			if gitKey != "" {
+				return fmt.Errorf("choose --key or --password-stdin")
+			}
+			destination.Auth = "password"
+			if h.DryRun {
+				destination.Password = "preview"
+			} else {
+				if err := host.Require(); err != nil {
+					return err
+				}
+				data, err := io.ReadAll(io.LimitReader(os.Stdin, 4098))
+				if err != nil || len(data) > 4097 {
+					return fmt.Errorf("cannot read SSH password (max 4096 bytes)")
+				}
+				destination.Password = strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
+			}
+		}
+		return h.ConfigureBackup(destination, gitKey)
+	case "backup test":
+		return h.TestBackupDestination()
 	case "restore":
-		return h.FullRestore(positional[0], restore)
+		return h.RestoreArchives(positional, restore)
 	case "artisan", "shell":
 		if command == "shell" && !h.DryRun && !terminalAvailable(out) {
 			return fmt.Errorf("shell requires a terminal; use abr artisan APP COMMAND for scripts")
@@ -426,6 +482,11 @@ func run(args []string, out, stderr io.Writer) error {
 				commandHost := h
 				commandHost.Output = output
 				return commandHost.ComposerAuth(repository, username, password)
+			},
+			BackupConfigure: func(destination backup.Destination, key string, output io.Writer) error {
+				commandHost := h
+				commandHost.Output = output
+				return commandHost.ConfigureBackup(destination, key)
 			},
 		})
 	case "version":

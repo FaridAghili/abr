@@ -18,15 +18,16 @@ import (
 )
 
 type Command struct {
-	Name    string
-	Args    []string
-	Dir     string
-	Env     []string
-	Input   []byte
-	Stdin   io.Reader // Stream SQL imports without retaining them in memory.
-	Stdout  io.Writer // Stream dumps directly to a private file, never logs.
-	Stream  bool      // Commands whose return output is unused must not accumulate it.
-	Private bool      // Never display SQL or its error output, which can contain credentials.
+	Name       string
+	Args       []string
+	Dir        string
+	Env        []string
+	Input      []byte
+	Stdin      io.Reader  // Stream SQL imports without retaining them in memory.
+	Stdout     io.Writer  // Stream dumps directly to a private file, never logs.
+	Stream     bool       // Commands whose return output is unused must not accumulate it.
+	Private    bool       // Never display SQL or its error output, which can contain credentials.
+	ExtraFiles []*os.File // Private descriptors, e.g. SSH password input; never args/environment.
 }
 
 type Runner interface{ Run(Command) ([]byte, error) }
@@ -88,6 +89,7 @@ func (r ExecRunner) Run(c Command) ([]byte, error) {
 	}
 	cmd := exec.Command(name, c.Args...)
 	cmd.Dir = c.Dir
+	cmd.ExtraFiles = c.ExtraFiles
 	// Do not expose sudo's environment or honor loader, Git, npm, PHP, or proxy
 	// overrides while executing privileged host operations.
 	cmd.Env = append([]string{"PATH=" + hostPath, "HOME=/root", "USER=root", "LOGNAME=root", "LANG=C.UTF-8"}, c.Env...)

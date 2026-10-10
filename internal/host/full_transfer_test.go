@@ -21,7 +21,6 @@ import (
 type fullRunner struct {
 	base        *fakeRunner
 	failDump    bool
-	failResume  bool
 	cloneSource string
 	freshRoot   string
 	onCommand   func(Command) error
@@ -49,6 +48,32 @@ func (r *fullRunner) Run(c Command) ([]byte, error) {
 		return out, err
 	}
 	if c.Name == "runuser" && slices.Contains(c.Args, "git") {
+		if slices.Contains(c.Args, "bundle") && slices.Contains(c.Args, "create") {
+			r.base.calls = append(r.base.calls, c)
+			_, err := io.WriteString(c.Stdout, "fixture self-contained source bundle\n")
+			return nil, err
+		}
+		if slices.Contains(c.Args, "ls-tree") {
+			r.base.calls = append(r.base.calls, c)
+			var names []string
+			err := filepath.WalkDir(c.Dir, func(name string, entry os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return walkErr
+				}
+				if entry.IsDir() {
+					if entry.Name() == ".git" || entry.Name() == "vendor" || entry.Name() == "node_modules" {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				rel, err := filepath.Rel(c.Dir, name)
+				if err == nil {
+					names = append(names, filepath.ToSlash(rel))
+				}
+				return err
+			})
+			return []byte(strings.Join(names, "\x00") + "\x00"), err
+		}
 		if slices.Contains(c.Args, "remote") && slices.Contains(c.Args, "get-url") {
 			r.base.calls = append(r.base.calls, c)
 			return []byte("git@github.com:fixture/" + filepath.Base(c.Dir) + ".git\n"), nil
@@ -68,9 +93,9 @@ func (r *fullRunner) Run(c Command) ([]byte, error) {
 		}
 		return nil, nil
 	}
-	if r.failResume && c.Name == "systemctl" && slices.Contains(c.Args, "start") {
+	if c.Name == "redis-cli" && len(c.Args) == 2 && c.Args[0] == "--rdb" {
 		r.base.calls = append(r.base.calls, c)
-		return nil, errors.New("fixture resume failure")
+		return nil, os.WriteFile(c.Args[1], []byte("redis fixture snapshot"), 0600)
 	}
 	return r.base.Run(c)
 }
@@ -117,6 +142,8 @@ func fullFixture(t *testing.T, enabled bool) (Host, *fullRunner, string, func())
 		"state/git/known_hosts":                                 githubHostKey,
 		"apps/app/storage/app/public/photo.txt":                 "public fixture upload",
 		"apps/app/storage/app/private/private.txt":              "private fixture upload",
+		"apps/app/storage/app/custom/data.bin":                  "custom storage fixture",
+		"apps/app/saved.txt":                                    "saved source fixture",
 		"apps/app/vendor/not-backed-up":                         "generated dependency",
 		"var/lib/caddy/.local/share/caddy/pki/root.key":         "private fixture Caddy key",
 		"var/lib/redis/dump.rdb":                                "redis fixture snapshot",
@@ -202,18 +229,20 @@ func TestFullBackupScopePrivateDataAndResume(t *testing.T) {
 	if err != nil || !manifest.Enabled {
 		t.Fatal("previously running app was not resumed", err)
 	}
-	stoppedRedis, startedRedis := false, false
+	capturedRedis := false
 	for _, c := range runner.base.calls {
-		if c.Name == "systemctl" && slices.Contains(c.Args, "redis-server") {
-			stoppedRedis = stoppedRedis || slices.Contains(c.Args, "stop")
-			startedRedis = startedRedis || slices.Contains(c.Args, "start")
+		if c.Name == "systemctl" {
+			t.Fatal("online backup changed service state", c.Args)
+		}
+		if c.Name == "redis-cli" && slices.Contains(c.Args, "--rdb") {
+			capturedRedis = true
 		}
 		if c.Name == "mysqldump" && (!c.Private || c.Stdout == nil) {
 			t.Fatal("SQL not private/streamed")
 		}
 	}
-	if !stoppedRedis || !startedRedis {
-		t.Fatal("Redis capture was not quiesced/resumed")
+	if !capturedRedis {
+		t.Fatal("Redis online snapshot missing")
 	}
 	text := h.Output.(*bytes.Buffer).String()
 	for _, secret := range []string{"private fixture key", "private SQL fixture", "APP_KEY=existing-key", "private fixture upload"} {
@@ -231,13 +260,21 @@ func TestFullBackupScopePrivateDataAndResume(t *testing.T) {
 	}
 }
 
-func TestFullBackupFailureResumesAndDoesNotPublish(t *testing.T) {
-	for _, resumeFailure := range []bool{false, true} {
-		t.Run(map[bool]string{false: "dump", true: "resume"}[resumeFailure], func(t *testing.T) {
+func TestFullBackupFailureDoesNotPublishOrChangeServices(t *testing.T) {
+	for _, redisFailure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "dump", true: "redis"}[redisFailure], func(t *testing.T) {
 			h, runner, output, cleanup := fullFixture(t, true)
 			defer cleanup()
-			runner.failDump = !resumeFailure
-			runner.failResume = resumeFailure
+			runner.failDump = !redisFailure
+			runner.onCommand = func(c Command) error {
+				if c.Name == "systemctl" {
+					t.Fatal("backup changed service state")
+				}
+				if redisFailure && c.Name == "redis-cli" {
+					return errors.New("fixture Redis failure")
+				}
+				return nil
+			}
 			if err := h.FullBackup(output); err == nil {
 				t.Fatal("backup failure reported success")
 			}
@@ -248,12 +285,10 @@ func TestFullBackupFailureResumesAndDoesNotPublish(t *testing.T) {
 			if len(temps) != 0 {
 				t.Fatal("partial archive leaked")
 			}
-			if !resumeFailure {
-				a, _, _ := h.application("app")
-				m, _, err := h.loadManifest(a)
-				if err != nil || !m.Enabled {
-					t.Fatal("failed capture did not resume app", err)
-				}
+			a, _, _ := h.application("app")
+			m, _, err := h.loadManifest(a)
+			if err != nil || !m.Enabled {
+				t.Fatal("failed capture changed app state", err)
 			}
 		})
 	}
@@ -303,7 +338,7 @@ func TestFullRestoreConfirmationPreviewAndFreshTarget(t *testing.T) {
 		t.Fatal("preview provisioned state")
 	}
 	text := h.Output.(*bytes.Buffer).String()
-	if !strings.Contains(text, "latest") || !strings.Contains(text, "migrate and optimize") {
+	if !strings.Contains(text, "saved code") || !strings.Contains(text, "migrate and optimize") {
 		t.Fatal("missing restore preview", text)
 	}
 	if err := os.MkdirAll(filepath.Join(h.AppsDir, "app"), 0700); err != nil {
@@ -374,8 +409,9 @@ func TestRestoreApplicationOrderingCredentialsAndBuildFailures(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				// The mocked clone supplies newer source, never backup source/build artifacts.
-				os.WriteFile(filepath.Join(repository, "latest.txt"), []byte("latest fixture code"), 0600)
+				// The clone models bundled committed source; the working-source overlay
+				// must retain local edits/untracked files without pulling origin.
+				os.WriteFile(filepath.Join(repository, "saved.txt"), []byte("committed source before local edit"), 0600)
 				base := &fakeRunner{users: map[string]string{"_apt": "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"}}
 				runner := &fullRunner{base: base, cloneSource: repository, freshRoot: h.root}
 				imported := false
@@ -430,14 +466,20 @@ func TestRestoreApplicationOrderingCredentialsAndBuildFailures(t *testing.T) {
 				if err != nil || !bytes.Contains(user, []byte("abr-app")) {
 					t.Fatal("user ownership record not recreated", err)
 				}
-				latest, err := os.ReadFile(filepath.Join(h.AppsDir, "app/latest.txt"))
-				if err != nil || string(latest) != "latest fixture code" {
-					t.Fatal("did not rebuild latest clone", err)
+				saved, err := os.ReadFile(filepath.Join(h.AppsDir, "app/saved.txt"))
+				if err != nil || string(saved) != "saved source fixture" {
+					t.Fatal("did not restore saved working source", err)
 				}
 				composerInstall, frontendBuild := -1, -1
 				for i, c := range base.calls {
 					if c.Name != "runuser" {
 						continue
+					}
+					if slices.Contains(c.Args, "clone") && !strings.HasSuffix(c.Args[len(c.Args)-2], "repository.bundle") {
+						t.Fatal("restore cloned remote source")
+					}
+					if slices.Contains(c.Args, "fetch") || slices.Contains(c.Args, "pull") {
+						t.Fatal("restore fetched newer source")
 					}
 					if slices.Contains(c.Args, "composer") && slices.Contains(c.Args, "install") && !slices.Contains(c.Args, "--download-only") {
 						composerInstall = i
@@ -460,15 +502,17 @@ func TestRestoreApplicationOrderingCredentialsAndBuildFailures(t *testing.T) {
 	}
 }
 
-func TestFullBackupRefusesRemainingWriters(t *testing.T) {
+func TestFullBackupAllowsOnlineWriters(t *testing.T) {
 	h, runner, output, cleanup := fullFixture(t, false)
 	defer cleanup()
 	runner.base.processes = true
-	if err := h.FullBackup(output); err == nil || !strings.Contains(err.Error(), "processes") {
-		t.Fatal("captured data while app writers remained", err)
+	if err := h.FullBackup(output); err != nil {
+		t.Fatal("online capture refused active writers", err)
 	}
-	if _, err := os.Stat(output); !os.IsNotExist(err) {
-		t.Fatal("published inconsistent backup")
+	for _, c := range runner.base.calls {
+		if c.Name == "pgrep" || c.Name == "systemctl" {
+			t.Fatal("online capture inspected or changed services")
+		}
 	}
 }
 

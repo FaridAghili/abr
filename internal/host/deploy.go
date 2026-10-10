@@ -179,7 +179,8 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if err != nil {
 		return err
 	}
-	if len(strings.TrimSpace(string(dirty))) > 0 {
+	// Fresh restores preserve captured local changes and deploy without pulling.
+	if len(strings.TrimSpace(string(dirty))) > 0 && !(o.deferEnable && o.NoPull) {
 		return fmt.Errorf("working tree is dirty; commit/stash changes before deployment")
 	}
 	commit, err = h.deploymentTarget(a, plan.Environment, o.NoPull)

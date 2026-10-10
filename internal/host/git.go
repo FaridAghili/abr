@@ -243,6 +243,10 @@ var githubRepository = regexp.MustCompile(`^git@github\.com:[A-Za-z0-9_.-]+/[A-Z
 
 // Clone creates an initial checkout; registration still owns user/DB creation.
 func (h Host) Clone(repository, directory string) error {
+	return h.cloneRepository(repository, directory, "", "")
+}
+
+func (h Host) cloneRepository(repository, directory, bundle, branch string) error {
 	if !githubRepository.MatchString(repository) {
 		return fmt.Errorf("use a GitHub SSH URL: git@github.com:OWNER/REPO.git")
 	}
@@ -308,12 +312,24 @@ func (h Host) Clone(repository, directory string) error {
 		if err := h.write(knownHosts, []byte(githubHostKey), 0600); err != nil {
 			return err
 		}
+		cloneSource := repository
+		if bundle != "" {
+			cloneSource = filepath.Join(stage, "repository.bundle")
+			if err := copyBackupFile(bundle, cloneSource, false); err != nil {
+				return err
+			}
+		}
 		if err := h.command("chown", "-hR", "_apt", "--", stage); err != nil {
 			return err
 		}
 		checkout := filepath.Join(stage, "project")
 		environment := map[string]string{"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0", "GIT_SSH_COMMAND": gitSSHCommand(key, knownHosts)}
-		if _, err := h.unprivileged("_apt", "/nonexistent", "/", environment, true, "git", "-c", "core.hooksPath=/dev/null", "clone", "--template=", "--", repository, checkout); err != nil {
+		cloneArgs := []string{"-c", "core.hooksPath=/dev/null", "clone", "--template="}
+		if bundle != "" {
+			cloneArgs = append(cloneArgs, "--branch", branch)
+		}
+		cloneArgs = append(cloneArgs, "--", cloneSource, checkout)
+		if _, err := h.unprivileged("_apt", "/nonexistent", "/", environment, true, "git", cloneArgs...); err != nil {
 			return err
 		}
 		if err := h.command("chown", "-hR", "root:root", "--", checkout); err != nil {

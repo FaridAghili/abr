@@ -19,6 +19,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"abr/internal/backup"
 	"abr/internal/config"
 )
 
@@ -32,6 +33,7 @@ type Options struct {
 	Output                                               io.Writer
 	RunCommand                                           func([]string, io.Writer) error
 	ComposerAuth                                         func(string, string, string, io.Writer) error
+	BackupConfigure                                      func(backup.Destination, string, io.Writer) error
 	EnvEditor                                            func(string) (*exec.Cmd, func() (bool, error), error)
 	ArtisanShell                                         func(string) (*exec.Cmd, error)
 }
@@ -249,7 +251,7 @@ func (m *model) serverMenu() tea.Cmd {
 		huh.NewOption("GitHub key", "git"),
 		huh.NewOption("Composer credentials", "composer"),
 		huh.NewOption("MySQL admin · TablePlus", "mysql-admin"),
-		huh.NewOption("Full backup & restore", "full-transfer"),
+		huh.NewOption("Backup & restore", "full-transfer"),
 		huh.NewOption("Back", "back")).Value(&selected)))
 }
 
@@ -768,6 +770,15 @@ func nextStep(args []string) string {
 	}
 	switch args[0] {
 	case "backup":
+		if slices.Contains(args, "--transfer") {
+			return "Check the archives on your backup server and test a restore on a disposable server."
+		}
+		if len(args) > 1 && args[1] == "configure" {
+			return "Install the displayed public key on the backup server if using keys, verify its SSH host fingerprint, then choose Test backup destination."
+		}
+		if len(args) > 1 && args[1] == "test" {
+			return "Choose Back up apps to transfer one archive at a time to the verified destination."
+		}
 		return "Copy the private backup archive to storage outside this VPS."
 	case "restore":
 		return "Check the restored apps, point DNS at this server, and keep the old server’s workers stopped."

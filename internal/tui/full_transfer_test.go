@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -15,7 +17,7 @@ func TestFullTransferFormsReviewAndNavigation(t *testing.T) {
 		t.Fatal("backup form does not have one described field")
 	}
 	m.next()
-	if m.page != "confirm" || m.approved || m.current.args[0] != "backup" || !strings.Contains(m.reviewText, "Pause managed apps") {
+	if m.page != "confirm" || m.approved || m.current.args[0] != "backup" || !strings.Contains(m.reviewText, "All services keep running") {
 		t.Fatal("backup skipped review")
 	}
 	m.goBack()
@@ -43,5 +45,35 @@ func TestFullTransferFormsReviewAndNavigation(t *testing.T) {
 		if archivePath(path) == nil {
 			t.Fatal("invalid archive path accepted")
 		}
+	}
+}
+
+func TestOnlineAppBackupReviewAndRestoreDirectory(t *testing.T) {
+	m := newModel(testOptions(t))
+	m.fullTransferMenu()
+	m.appBackupForm()
+	if len(m.groups) != 1 || !strings.Contains(m.View().Content, "Example:") {
+		t.Fatal("app backup field lacks description/example")
+	}
+	m.next()
+	if m.page != "confirm" || m.approved || strings.Join(m.current.args, " ") != "backup --transfer --all" || !strings.Contains(m.reviewText, "Keep all apps running") {
+		t.Fatal("online transfer review inaccurate")
+	}
+	directory := t.TempDir()
+	for _, name := range []string{"api-20261010T020000Z.tar.gz", "portal-20261010T020000Z.tar.gz", "ignored.sql"} {
+		if err := os.WriteFile(filepath.Join(directory, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths, err := restorePaths(directory)
+	if err != nil || len(paths) != 2 {
+		t.Fatal("restore directory failed", paths, err)
+	}
+	if _, err := restorePaths(t.TempDir()); err == nil {
+		t.Fatal("empty directory accepted")
+	}
+	m.backupDestinationForm()
+	if !strings.Contains(m.View().Content, "Server IP") || !strings.Contains(m.View().Content, "Example:") {
+		t.Fatal("destination configuration missing described first field")
 	}
 }
