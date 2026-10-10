@@ -159,6 +159,15 @@ PY
 abr_ci enable fixture-spa
 fixture_https portal.fixture-php.localhost >/dev/null
 abr_ci doctor
+# The saved-source assertions above deliberately retain uncommitted fixture
+# files. Remove only those files before later tests exercise normal deployment,
+# which requires a clean working tree even with --no-pull.
+sudo runuser -u abr-fixture-php -- rm /srv/apps/fixture-php/public/full-saved.txt /srv/apps/fixture-php/full-local.ini
+sudo runuser -u abr-fixture-php -- /usr/bin/git -C /srv/apps/fixture-php status --porcelain > "$abr_binary_directory/full-clean-after"
+if [[ -s $abr_binary_directory/full-clean-after ]]; then
+  cat "$abr_binary_directory/full-clean-after" >&2
+  echo 'Restore fixture cleanup left a dirty working tree' >&2; exit 1
+fi
 sudo rm /usr/local/bin/git
 fixture_git_shim=0
 sudo rm -rf "$full_git_fixture"
