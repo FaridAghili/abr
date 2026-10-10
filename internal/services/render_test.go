@@ -175,7 +175,7 @@ func startCaddyFixture(t *testing.T, caddy string, a config.App, r ports.Registr
 	}
 }
 
-func TestCaddyImageCaching(t *testing.T) {
+func TestCaddyStaticCaching(t *testing.T) {
 	caddy, err := exec.LookPath("caddy")
 	if err != nil {
 		t.Skip("Caddy is not installed")
@@ -219,18 +219,44 @@ func TestCaddyImageCaching(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			const month = "public, max-age=2592000"
+			const year = "public, max-age=31536000, immutable"
 			paths := map[string]string{}
-			for _, ext := range []string{"png", "jpg", "jpeg", "gif", "avif", "webp", "svg", "PNG"} {
-				for _, path := range []string{"/images/logo." + ext, build + "/plain." + ext} {
-					write(path)
-					paths[path] = "public, max-age=2592000"
-				}
-				if ext != "PNG" {
-					path := build + "/logo-AbCd1234." + ext
-					write(path)
-					paths[path] = "public, max-age=31536000, immutable"
+			for _, ext := range []string{"css", "js", "mjs", "cjs", "woff", "woff2", "ttf", "otf", "eot", "ttc", "sfnt", "png", "jpg", "jpeg", "gif", "avif", "webp", "svg", "svgz", "ico", "bmp", "tif", "tiff", "apng", "jxl", "heic", "heif", "PNG", "CSS", "WOFF2"} {
+				for _, prefix := range []string{"/assets", "/vendor/livewire", "/long-directory/nested-directory", build} {
+					for _, name := range []string{"plain", "logo-AbCd1234", "8ea5922c", "AbCdEfGh", "logo.8ea5922c", "8ea5922c/logo", "550e8400-e29b-41d4-a716-446655440000"} {
+						path := prefix + "/" + name + "." + ext
+						write(path)
+						cache := year
+						if name == "plain" {
+							cache = month
+							paths[path+"?"] = month
+						}
+						paths[path] = cache
+						paths[path+"?id=8ea5922c"] = year
+					}
 				}
 			}
+			for _, path := range []string{"/vendor/livewire/livewire.min.js", "/css/stylesheet.css", "/js/application.js", "/fonts/regular-font.woff2"} {
+				write(path)
+				paths[path] = month
+				paths[path+"?id=8ea5922c"] = year
+				paths[path+"?v="] = year
+			}
+			for _, ext := range []string{"json", "xml", "txt", "csv", "pdf", "map", "webmanifest", "wasm", "mp4", "webm", "mp3", "ogg", "wav", "zip", "JSON", "XML"} {
+				for _, prefix := range []string{"/data", build} {
+					plain, hashed := prefix+"/plain."+ext, prefix+"/data-8ea5922c."+ext
+					write(plain)
+					write(hashed)
+					paths[plain] = "no-cache"
+					paths[plain+"?v=1"] = month
+					paths[hashed] = month
+				}
+			}
+			// Existing HTML/PHP paths must not gain public caching from a query.
+			write("/page.html")
+			write("/page-8ea5922c.html")
+			write("/index.php")
 			write("/.git/logo.png")
 			write("/.env.logo.png")
 			if kind != "nuxt" {
@@ -242,7 +268,8 @@ func TestCaddyImageCaching(t *testing.T) {
 					t.Fatal(err)
 				}
 				write("/storage/upload.png")
-				paths["/storage/upload.png"] = "public, max-age=2592000"
+				paths["/storage/upload.png"] = month
+				paths["/storage/upload.png?rev=2"] = year
 			}
 			address := startCaddyFixture(t, caddy, a, r)
 			client := &http.Client{Timeout: time.Second}
@@ -264,7 +291,7 @@ func TestCaddyImageCaching(t *testing.T) {
 			}
 			for path, cache := range paths {
 				for _, method := range []string{"GET", "HEAD"} {
-					response := request(method, path+"?v=1", nil)
+					response := request(method, path, nil)
 					if response.StatusCode != 200 || response.Header.Get("Cache-Control") != cache {
 						t.Fatalf("%s %s: status=%d cache=%q; want %q", method, path, response.StatusCode, response.Header.Get("Cache-Control"), cache)
 					}
@@ -277,32 +304,38 @@ func TestCaddyImageCaching(t *testing.T) {
 					_ = response.Body.Close()
 				}
 			}
-			image := "/images/logo.png"
-			etag := request("HEAD", image, nil).Header.Get("Etag")
-			for _, test := range []struct {
-				headers map[string]string
-				status  int
-			}{{map[string]string{"If-None-Match": etag}, 304}, {map[string]string{"Range": "bytes=0-3"}, 206}} {
-				response := request("GET", image, test.headers)
-				if response.StatusCode != test.status || response.Header.Get("Cache-Control") != "public, max-age=2592000" {
-					t.Fatal("conditional/partial image response lost caching", response.StatusCode, response.Header)
+			for _, path := range []string{"/assets/plain.png", "/vendor/livewire/livewire.min.js?id=8ea5922c", "/assets/logo-AbCd1234.woff2", "/data/plain.json?v=1", "/data/plain.xml"} {
+				etag := request("HEAD", path, nil).Header.Get("Etag")
+				if etag == "" {
+					t.Fatal("static response has no ETag", path)
+				}
+				for _, test := range []struct {
+					headers map[string]string
+					status  int
+				}{{map[string]string{"If-None-Match": etag}, 304}, {map[string]string{"Range": "bytes=0-3"}, 206}} {
+					response := request("GET", path, test.headers)
+					if response.StatusCode != test.status || response.Header.Get("Cache-Control") != paths[path] {
+						t.Fatal("conditional/partial static response lost caching", path, response.StatusCode, response.Header)
+					}
 				}
 			}
-			for _, path := range []string{build + "/missing-AbCd1234.png", "/.git/logo.png", "/.env.logo.png"} {
+			for _, path := range []string{build + "/missing-AbCd1234.png", build + "/missing.js?id=8ea5922c", build + "/missing.json?v=1", "/.git/logo.png", "/.env.logo.png?id=8ea5922c"} {
 				response := request("GET", path, nil)
 				if response.StatusCode != 404 || response.Header.Get("Cache-Control") != "" {
 					t.Fatal("missing or private image was publicly cached", path, response.StatusCode, response.Header)
 				}
 			}
-			for _, path := range []string{"/dynamic.png", "/missing.png"} {
+			for _, path := range []string{"/dynamic.png", "/missing.png", "/missing.js?id=8ea5922c", "/api.json?v=1", "/api.xml?v=1", "/page.html?v=1", "/page-8ea5922c.html?v=1", "/index.php?v=1", "/?v=1"} {
 				response := request("GET", path, nil)
 				if strings.Contains(response.Header.Get("Cache-Control"), "public") || (kind != "fpm" && response.Header.Get("Cache-Control") != "private, no-store") {
 					t.Fatal("dynamic image cache policy was overwritten", path, response.Header)
 				}
 			}
-			response := request("POST", image, nil)
-			if strings.Contains(response.Header.Get("Cache-Control"), "public") {
-				t.Fatal("non-read image request was publicly cached")
+			for _, path := range []string{"/assets/plain.png", "/vendor/livewire/livewire.min.js?id=8ea5922c", "/data/plain.json?v=1", build + "/logo-AbCd1234.css"} {
+				response := request("POST", path, nil)
+				if strings.Contains(response.Header.Get("Cache-Control"), "public") {
+					t.Fatal("non-read static request was publicly cached", path)
+				}
 			}
 		})
 	}

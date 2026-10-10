@@ -32,47 +32,81 @@
         path {{.AssetPath}}/*
         file {path}
     }
-    @images {
+    # Query strings, hex hashes, UUIDs and mixed-case/random build tokens
+    # identify versioned URLs. Plain lowercase names remain stable filenames.
+    @versioned expression `{query} != "" || path_regexp('(?i)(^|/|[-._])[a-f0-9]{8,}([-._/]|$)') || {path}.split('/').exists(segment, segment.split('.').exists(token, token.size() >= 8 && token.matches('^[A-Za-z0-9_-]+$') && token.matches('.*[0-9A-Z].*')))`
+    vars @versioned assetVersioned true
+    @staticFiles {
         method GET HEAD
-        path_regexp images (?i)\.(png|jpe?g|gif|avif|webp|svg)$
+        path_regexp staticFiles (?i)\.(css|m?js|cjs|woff2?|ttf|otf|eot|ttc|sfnt|png|jpe?g|gif|webp|avif|svgz?|ico|bmp|tiff?|apng|jxl|heic|heif)$
         file {path}
+    }
+    @versionedStatic {
+        method GET HEAD
+        path_regexp versionedStatic (?i)\.(css|m?js|cjs|woff2?|ttf|otf|eot|ttc|sfnt|png|jpe?g|gif|webp|avif|svgz?|ico|bmp|tiff?|apng|jxl|heic|heif)$
+        file {path}
+        vars assetVersioned true
+    }
+    @stableStatic {
+        method GET HEAD
+        path_regexp stableStatic (?i)\.(css|m?js|cjs|woff2?|ttf|otf|eot|ttc|sfnt|png|jpe?g|gif|webp|avif|svgz?|ico|bmp|tiff?|apng|jxl|heic|heif)$
+        file {path}
+        not vars assetVersioned true
+    }
+    # Cache only existing public data/download files, never PHP/HTML or APIs.
+    @otherFiles {
+        method GET HEAD
+        path_regexp otherFiles (?i)\.(json|xml|txt|csv|pdf|map|webmanifest|wasm|mp4|webm|mp3|ogg|wav|zip)$
+        file {path}
+    }
+    @versionedOther {
+        method GET HEAD
+        path_regexp versionedOther (?i)\.(json|xml|txt|csv|pdf|map|webmanifest|wasm|mp4|webm|mp3|ogg|wav|zip)$
+        file {path}
+        vars assetVersioned true
+    }
+    @stableOther {
+        method GET HEAD
+        path_regexp stableOther (?i)\.(json|xml|txt|csv|pdf|map|webmanifest|wasm|mp4|webm|mp3|ogg|wav|zip)$
+        file {path}
+        not vars assetVersioned true
+    }
+    header @versionedStatic {
+        Cache-Control "public, max-age=31536000, immutable"
+        match status 200 206 304
+    }
+    header @stableStatic {
+        Cache-Control "public, max-age=2592000"
+        match status 200 206 304
+    }
+    header @versionedOther {
+        Cache-Control "public, max-age=2592000"
+        match status 200 206 304
+    }
+    header @stableOther {
+        # Explicit revalidation prevents heuristic caching of unversioned data.
+        Cache-Control "no-cache"
+        match status 200 206 304
     }
     # Reserved build paths never fall through to application workers.
     @buildAssets path {{.AssetPath}} {{.AssetPath}}/*
     handle @buildAssets {
         handle @assets {
-            # Only content-hashed build assets get immutable caching.
-            @versioned path_regexp versioned ^/(build/assets/.*[-.][A-Za-z0-9_-]{8,}|_nuxt/(.*[-.])?[A-Za-z0-9_-]{8,})\.(js|css|woff2?|ttf|otf|svg|png|webp|avif|jpe?g|gif|wasm)$
-            handle @versioned {
-                header {
-                    Cache-Control "public, max-age=31536000, immutable"
-                    match status 200 206 304
-                }
-                file_server {
-                    precompressed br zstd gzip
-                }
-            }
-            handle {
-                header @images {
-                    Cache-Control "public, max-age=2592000"
-                    match status 200 206 304
-                }
-                file_server {
-                    precompressed br zstd gzip
-                }
+            file_server {
+                precompressed br zstd gzip
             }
         }
         handle {
             respond 404
         }
     }
-    # Serve existing public images directly, including Laravel public/storage.
-    # Stable filenames get 30-day caching; use new filenames for immediate updates.
-    handle @images {
-        header {
-            Cache-Control "public, max-age=2592000"
-            match status 200 206 304
+    # Serve public assets directly, including vendor/ and Laravel public/storage.
+    handle @staticFiles {
+        file_server {
+            precompressed br zstd gzip
         }
+    }
+    handle @otherFiles {
         file_server {
             precompressed br zstd gzip
         }

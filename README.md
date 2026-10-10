@@ -657,15 +657,31 @@ an executable alone does not replace that file.
 Caddy strips Server/Via/X-Powered-By headers, compresses dynamic responses with
 [zstd/gzip](https://caddyserver.com/docs/caddyfile/directives/encode), and serves
 [precompressed Brotli](https://caddyserver.com/docs/caddyfile/directives/file_server)
-for built assets generated during deploy. Versioned Vite/Nuxt assets get immutable
-browser caching. Existing public PNG, JPG/JPEG, GIF, AVIF, WebP and SVG files
-(including Laravel public storage) are served directly by Caddy with 30-day
-browser caching. Stable image filenames are not marked immutable; hashed build
-images keep the one-year immutable policy. Dynamic image routes and HTML/API/SSR
-responses keep the application's cache policy.
+for built assets generated during deploy. Existing public CSS, JS/MJS/CJS,
+fonts (WOFF/WOFF2, TTF, OTF, EOT, TTC, SFNT) and images (PNG, JPG/JPEG, GIF,
+AVIF, WebP, SVG/SVGZ, ICO, BMP, TIFF, APNG, JXL, HEIC/HEIF) are served directly
+by Caddy, including `vendor/` files and Laravel public storage. Versioned URLs
+get `public, max-age=31536000, immutable` (one year); stable filenames get
+`public, max-age=2592000` (30 days). Any nonempty query string counts as a version,
+including `/vendor/livewire/livewire.min.js?id=8ea5922c`. Filename/path detection
+recognizes hex tokens of at least eight characters (including UUIDs) and tokens
+of at least eight characters containing digits or uppercase letters. Arbitrary
+lowercase names cannot reliably be distinguished from ordinary filenames; add a
+version query or use a recognizable content hash for those assets.
+Existing public JSON, XML, TXT, CSV, PDF, source maps, web manifests, WASM,
+MP4/WebM, MP3/OGG/WAV and ZIP files get 30 days when versioned and `no-cache`
+(revalidate before reuse) otherwise. Dynamic routes and PHP/HTML/API/SSR responses
+keep the application's cache policy, even with hashes or query strings.
 Missing files in `/build/assets/` (Laravel) and `/_nuxt/` (Nuxt) return a direct
-Caddy 404 without calling application workers. Only successful versioned asset
-responses receive the immutable cache policy.
+Caddy 404 without calling application workers. Cache rules apply only to GET/HEAD
+responses with status 200, 206 or 304; errors and redirects do not gain public caching.
+Change the URL whenever an asset changes, including assets with a stable filename
+that would otherwise remain fresh for 30 days. URL fragments (`#...`) are not sent
+to the server and cannot act as cache versions.
+Setup preserves edited templates. To apply this policy on an existing host, update
+`/etc/abr/templates/caddy-site.caddy.tmpl` from the bundled template, retain any
+intentional customizations, and run `sudo abr deploy APP` to render, validate and
+reload Caddy. Installing an executable alone does not replace the installed template.
 The packaged welcome page is replaced with a generic 404. Identifying text in
 application bodies must be removed in the application itself.
 Default site templates also return 404 for `.env`, `.env.*`, and `.git` paths.
