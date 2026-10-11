@@ -81,6 +81,4 @@ and Esc to go back. Advanced settings are optional.
 ## More help
 
 - `abr help` lists commands; `abr COMMAND --help` lists flags.
-- [Operations guide](docs/operations.md): backups, restore, credentials and settings.
 - [Example config](config.example.toml) and [editable templates](templates/).
-- [Development](docs/development.md): local checks and CI.

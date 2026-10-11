@@ -24,7 +24,8 @@ import (
 )
 
 const manifestName = "manifest.json"
-const maxManifest = 8 << 20
+const maxManifestMetadata = 8 << 20
+const maxEntries = 1000000
 
 var commitPattern = regexp.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`)
 
@@ -60,6 +61,18 @@ type Manifest struct {
 	Apps      []App           `json:"apps"`
 	Settings  Settings        `json:"settings"`
 	Files     map[string]File `json:"files"`
+}
+
+// Bound metadata independently of the inventory. Each observed archive entry
+// allows its JSON-escaped path (at most six bytes per input byte), plus room for
+// the fixed file fields, checksum and separators. Large upload inventories must
+// not compete with config and settings for a fixed manifest size allowance.
+func manifestSizeLimit(files map[string]File) int64 {
+	limit := int64(maxManifestMetadata)
+	for name := range files {
+		limit += 6*int64(len(name)) + 256
+	}
+	return limit
 }
 
 func safeName(name string) bool {
@@ -148,6 +161,9 @@ func Write(w io.Writer, directory string, manifest *Manifest) (result error) {
 		if name == "." {
 			return nil
 		}
+		if len(manifest.Files) >= maxEntries {
+			return fmt.Errorf("too many backup entries (limit %d)", maxEntries)
+		}
 		if !safeName(name) || name == manifestName {
 			return fmt.Errorf("invalid archive path")
 		}
@@ -203,8 +219,8 @@ func Write(w io.Writer, directory string, manifest *Manifest) (result error) {
 	if err != nil {
 		return err
 	}
-	if len(data) > maxManifest {
-		return fmt.Errorf("backup manifest too large")
+	if int64(len(data)) > manifestSizeLimit(manifest.Files) {
+		return fmt.Errorf("backup manifest metadata too large (allowance %d MiB plus file inventory)", maxManifestMetadata>>20)
 	}
 	if err := tw.WriteHeader(&tar.Header{Name: manifestName, Mode: 0600, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
 		return err
@@ -243,10 +259,11 @@ func Extract(r io.Reader, directory string) (Manifest, error) {
 			return manifest, fmt.Errorf("unsafe backup entry")
 		}
 		if name == manifestName {
-			if header.Typeflag != tar.TypeReg || header.Size > maxManifest {
+			limit := manifestSizeLimit(records)
+			if header.Typeflag != tar.TypeReg || header.Size > limit {
 				return manifest, fmt.Errorf("invalid backup manifest entry")
 			}
-			decoder := json.NewDecoder(io.LimitReader(tr, maxManifest+1))
+			decoder := json.NewDecoder(io.LimitReader(tr, limit+1))
 			decoder.DisallowUnknownFields()
 			if err := decoder.Decode(&manifest); err != nil {
 				return manifest, err
@@ -260,8 +277,8 @@ func Extract(r io.Reader, directory string) (Manifest, error) {
 		if _, exists := records[name]; exists {
 			return manifest, fmt.Errorf("duplicate backup entry")
 		}
-		if len(records) >= 1000000 {
-			return manifest, fmt.Errorf("too many backup entries")
+		if len(records) >= maxEntries {
+			return manifest, fmt.Errorf("too many backup entries (limit %d)", maxEntries)
 		}
 		record := File{Size: header.Size, Mode: header.Mode}
 		if header.Typeflag == tar.TypeDir {

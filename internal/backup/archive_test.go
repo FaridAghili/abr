@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -70,6 +72,71 @@ func TestArchiveRoundTripAndCorruption(t *testing.T) {
 				t.Fatal("corrupt archive accepted")
 			}
 		})
+	}
+}
+
+func TestArchiveRoundTripWithLargeInventory(t *testing.T) {
+	_, m := archiveFixture(t)
+	stage := t.TempDir()
+	// Long but valid upload paths cross the former 8 MiB manifest cap without
+	// needing gigabytes of payload or tens of thousands of filesystem entries.
+	directory := strings.TrimSuffix(strings.Repeat(strings.Repeat("u", 200)+"/", 8), "/")
+	if err := os.MkdirAll(filepath.Join(stage, filepath.FromSlash(directory)), 0700); err != nil {
+		t.Fatal(err)
+	}
+	const files = 5000
+	for i := range files {
+		name := filepath.Join(stage, filepath.FromSlash(directory), fmt.Sprintf("upload-%04d", i))
+		if err := os.WriteFile(name, []byte("upload"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	if err := Write(&out, stage, &m); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) <= 8<<20 {
+		t.Fatalf("fixture must exceed the former 8 MiB cap, got %d bytes", len(data))
+	}
+	target := t.TempDir()
+	restored, err := Extract(&out, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(restored.Files) != files+8 {
+		t.Fatalf("lost inventory entries: got %d, want %d", len(restored.Files), files+8)
+	}
+	for name, record := range m.Files {
+		if restored.Files[name] != record {
+			t.Fatalf("lost metadata or checksum for %s", name)
+		}
+	}
+	payload, err := os.ReadFile(filepath.Join(target, filepath.FromSlash(directory), "upload-4999"))
+	if err != nil || string(payload) != "upload" {
+		t.Fatalf("lost upload payload: %q, %v", payload, err)
+	}
+}
+
+func TestArchiveRejectsOversizedManifest(t *testing.T) {
+	var out bytes.Buffer
+	gz := gzip.NewWriter(&out)
+	tw := tar.NewWriter(gz)
+	// With no preceding inventory the metadata allowance still bounds the
+	// manifest. Reject the declared size before attempting to read its payload.
+	if err := tw.WriteHeader(&tar.Header{Name: manifestName, Mode: 0600, Typeflag: tar.TypeReg, Size: maxManifestMetadata + 1}); err != nil {
+		t.Fatal(err)
+	}
+	// The missing body is intentional; extraction must reject the header first.
+	_ = tw.Close()
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Extract(&out, t.TempDir()); err == nil || err.Error() != "invalid backup manifest entry" {
+		t.Fatalf("oversized manifest was not rejected at its header: %v", err)
 	}
 }
 

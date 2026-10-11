@@ -114,7 +114,7 @@ jobs:
           test "$RELEASE_TAG" = "v$version"
           mkdir -p dist/bundle dist/release
           install -m 755 dist/abr-linux-amd64 dist/bundle/abr
-          cp -R templates docs assets config.example.toml README.md dist/bundle/
+          cp -R templates assets config.example.toml README.md dist/bundle/
           cp dist/abr-linux-amd64 dist/release/
           cp .github/release-notes.md dist/release/release-notes.md
           tar -czf "dist/release/abr_${version}_linux_amd64.tar.gz" -C dist/bundle .
