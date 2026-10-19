@@ -26,7 +26,7 @@ func TestDoctorTUIShowsDiagnosticOutcome(t *testing.T) {
 		}
 		m := newModel(o)
 		m.toolsMenu()
-		for range 6 {
+		for range 4 {
 			press(m, tea.KeyDown)
 		}
 		m.next()
@@ -35,7 +35,7 @@ func TestDoctorTUIShowsDiagnosticOutcome(t *testing.T) {
 		if failed {
 			want = "Checks need attention"
 		}
-		if view := m.View().Content; !strings.Contains(view, want) || strings.Contains(view, "Command failed") {
+		if view := viewText(m); !strings.Contains(view, want) || strings.Contains(view, "Command failed") {
 			t.Fatalf("misleading diagnostic view: %s", view)
 		}
 	}

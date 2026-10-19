@@ -61,18 +61,18 @@ func TestAppsListGrowsAfterResizeAndScrollsWithinBody(t *testing.T) {
 	m := newModel(o)
 	m.appsMenu()
 	m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
-	small := strings.Count(m.View().Content, "· laravel")
+	small := strings.Count(viewText(m), "· laravel")
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	large := strings.Count(m.View().Content, "· laravel")
+	large := strings.Count(viewText(m), "· laravel")
 	if large <= small {
 		t.Fatal("app list did not use the added terminal height")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
-	before := strings.Split(ansi.Strip(m.View().Content), "\n")
+	before := strings.Split(ansi.Strip(viewText(m)), "\n")
 	for range 29 {
 		press(m, tea.KeyDown)
 	}
-	after := strings.Split(ansi.Strip(m.View().Content), "\n")
+	after := strings.Split(ansi.Strip(viewText(m)), "\n")
 	if !strings.Contains(strings.Join(after, "\n"), "app-29") || !strings.Contains(strings.Join(after, "\n"), "Nightwatch: off") {
 		t.Fatal("selected app's summary is not visible after scrolling")
 	}
@@ -86,11 +86,11 @@ func TestAppsListGrowsAfterResizeAndScrollsWithinBody(t *testing.T) {
 func TestEmptyAppsListGuidesBackToMainMenu(t *testing.T) {
 	m := newModel(testOptions(t))
 	m.next()
-	if m.page != "apps" || !strings.Contains(m.View().Content, "No apps registered") {
+	if m.page != "apps" || !strings.Contains(viewText(m), "No apps registered") {
 		t.Fatal("empty apps list lacks guidance")
 	}
 	m.next()
-	if m.page != "home" || !strings.Contains(m.View().Content, "Register application") {
+	if m.page != "home" || !strings.Contains(viewText(m), "Add application") {
 		t.Fatal("empty apps list cannot return to registration")
 	}
 }

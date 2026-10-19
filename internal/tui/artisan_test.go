@@ -19,7 +19,7 @@ func TestArtisanShellMenuAndReturn(t *testing.T) {
 	m := newModel(o)
 	m.width, m.height = 100, 45
 	m.appMenu(a)
-	if !strings.Contains(m.View().Content, "Artisan shell") {
+	if !strings.Contains(viewText(m), "Artisan shell") {
 		t.Fatal("Laravel action missing")
 	}
 	if m.appAction(a, "artisan-shell") == nil || !called || !m.busy {
@@ -35,7 +35,7 @@ func TestArtisanShellMenuAndReturn(t *testing.T) {
 	}
 	a.Type = "nuxt"
 	m.appMenu(a)
-	if strings.Contains(m.View().Content, "Artisan shell") {
+	if strings.Contains(viewText(m), "Artisan shell") {
 		t.Fatal("Nuxt offers Artisan")
 	}
 	called = false

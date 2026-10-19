@@ -39,7 +39,7 @@ func TestAppsMenuSortsAppsAndShowsConfiguredSettings(t *testing.T) {
 	m := newModel(o)
 	m.next() // Main menu → Apps.
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	view := m.View().Content
+	view := viewText(m)
 	if strings.Index(view, "alpha · laravel") < 0 || strings.Index(view, "alpha · laravel") >= strings.Index(view, "zebra · laravel") {
 		t.Fatalf("projects not sorted: %s", view)
 	}
@@ -61,7 +61,7 @@ func TestAppsMenuSortsAppsAndShowsConfiguredSettings(t *testing.T) {
 	for _, size := range []tea.WindowSizeMsg{{Width: 80, Height: 24}, {Width: 48, Height: 16}} {
 		m.appsMenu()
 		m.Update(size)
-		view = m.View().Content
+		view = viewText(m)
 		for _, label := range []string{"FPM", "Queue: 0", "Scheduler: off", "Nightwatch: off", "Esc back"} {
 			if !strings.Contains(view, label) {
 				t.Fatalf("summary clipped at %dx%d: %s", size.Width, size.Height, view)
@@ -155,8 +155,8 @@ func TestReviewCancelPreservesFormAndOutputReturnsToFreshMenu(t *testing.T) {
 		t.Fatal("form did not reach review")
 	}
 	press(m, tea.KeyEscape)
-	if m.page != "form" || m.form.State != huh.StateNormal || !strings.Contains(m.View().Content, "Queue workers") || !strings.Contains(m.View().Content, "05") {
-		t.Fatalf("review cancel lost form: %s", m.View().Content)
+	if m.page != "form" || m.form.State != huh.StateNormal || !strings.Contains(viewText(m), "Queue workers") || !strings.Contains(viewText(m), "05") {
+		t.Fatalf("review cancel lost form: %s", viewText(m))
 	}
 	m.form.NextGroup()
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -198,7 +198,7 @@ func TestUserDetailsShowConfiguredAccountAndUploadPath(t *testing.T) {
 	}
 	for _, size := range []tea.WindowSizeMsg{{Width: 48, Height: 16}, {Width: 80, Height: 24}} {
 		m.Update(size)
-		view := m.View().Content
+		view := viewText(m)
 		if lipgloss.Width(view) > size.Width || lipgloss.Height(view) > size.Height || !strings.Contains(view, "Enter / Esc back") {
 			t.Fatalf("details exceed terminal bounds: %s", view)
 		}

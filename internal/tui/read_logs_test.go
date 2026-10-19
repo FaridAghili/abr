@@ -57,7 +57,7 @@ func TestReadLogsPerAppSourcesAndRefresh(t *testing.T) {
 			if got := strings.Join(<-called, " "); got != want || !strings.Contains(m.output, "snapshot 1") || m.result != nil {
 				t.Fatalf("reader executed wrong source: %s, want %s", got, want)
 			}
-			if !strings.Contains(m.View().Content, "r refresh") {
+			if !strings.Contains(viewText(m), "r refresh") {
 				t.Fatal("refresh shortcut is not shown")
 			}
 			press(m, 'r')
@@ -146,14 +146,14 @@ func TestDiskAndLogOptionsFitSmallTerminals(t *testing.T) {
 		m.Update(size)
 		m.diskForm("")
 		press(m, tea.KeyDown)
-		view := m.View().Content
+		view := viewText(m)
 		if !strings.Contains(view, "Refresh now") || lipgloss.Width(view) > size.Width || lipgloss.Height(view) > size.Height {
 			t.Fatalf("disk refresh option clipped at %dx%d: %s", size.Width, size.Height, view)
 		}
 		m.readLogsForm(nil)
 		press(m, tea.KeyDown)
 		press(m, tea.KeyDown)
-		view = m.View().Content
+		view = viewText(m)
 		if !strings.Contains(view, "Deployment file logs") || lipgloss.Width(view) > size.Width || lipgloss.Height(view) > size.Height {
 			t.Fatalf("log source clipped at %dx%d: %s", size.Width, size.Height, view)
 		}

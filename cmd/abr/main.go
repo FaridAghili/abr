@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"golang.org/x/term"
 
@@ -22,6 +23,7 @@ import (
 	"abr/internal/host"
 	"abr/internal/manager"
 	"abr/internal/ports"
+	"abr/internal/resources"
 	"abr/internal/tui"
 )
 
@@ -85,6 +87,8 @@ Commands:
   status [APP]     Show actual service status
   disk [APP]       App sizes/totals and live filesystem capacity/used/available space
                    --refresh rescans; --json is scriptable; --filesystem-only skips app scans
+  stats [APP]      Live CPU and memory per app and shared service (per service with APP)
+                   --interval 1s sets the measurement window; --json is scriptable
   restart APP [SERVICE]  Restart managed services (web, queue, queue@1, etc.)
   logs APP [SERVICE]     Show journal (--follow streams it)
   logs --all            Read all apps' journals in one timeline
@@ -150,7 +154,7 @@ func run(args []string, out, stderr io.Writer) error {
 		command, args = "backup "+args[0], args[1:]
 	}
 	switch command {
-	case "backup", "backup configure", "backup test", "backup host-key", "backup trust", "backup status", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
+	case "backup", "backup configure", "backup test", "backup host-key", "backup trust", "backup status", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "stats", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -176,6 +180,7 @@ func run(args []string, out, stderr io.Writer) error {
 	var clearLogs host.ClearLogsOptions
 	var readLogs host.ReadLogsOptions
 	var diskUsage host.DiskOptions
+	var resourceUsage host.UsageOptions
 	switch command {
 	case "backup":
 		fs.StringVar(&fullBackupOutput, "output", "", "online full-server backup FILE.tar.gz including shared persistence")
@@ -204,6 +209,9 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&diskUsage.Refresh, "refresh", false, "bypass the one-minute app-size cache")
 		fs.BoolVar(&diskUsage.JSON, "json", false, "print structured measurements in bytes")
 		fs.BoolVar(&diskUsage.FilesystemOnly, "filesystem-only", false, "read live filesystem space without scanning apps or querying MySQL")
+	case "stats":
+		fs.DurationVar(&resourceUsage.Interval, "interval", time.Second, "CPU measurement window (100ms-1m)")
+		fs.BoolVar(&resourceUsage.JSON, "json", false, "print structured measurements")
 	case "edit":
 		fs.Var((*stringsFlag)(&app.Embedding.Paths), "embed-path", "replace embeddable paths: /banner.html or /ads/* (repeatable; empty clears)")
 		fs.Var((*stringsFlag)(&app.Embedding.Origins), "embed-origin", "replace embedding origins: * for any website, self, or http(s) origin (repeatable; empty clears)")
@@ -371,6 +379,11 @@ func run(args []string, out, stderr io.Writer) error {
 		if len(positional) < 1 || len(positional) > 2 {
 			return fmt.Errorf("use abr %s APP [SERVICE]", command)
 		}
+	case "stats":
+		if resourceUsage.Interval < 100*time.Millisecond || resourceUsage.Interval > time.Minute {
+			return fmt.Errorf("--interval must be between 100ms and 1m")
+		}
+		fallthrough
 	case "status", "disk":
 		if len(positional) > 1 {
 			return fmt.Errorf("use abr %s [APP]", command)
@@ -446,6 +459,12 @@ func run(args []string, out, stderr io.Writer) error {
 			name = positional[0]
 		}
 		return h.DiskUsage(name, diskUsage)
+	case "stats":
+		name := ""
+		if len(positional) == 1 {
+			name = positional[0]
+		}
+		return h.Usage(name, resourceUsage)
 	case "edit":
 		if configOnly {
 			if err := m.Edit(positional[0], changes, !h.DryRun); err != nil {
@@ -511,6 +530,9 @@ func run(args []string, out, stderr io.Writer) error {
 				commandHost := h
 				commandHost.Output = output
 				return commandHost.BackupHostKey()
+			},
+			Usage: func(name string, previous *resources.Sample) (resources.Report, resources.Sample, error) {
+				return editorHost.UsageReport(name, previous, 500*time.Millisecond)
 			},
 			BackupTrust: func(fingerprint string, output io.Writer) error {
 				commandHost := h

@@ -17,7 +17,7 @@ func TestFullTransferFormsReviewAndNavigation(t *testing.T) {
 	m := newModel(testOptions(t))
 	m.fullTransferMenu()
 	m.fullBackupForm()
-	if len(m.groups) != 1 || !strings.Contains(m.View().Content, "Example:") {
+	if len(m.groups) != 1 || !strings.Contains(viewText(m), "Example:") {
 		t.Fatal("backup form does not have one described field")
 	}
 	m.next()
@@ -37,7 +37,7 @@ func TestFullTransferFormsReviewAndNavigation(t *testing.T) {
 		t.Fatal("restore lacks destructive confirmation")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
-	if !strings.Contains(m.View().Content, "[ Cancel ]") {
+	if !strings.Contains(viewText(m), "[ Cancel ]") {
 		t.Fatal("restore confirmation must default to cancel")
 	}
 	for _, args := range [][]string{{"backup"}, {"restore"}} {
@@ -99,7 +99,7 @@ func TestBackupHostIdentityWorkflow(t *testing.T) {
 				if strings.Join(calls, ",") != "inspect,backup test" {
 					t.Fatal("known host was prompted/trusted again", calls)
 				}
-				if scenario == "test-failure" && (m.result == nil || !strings.Contains(m.output, "has mode 0750; required mode is 0700") || !strings.Contains(m.View().Content, "Command failed") || strings.Contains(m.output, "Next:")) {
+				if scenario == "test-failure" && (m.result == nil || !strings.Contains(m.output, "has mode 0750; required mode is 0700") || !strings.Contains(viewText(m), "Command failed") || strings.Contains(m.output, "Next:")) {
 					t.Fatal("destination failure lost detail or showed success guidance", m.output)
 				}
 				return
@@ -131,7 +131,7 @@ func TestOnlineAppBackupReviewAndRestoreDirectory(t *testing.T) {
 	m := newModel(testOptions(t))
 	m.fullTransferMenu()
 	m.appBackupForm()
-	if len(m.groups) != 1 || !strings.Contains(m.View().Content, "Example:") {
+	if len(m.groups) != 1 || !strings.Contains(viewText(m), "Example:") {
 		t.Fatal("app backup field lacks description/example")
 	}
 	m.next()
@@ -152,7 +152,7 @@ func TestOnlineAppBackupReviewAndRestoreDirectory(t *testing.T) {
 		t.Fatal("empty directory accepted")
 	}
 	m.backupDestinationForm()
-	if !strings.Contains(m.View().Content, "Server IP") || !strings.Contains(m.View().Content, "Example:") {
+	if !strings.Contains(viewText(m), "Server IP") || !strings.Contains(viewText(m), "Example:") {
 		t.Fatal("destination configuration missing described first field")
 	}
 }

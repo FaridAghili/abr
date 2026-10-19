@@ -16,6 +16,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func testOptions(t *testing.T) Options {
@@ -27,6 +28,10 @@ func testOptions(t *testing.T) Options {
 	}
 	return Options{Version: abr.Version, ConfigPath: path, StateDir: filepath.Join(dir, "state"), TemplatesDir: filepath.Join(dir, "templates"), AppsDir: filepath.Join(dir, "apps"), RoadRunnerVersion: "2025.1.15"}
 }
+
+// viewText is the visible screen; styling may split phrases with escape codes.
+func viewText(m *model) string { return ansi.Strip(m.View().Content) }
+
 func press(m *model, code rune) tea.Cmd {
 	_, cmd := m.Update(tea.KeyPressMsg{Code: code})
 	return cmd
@@ -129,7 +134,7 @@ func TestRunningOperationCannotBeAbandonedOrDuplicated(t *testing.T) {
 	}
 	close(release)
 	receive(t, m)
-	if m.result == nil || !strings.Contains(m.View().Content, "Command failed") || strings.Contains(m.View().Content, "Command completed") {
+	if m.result == nil || !strings.Contains(viewText(m), "Command failed") || strings.Contains(viewText(m), "Command completed") {
 		t.Fatal("failure was reported as success")
 	}
 	if !strings.Contains(m.output, "build failed") {
@@ -160,7 +165,7 @@ func TestOutputIsBoundedSanitizedAndCleared(t *testing.T) {
 		t.Fatal("explicit credentials missing")
 	}
 	press(m, tea.KeyEscape)
-	if m.output != "" || m.viewport.GetContent() != "" || strings.Contains(m.View().Content, "secret") {
+	if m.output != "" || m.viewport.GetContent() != "" || strings.Contains(viewText(m), "secret") {
 		t.Fatal("credentials retained after leaving")
 	}
 }
@@ -169,7 +174,7 @@ func TestTerminalSizingAndScrollableReview(t *testing.T) {
 	for _, size := range []tea.WindowSizeMsg{{Width: 80, Height: 24}, {Width: 48, Height: 16}, {Width: 120, Height: 40}} {
 		m.Update(size)
 		m.review(action{title: "Deploy", args: []string{"deploy", "app"}, note: strings.Repeat("A long operation description. ", 100)})
-		view := m.View().Content
+		view := viewText(m)
 		if lipgloss.Height(view) > size.Height || lipgloss.Width(view) > size.Width {
 			t.Fatalf("view exceeds terminal %dx%d", size.Width, size.Height)
 		}
@@ -183,7 +188,7 @@ func TestTerminalSizingAndScrollableReview(t *testing.T) {
 		}
 	}
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
-	if !strings.Contains(m.View().Content, "Resize") {
+	if !strings.Contains(viewText(m), "Resize") {
 		t.Fatal("no small-terminal guidance")
 	}
 	press(m, 'y')
@@ -238,7 +243,7 @@ func TestCloneAndRegistrationAskForNameWithoutProjectPath(t *testing.T) {
 	m.cloneForm()
 	m.Update(tea.PasteMsg{Content: "git@github.com:owner/project.git"})
 	m.form.NextGroup()
-	if view := m.View().Content; !strings.Contains(view, "Application name") || strings.Contains(view, "application directory") {
+	if view := viewText(m); !strings.Contains(view, "Application name") || strings.Contains(view, "application directory") {
 		t.Fatal("clone still asks for a full path")
 	}
 	m.Update(tea.PasteMsg{Content: "example-api"})
@@ -250,7 +255,7 @@ func TestCloneAndRegistrationAskForNameWithoutProjectPath(t *testing.T) {
 	m.form.NextGroup() // Application type → name.
 	m.Update(tea.PasteMsg{Content: "example-api"})
 	m.form.NextGroup()
-	if view := m.View().Content; !strings.Contains(view, "Primary domain") || strings.Contains(view, "Project directory") {
+	if view := viewText(m); !strings.Contains(view, "Primary domain") || strings.Contains(view, "Project directory") {
 		t.Fatal("registration still asks for a project directory")
 	}
 	m.Update(tea.PasteMsg{Content: "api.example.com"})
@@ -277,11 +282,11 @@ func TestComposerTokenIsMaskedAndExcludedFromReviewAndCommandArguments(t *testin
 	m.Update(tea.PasteMsg{Content: "fixture@example.invalid"})
 	m.form.NextGroup()
 	m.Update(tea.PasteMsg{Content: "fixture-private-token"})
-	if strings.Contains(m.View().Content, "fixture-private-token") {
+	if strings.Contains(viewText(m), "fixture-private-token") {
 		t.Fatal("token input was not masked")
 	}
 	m.next()
-	if m.page != "confirm" || strings.Contains(m.View().Content+strings.Join(m.current.args, " "), "fixture-private-token") {
+	if m.page != "confirm" || strings.Contains(viewText(m)+strings.Join(m.current.args, " "), "fixture-private-token") {
 		t.Fatal("token leaked into review or arguments")
 	}
 	press(m, 'y')
@@ -291,7 +296,7 @@ func TestComposerTokenIsMaskedAndExcludedFromReviewAndCommandArguments(t *testin
 		t.Fatal("credential operation failed or retained its secret callback")
 	}
 	press(m, tea.KeyEscape)
-	if strings.Contains(m.View().Content, "fixture-private-token") {
+	if strings.Contains(viewText(m), "fixture-private-token") {
 		t.Fatal("token retained on dashboard")
 	}
 }
@@ -300,7 +305,7 @@ func TestAppMenuFitsSmallTerminal(t *testing.T) {
 	m := newModel(testOptions(t))
 	m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
 	m.appMenu(config.App{Name: "example", Directory: "/srv/apps/example", User: "abr-example", Type: "laravel", Domain: "example.com", Web: config.Web{Driver: "octane"}, Database: config.Database{Enabled: true}})
-	if view := m.View().Content; !strings.Contains(view, "Esc back") {
+	if view := viewText(m); !strings.Contains(view, "Esc back") {
 		t.Fatalf("app navigation clipped: %q", view)
 	}
 }
@@ -356,7 +361,7 @@ func TestGuidedFieldsFitSmallTerminalAndShowExamples(t *testing.T) {
 				if step > 30 {
 					t.Fatal("form cannot advance")
 				}
-				view := m.View().Content
+				view := viewText(m)
 				if !strings.Contains(view, "Example:") || !strings.Contains(view, "Esc cancel") || lipgloss.Height(view) > 16 || lipgloss.Width(view) > 48 {
 					t.Fatalf("guidance or controls clipped at step %d:\n%s", step, view)
 				}
@@ -379,7 +384,7 @@ func TestNextStepsFollowSuccessfulWorkOnly(t *testing.T) {
 			m := newModel(o)
 			m.start(action{title: "Clone", args: []string{"clone", "git@github.com:owner/app.git", "app"}})
 			receive(t, m)
-			if got, want := strings.Contains(m.output, "Next: Choose Register application"), scenario.err == nil && !scenario.dryRun; got != want {
+			if got, want := strings.Contains(m.output, "Next: Choose Add application → Register application"), scenario.err == nil && !scenario.dryRun; got != want {
 				t.Fatalf("incorrect completion guidance: %s", m.output)
 			}
 		})
@@ -390,7 +395,7 @@ func TestAdvancedRegistrationFieldsAreOptionalAndDiscardedWhenSkipped(t *testing
 	m := newModel(testOptions(t))
 	m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
 	m.registerForm()
-	for step := 0; !strings.Contains(m.View().Content, "Advanced settings?"); step++ {
+	for step := 0; !strings.Contains(viewText(m), "Advanced settings?"); step++ {
 		if step > 20 || m.form.State != huh.StateNormal {
 			t.Fatal("advanced settings choice is inaccessible")
 		}
@@ -398,12 +403,12 @@ func TestAdvancedRegistrationFieldsAreOptionalAndDiscardedWhenSkipped(t *testing
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m.form.NextGroup()
-	if !strings.Contains(m.View().Content, "Laravel components") || !strings.Contains(m.View().Content, "Scheduler") {
-		t.Fatalf("advanced components missing: %s", m.View().Content)
+	if !strings.Contains(viewText(m), "Laravel components") || !strings.Contains(viewText(m), "Scheduler") {
+		t.Fatalf("advanced components missing: %s", viewText(m))
 	}
 	press(m, tea.KeySpace) // scheduler
 	m.form.NextGroup()
-	if !strings.Contains(m.View().Content, "Laravel build order") {
+	if !strings.Contains(viewText(m), "Laravel build order") {
 		t.Fatal("advanced build order setting is inaccessible")
 	}
 	press(m, tea.KeyDown) // Composer first.
@@ -413,14 +418,14 @@ func TestAdvancedRegistrationFieldsAreOptionalAndDiscardedWhenSkipped(t *testing
 		{"Extra serving domains", "shop.example.com"},
 		{"Health check URL", "https://example.com/up"},
 	} {
-		view := m.View().Content
+		view := viewText(m)
 		if !strings.Contains(view, input.title) || !strings.Contains(view, "Example:") || !strings.Contains(view, "Esc cancel") {
 			t.Fatalf("optional field lacks guidance: %s", view)
 		}
 		m.Update(tea.PasteMsg{Content: input.value})
 		m.form.NextGroup()
 	}
-	if !strings.Contains(m.View().Content, "Registration mode") {
+	if !strings.Contains(viewText(m), "Registration mode") {
 		t.Fatal("portable registration setting is inaccessible")
 	}
 	// Go back and skip extras after entering them; stale values must not be sent.
@@ -446,15 +451,15 @@ func TestDatabaseImportStillRequiresConfirmationAndSimpleMenusKeepActions(t *tes
 		t.Fatal("SQL import lost its explicit destructive confirmation")
 	}
 	m.home()
-	if view := m.View().Content; !strings.Contains(view, "Server & credentials") || strings.Contains(view, "Reconcile ports") || strings.Contains(view, m.options.StateDir) {
+	if view := viewText(m); !strings.Contains(view, "Server & credentials") || strings.Contains(view, "Reconcile ports") || strings.Contains(view, m.options.StateDir) {
 		t.Fatal("home menu exposes maintenance clutter")
 	}
 	m.serverMenu()
-	if !strings.Contains(m.View().Content, "Composer credentials") {
+	if !strings.Contains(viewText(m), "Composer credentials") {
 		t.Fatal("shared Composer setup is inaccessible")
 	}
 	m.toolsMenu()
-	if !strings.Contains(m.View().Content, "Reconcile ports") {
+	if !strings.Contains(viewText(m), "Reconcile ports") {
 		t.Fatal("maintenance action was removed")
 	}
 }

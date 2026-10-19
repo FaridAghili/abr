@@ -36,7 +36,7 @@ Use `--admin-user USER` if your SSH account differs from the sudo user.
 ## Deploy your first app
 
 In `sudo abr`, choose **Server & credentials → GitHub key** and add the public
-key to your GitHub account. Then choose **Clone application**. Abr asks for a
+key to your GitHub account. Then choose **Add application → Clone application**. Abr asks for a
 name and domain, detects the framework, and guides you through settings,
 `.env` and deployment. Projects live at `/srv/apps/NAME`.
 
@@ -68,6 +68,7 @@ not automatically rolled back.
 | Follow logs | `sudo abr logs api --follow` |
 | Check configuration and ports | `sudo abr doctor` |
 | Check disk usage | `sudo abr disk` |
+| See CPU and memory per app | `sudo abr stats` (live in **Resource monitor**) |
 | Update server tools | `sudo abr update` |
 | Back up apps | `sudo abr backup --all` |
 | Schedule backups, keep newest 7 | `sudo abr edit api --backup-schedule daily --backup-keep 7` |

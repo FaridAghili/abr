@@ -34,7 +34,8 @@ func (m *model) goBack() tea.Cmd {
 	m.current, m.next = action{}, nil
 	m.output, m.reviewText, m.notice, m.context = "", "", "", ""
 	m.result, m.events, m.form = nil, nil, nil
-	m.groups = nil
+	m.groups, m.stats = nil, nil
+	m.generation++
 	m.lineLength = 0
 	m.viewport.SetContent("")
 	if back != nil {

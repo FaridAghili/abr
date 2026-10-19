@@ -52,11 +52,11 @@ func TestSetupWorkflowRunsGitAndComposerThenShowsTablePlus(t *testing.T) {
 	m.next()
 	approve(m)
 	finishStep(t, m)
-	if len(commands) != 2 || !strings.HasPrefix(commands[0], "setup --hostname my-vps") || commands[1] != "git setup" || !strings.Contains(m.output, "fixture-public-key") || !strings.Contains(m.View().Content, "Enter continue") {
+	if len(commands) != 2 || !strings.HasPrefix(commands[0], "setup --hostname my-vps") || commands[1] != "git setup" || !strings.Contains(m.output, "fixture-public-key") || !strings.Contains(viewText(m), "Enter continue") {
 		t.Fatal("setup did not automatically create/display its GitHub key", commands)
 	}
 	press(m, tea.KeyEnter)
-	if !strings.Contains(m.View().Content, "Composer credentials") {
+	if !strings.Contains(viewText(m), "Composer credentials") {
 		t.Fatal("setup returned to a menu")
 	}
 	m.next()
@@ -146,7 +146,7 @@ func TestCloneWorkflowCarriesDetectedFrameworkAndNameThroughDeployment(t *testin
 			m.next()
 			approve(m)
 			finishStep(t, m)
-			if view := m.View().Content; !strings.Contains(view, "Primary domain") || strings.Contains(view, "Application type") || strings.Contains(view, "Application name") || !strings.Contains(m.notice, "Detected "+kind) {
+			if view := viewText(m); !strings.Contains(view, "Primary domain") || strings.Contains(view, "Application type") || strings.Contains(view, "Application name") || !strings.Contains(m.notice, "Detected "+kind) {
 				t.Fatalf("clone did not directly open domain field: %s", view)
 			}
 			m.Update(tea.PasteMsg{Content: "example.com"})
@@ -182,11 +182,11 @@ func TestUnknownFrameworkKeepsNameAndAsksOnlyForType(t *testing.T) {
 	}
 	m := newModel(o)
 	m.clonedRegistration("app")
-	if !strings.Contains(m.View().Content, "Application type") {
+	if !strings.Contains(viewText(m), "Application type") {
 		t.Fatal("unknown framework silently assumed")
 	}
 	m.form.NextGroup()
-	if !strings.Contains(m.View().Content, "Primary domain") {
+	if !strings.Contains(viewText(m), "Primary domain") {
 		t.Fatal("unknown framework asked for name again")
 	}
 	m.next()
@@ -259,7 +259,7 @@ func TestDetectedNuxtFormOmitsEveryLaravelFieldIncludingAdvancedFields(t *testin
 		if step > 15 {
 			t.Fatal("Nuxt form cannot advance")
 		}
-		view := m.View().Content
+		view := viewText(m)
 		for _, unsupported := range []string{"PHP-FPM", "Octane", "Queue workers", "MySQL", "Scheduler", "Nightwatch", "Inertia SSR", "Laravel"} {
 			if strings.Contains(view, unsupported) {
 				t.Fatalf("Nuxt form includes %s: %s", unsupported, view)
@@ -369,10 +369,10 @@ func TestAppEnvironmentEditorDeploysOnlyChangedContents(t *testing.T) {
 				m := newModel(o)
 				m.width, m.height = 100, 40
 				m.appMenu(a)
-				if !strings.Contains(m.View().Content, "Edit .env") {
+				if !strings.Contains(viewText(m), "Edit .env") {
 					t.Fatal("app environment action missing")
 				}
-				for range 4 {
+				for range 5 {
 					press(m, tea.KeyDown)
 				}
 				if cmd := m.next(); cmd == nil || editorCalls != 1 || !m.busy || len(commands) != 0 {

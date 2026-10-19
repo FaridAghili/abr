@@ -21,6 +21,7 @@ import (
 
 	"abr/internal/backup"
 	"abr/internal/config"
+	"abr/internal/resources"
 )
 
 // Options supplies paths and a command runner shared with the noninteractive CLI.
@@ -38,6 +39,8 @@ type Options struct {
 	BackupTrust                                          func(string, io.Writer) error
 	EnvEditor                                            func(string) (*exec.Cmd, func() (bool, error), error)
 	ArtisanShell                                         func(string) (*exec.Cmd, error)
+	// Usage measures since previous, or over a short window when it is nil.
+	Usage func(string, *resources.Sample) (resources.Report, resources.Sample, error)
 }
 
 func Run(o Options) error {
@@ -82,27 +85,6 @@ func waitEvent(ch <-chan event) tea.Cmd { return func() tea.Msg { return <-ch } 
 
 const outputLimit = 128 * 1024
 
-type palette struct{ accent, muted, danger, success lipgloss.Style }
-
-func colors(dark bool) palette {
-	choose := lipgloss.LightDark(dark)
-	style := func(light, dark string) lipgloss.Style {
-		return lipgloss.NewStyle().Foreground(choose(lipgloss.Color(light), lipgloss.Color(dark)))
-	}
-	return palette{style("#5145B5", "#8B9FFF").Bold(true), style("#59636F", "#9198A1"), style("#B4233C", "#FF838B").Bold(true), style("#187346", "#68D391").Bold(true)}
-}
-
-func formTheme(dark bool) *huh.Styles {
-	theme := huh.ThemeCharm(dark)
-	// The stock theme uses dark text for unselected options on dark terminals.
-	foreground := lipgloss.LightDark(dark)(lipgloss.Color("#25313D"), lipgloss.Color("#E2E8F0"))
-	for _, field := range []*huh.FieldStyles{&theme.Focused, &theme.Blurred} {
-		field.Option = field.Option.Foreground(foreground)
-		field.UnselectedOption = field.UnselectedOption.Foreground(foreground)
-	}
-	return theme
-}
-
 type model struct {
 	options              Options
 	dark                 bool
@@ -123,6 +105,8 @@ type model struct {
 	notice               string
 	approved             bool
 	reviewText           string
+	stats                *statsView
+	generation           int // Drops measurements from a monitor that was left.
 }
 
 func newModel(o Options) *model {
@@ -173,10 +157,10 @@ func (m *model) home() tea.Cmd {
 		switch selected {
 		case "apps":
 			return m.appsMenu()
-		case "clone":
-			return m.cloneForm()
-		case "register":
-			return m.registerForm()
+		case "add":
+			return m.addMenu()
+		case "monitor":
+			return m.statsMonitor("")
 		case "server":
 			return m.serverMenu()
 		case "tools":
@@ -185,13 +169,31 @@ func (m *model) home() tea.Cmd {
 			return tea.Quit
 		}
 		return m.home()
-	}, huh.NewGroup(huh.NewSelect[string]().Title("Choose a section").Options(
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Choose a section").Description("Manage apps, watch their load, or maintain the server.").Options(
 		huh.NewOption(fmt.Sprintf("Apps (%d)", len(c.Apps)), "apps"),
-		huh.NewOption("Clone application", "clone"),
-		huh.NewOption("Register application", "register"),
+		huh.NewOption("Add application", "add"),
+		huh.NewOption("Resource monitor · live CPU & memory", "monitor"),
 		huh.NewOption("Server & credentials", "server"),
 		huh.NewOption("Tools", "tools"),
 		huh.NewOption("Quit", "quit")).Value(&selected)))
+}
+
+func (m *model) addMenu() tea.Cmd {
+	m.menu, m.back = m.addMenu, m.home
+	m.notice, m.context = "", ""
+	var selected string
+	return m.setForm("menu", "Add application", func() tea.Cmd {
+		switch selected {
+		case "clone":
+			return m.cloneForm()
+		case "register":
+			return m.registerForm()
+		}
+		return m.home()
+	}, huh.NewGroup(huh.NewSelect[string]().Title("How is the project added?").Description("Clone continues into registration, .env and the first deployment.\nExample: Register application for a project already in /srv/apps/NAME.").Options(
+		huh.NewOption("Clone application", "clone"),
+		huh.NewOption("Register application", "register"),
+		huh.NewOption("Back", "back")).Value(&selected)))
 }
 
 func (m *model) appsMenu() tea.Cmd {
@@ -200,7 +202,7 @@ func (m *model) appsMenu() tea.Cmd {
 	c, err := config.Load(m.options.ConfigPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			m.notice = "No configuration yet. Choose Clone or Register application from the main menu."
+			m.notice = "No configuration yet. Choose Add application from the main menu."
 		} else {
 			m.notice = clean(err.Error())
 		}
@@ -212,7 +214,7 @@ func (m *model) appsMenu() tea.Cmd {
 	}
 	choices = append(choices, huh.NewOption("Back", "back"))
 	if len(c.Apps) == 0 && m.notice == "" {
-		m.notice = "No apps registered. Choose Clone or Register application from the main menu."
+		m.notice = "No apps registered. Choose Add application from the main menu."
 	}
 	var selected string
 	return m.setForm("apps", "Apps", func() tea.Cmd {
@@ -250,10 +252,10 @@ func (m *model) serverMenu() tea.Cmd {
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Server actions").Description("Set up VPS guides you through GitHub, Composer and the TablePlus login.").Options(
 		huh.NewOption("Set up VPS", "setup"),
 		huh.NewOption("Update server", "update"),
+		huh.NewOption("Backup & restore", "full-transfer"),
 		huh.NewOption("GitHub key", "git"),
 		huh.NewOption("Composer credentials", "composer"),
 		huh.NewOption("MySQL admin · TablePlus", "mysql-admin"),
-		huh.NewOption("Backup & restore", "full-transfer"),
 		huh.NewOption("Back", "back")).Value(&selected)))
 }
 
@@ -281,14 +283,14 @@ func (m *model) toolsMenu() tea.Cmd {
 			return m.review(action{title: "Reconcile ports", args: []string{"ports", "--allocate"}, note: "Reserve missing ports after configuration edits. Existing assignments stay fixed. Preview is unavailable."})
 		}
 		return m.home()
-	}, huh.NewGroup(huh.NewSelect[string]().Title("Maintenance").Options(
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Maintenance").Description("All-app operations first, then configuration and port checks.").Options(
 		huh.NewOption("Deploy all applications", "deploy"),
 		huh.NewOption("Back up databases", "backup"),
 		huh.NewOption("Logs for all applications", "logs"),
 		huh.NewOption("Disk usage for all applications", "disk"),
-		huh.NewOption("Port reservations", "ports"),
-		huh.NewOption("Validate configuration", "validate"),
 		huh.NewOption("Check configuration and ports", "doctor"),
+		huh.NewOption("Validate configuration", "validate"),
+		huh.NewOption("Port reservations", "ports"),
 		huh.NewOption("Reconcile ports", "allocate"),
 		huh.NewOption("Back", "back")).Value(&selected)))
 }
@@ -299,6 +301,7 @@ func (m *model) appMenu(app config.App) tea.Cmd {
 	m.context = clean(app.Domain + " · User: " + app.User)
 	choices := []huh.Option[string]{
 		huh.NewOption("Deploy", "deploy"), huh.NewOption("Service status", "status"),
+		huh.NewOption("Resource usage · live", "usage"),
 		huh.NewOption("Restart services", "restart"), huh.NewOption("Read logs", "logs"),
 		huh.NewOption("Edit .env", "edit-env"),
 	}
@@ -371,6 +374,8 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 		return m.artisanShell(app)
 	case "more":
 		return m.moreAppMenu(app)
+	case "usage":
+		return m.statsMonitor(app.Name)
 	case "deploy":
 		return m.deployForm(app.Name)
 	case "logs":
@@ -541,6 +546,12 @@ func (m *model) start(a action) tea.Cmd {
 }
 func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 	defer func() { cmd = tea.Batch(cmd, m.resizeLayout()) }()
+	// Measurements and timers are always routed; keys only on a usable monitor.
+	if _, key := msg.(tea.KeyPressMsg); !key || (m.page == "stats" && m.width >= 48 && m.height >= 16) {
+		if cmd, handled := m.updateStats(msg); handled {
+			return m, cmd
+		}
+	}
 	switch msg := msg.(type) {
 	case artisanShellFinished:
 		m.busy = false
@@ -677,6 +688,13 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			}
 		}
 	}
+	if m.page == "stats" {
+		var cmd tea.Cmd
+		if m.stats != nil && !m.stats.loaded {
+			m.spinner, cmd = m.spinner.Update(msg)
+		}
+		return m, cmd
+	}
 	if m.page == "output" || m.page == "confirm" || m.page == "details" {
 		var cmd tea.Cmd
 		if m.busy {
@@ -705,60 +723,63 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 }
 func (m *model) View() tea.View {
 	palette := colors(m.dark)
-	accent, muted, danger, success := palette.accent, palette.muted, palette.danger, palette.success
+	muted, danger, success := palette.muted, palette.danger, palette.success
 	width := m.bodyWidth()
-	mode := ""
+	header := palette.badge.Render("abr") + muted.Render("  "+m.options.Version)
 	if m.options.DryRun {
-		mode = " · Preview"
+		preview := palette.preview.Render("Preview")
+		header += strings.Repeat(" ", max(1, width-lipgloss.Width(header)-lipgloss.Width(preview))) + preview
 	}
-	header := accent.Render("Abr") + muted.Render("  "+m.options.Version+mode)
 	var body string
 	footer := m.footer()
 	if m.width < 48 || m.height < 16 {
 		body = "Resize the terminal to at least 48 × 16.\nEsc / Ctrl+C goes back or quits when idle."
+	} else if m.page == "stats" && m.stats != nil {
+		body = m.statsBody(m.bodyHeight())
 	} else if m.page == "details" {
 		body = m.viewport.View()
 	} else if m.page == "output" {
-		status := m.spinner.View() + " Running"
+		status := m.spinner.View() + palette.info.Render(" Running…")
 		if !m.busy {
 			if m.result != nil {
-				status = danger.Render("Command failed · error shown below")
+				status = danger.Render("✗ Command failed · error shown below")
 				if len(m.current.args) > 0 && m.current.args[0] == "doctor" {
-					status = danger.Render("Checks need attention · details below")
+					status = danger.Render("✗ Checks need attention · details below")
 				}
 			} else if m.options.DryRun {
-				status = success.Render("Preview finished")
+				status = palette.warning.Render("✓ Preview finished")
 			} else {
-				status = success.Render("Command completed")
+				status = success.Render("✓ Command completed")
 				if len(m.current.args) > 0 && m.current.args[0] == "doctor" {
-					status = success.Render("Checks passed")
+					status = success.Render("✓ Checks passed")
 				}
 			}
 		}
 		body = lipgloss.NewStyle().Width(width).Render(status) + "\n" + m.viewport.View()
 	} else if m.page == "confirm" {
-		cancel, run := "  Cancel  ", "  Run command  "
+		button := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF"))
+		cancel, run := muted.Render("  Cancel  "), muted.Render("  Run command  ")
 		if m.approved {
-			run = accent.Render("[ Run command ]")
+			run = button.Background(lipgloss.Color("#1F8A55")).Render("[ Run command ]")
 		} else {
-			cancel = accent.Render("[ Cancel ]")
+			cancel = button.Background(lipgloss.Color("#5B5BD6")).Render("[ Cancel ]")
 		}
 		body = m.viewport.View() + "\n\n" + cancel + "    " + run
 	} else {
 		body = m.form.View()
 	}
 	if m.notice != "" {
-		body = muted.Render(ansi.Truncate(m.notice, width, "…")) + "\n" + body
+		body = palette.info.Render(ansi.Truncate("› "+m.notice, width, "…")) + "\n" + body
 	}
 	if m.context != "" && m.page == "app" {
 		lines := strings.Split(m.context, "\n")
 		for i := range lines {
 			lines[i] = ansi.Truncate(lines[i], width, "…")
 		}
-		body = muted.Render(strings.Join(lines, "\n")) + "\n\n" + body
+		body = palette.info.Render(strings.Join(lines, "\n")) + "\n\n" + body
 	}
 	body = lipgloss.NewStyle().Height(m.contentHeight()).MaxHeight(m.contentHeight()).Render(body)
-	content := header + "\n\n" + accent.Render(ansi.Truncate(m.title, width, "…")) + "\n\n" + body + "\n" + muted.Render(footer)
+	content := header + "\n\n" + palette.title(m.title, width) + "\n" + body + "\n" + palette.hints(footer)
 	// Keep every screen within the terminal, including long paths and failures.
 	content = lipgloss.NewStyle().Width(width).MaxWidth(width).Height(max(1, m.height-2)).MaxHeight(max(1, m.height-2)).Render(content)
 	v := tea.NewView(lipgloss.NewStyle().Padding(1, 2).MaxWidth(m.width).MaxHeight(m.height).Render(content))
@@ -806,9 +827,9 @@ func nextStep(args []string) string {
 	case "update":
 		return "Open an app’s Service status to check its services, then deploy when ready."
 	case "git":
-		return "Add the public key to GitHub Settings → SSH and GPG keys, then choose Clone application."
+		return "Add the public key to GitHub Settings → SSH and GPG keys, then choose Add application → Clone application."
 	case "clone":
-		return "Choose Register application and use the same app name. Its project path is automatic."
+		return "Choose Add application → Register application and use the same app name. Its project path is automatic."
 	case "register":
 		if slices.Contains(args, "--config-only") {
 			return "Register on the VPS before deploying; this saved local configuration only."

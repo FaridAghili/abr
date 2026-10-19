@@ -9,6 +9,8 @@ import (
 
 func (m *model) footer() string {
 	switch m.page {
+	case "stats":
+		return m.statsFooter()
 	case "details":
 		return "↑/↓ scroll · Enter / Esc back"
 	case "confirm":

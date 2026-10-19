@@ -31,7 +31,7 @@ func TestTypingFiltersMenusAndOpensHighlightedApp(t *testing.T) {
 		t.Fatal("filtered main menu did not open Apps")
 	}
 	typeSearch(m, "MOON")
-	view := m.View().Content
+	view := viewText(m)
 	if !strings.Contains(view, "moon · laravel") || strings.Contains(view, "alpha · laravel") || strings.Contains(view, "zebra · laravel") {
 		t.Fatalf("apps search did not filter case-insensitively: %s", view)
 	}
@@ -46,7 +46,7 @@ func TestTypingFiltersMenusAndOpensHighlightedApp(t *testing.T) {
 		t.Fatal("application actions cannot be searched")
 	}
 	press(m, tea.KeyEscape)
-	if m.title != "moon" || m.listField().GetFiltering() || !strings.Contains(m.View().Content, "Deploy") {
+	if m.title != "moon" || m.listField().GetFiltering() || !strings.Contains(viewText(m), "Deploy") {
 		t.Fatal("Esc did not clear the search on the current menu")
 	}
 	press(m, tea.KeyEscape)
@@ -64,7 +64,7 @@ func TestListSearchLettersAreNotNavigationShortcuts(t *testing.T) {
 				huh.NewOption("Other", "other"), huh.NewOption(query+" match", "match")).Value(&selected)))
 			typeSearch(m, query)
 			field := m.form.GetFocusedField().(*huh.Select[string])
-			if value, ok := field.Hovered(); !ok || value != "match" || !field.GetFiltering() || !strings.Contains(ansi.Strip(m.View().Content), "/"+query) {
+			if value, ok := field.Hovered(); !ok || value != "match" || !field.GetFiltering() || !strings.Contains(ansi.Strip(viewText(m)), "/"+query) {
 				t.Fatal("letter key navigated instead of filtering")
 			}
 		})
@@ -87,7 +87,7 @@ func TestSearchBackspaceNoMatchesAndEscape(t *testing.T) {
 		t.Fatal("Backspace did not recover the search result")
 	}
 	press(m, tea.KeyEscape)
-	if field.GetFiltering() || m.title != "Server & credentials" || !strings.Contains(m.View().Content, "Set up VPS") {
+	if field.GetFiltering() || m.title != "Server & credentials" || !strings.Contains(viewText(m), "Set up VPS") {
 		t.Fatal("Esc did not restore the full menu")
 	}
 	press(m, tea.KeyEscape)
@@ -115,7 +115,7 @@ func TestSearchWorksInChoicesAndMultiSelectWithoutChangingTextInputs(t *testing.
 	}
 	// A retained filter must also clear before leaving the form.
 	press(m, tea.KeyEscape)
-	if m.page != "form" || !strings.Contains(m.View().Content, "Nightwatch") {
+	if m.page != "form" || !strings.Contains(viewText(m), "Nightwatch") {
 		t.Fatal("Esc left the form with a retained filter")
 	}
 	typeSearch(m, "zzzz")
@@ -128,7 +128,7 @@ func TestSearchWorksInChoicesAndMultiSelectWithoutChangingTextInputs(t *testing.
 	press(m, tea.KeyEscape)
 	m.cloneForm()
 	typeSearch(m, "git@github.com:owner/project.git")
-	if m.listField() != nil || !strings.Contains(m.View().Content, "git@github.com:owner/project.git") {
+	if m.listField() != nil || !strings.Contains(viewText(m), "git@github.com:owner/project.git") {
 		t.Fatal("list search intercepted normal input")
 	}
 }
@@ -149,7 +149,7 @@ func TestSearchNavigationAndFilteringScrollLongLists(t *testing.T) {
 	if value, ok := m.form.GetFocusedField().(*huh.Select[string]).Hovered(); !ok || value != "49" {
 		t.Fatal("cannot navigate filtered results")
 	}
-	if view := m.View().Content; !strings.Contains(view, "Match 49") || !strings.Contains(view, "Esc back") || !strings.Contains(view, "Esc clears search") {
+	if view := viewText(m); !strings.Contains(view, "Match 49") || !strings.Contains(view, "Esc back") || !strings.Contains(view, "Esc clears search") {
 		t.Fatalf("selected match or controls scrolled out of view: %s", view)
 	}
 }
