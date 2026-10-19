@@ -29,7 +29,8 @@ sudo abr
 ```
 
 Setup installs PHP 8.5, Node 24, Caddy, RoadRunner, Composer, MySQL, Redis and
-image tools. It also configures UFW, Fail2ban, security updates and root's Zsh.
+image tools. It also configures UFW, Fail2ban, security updates, root's Zsh and
+swap when the server has none, and removes snapd when nothing uses it.
 Use `--admin-user USER` if your SSH account differs from the sudo user.
 
 ## Deploy your first app

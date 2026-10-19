@@ -114,6 +114,18 @@
     handle {
 {{if eq .Type "laravel"}}
 {{if eq .WebDriver "fpm"}}
+        # Only Laravel's front controller executes. Uploaded or stray scripts,
+        # including directory index.php files, are routed to Laravel instead.
+        @otherScripts {
+            path_regexp otherScripts (?i)\.php(/|$)
+            not path /index.php /index.php/*
+        }
+        rewrite @otherScripts /index.php
+        @directoryScripts {
+            not path /
+            file {path}/index.php
+        }
+        rewrite @directoryScripts /index.php
         php_fastcgi unix/{{.FPMSocket}}
         file_server {
             precompressed br zstd gzip

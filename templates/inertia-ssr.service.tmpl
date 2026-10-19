@@ -15,11 +15,17 @@ PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
 User={{.User}}
 WorkingDirectory={{unitPath .Directory}}
 EnvironmentFile={{unitPath .ManagedEnvironmentFile}}
 ExecStart={{unit .PHPBinary}} artisan inertia:start-ssr --no-interaction
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 [Install]

@@ -644,3 +644,29 @@ func TestCaddyReplacesOnlyPackagedWelcomeAndRestoresInvalidReplacement(t *testin
 		t.Fatal("original welcome config not restored")
 	}
 }
+
+func TestSwapSizeAndSnapdRemovalChecks(t *testing.T) {
+	const gib = 1 << 30
+	for memory, want := range map[uint64]uint64{gib / 2: gib, 2 * gib: gib, 8 * gib: 4 * gib, 64 * gib: 4 * gib} {
+		if got := swapSize(memory); got != want {
+			t.Errorf("swapSize(%d) = %d; want %d", memory, got, want)
+		}
+	}
+	list := "Name    Version  Rev    Tracking       Publisher   Notes\ncore24  20240920 609    latest/stable  canonical✓  base\nsnapd   2.66     23545  latest/stable  canonical✓  snapd\n"
+	if snaps := applicationSnaps(list); len(snaps) != 0 {
+		t.Fatalf("base snaps treated as applications: %v", snaps)
+	}
+	if snaps := applicationSnaps(list + "lxd     6.1      30130  6/stable       canonical✓  -\n"); !slices.Equal(snaps, []string{"lxd"}) {
+		t.Fatalf("application snap ignored: %v", snaps)
+	}
+	if snaps := applicationSnaps("No snaps are installed yet.\n"); len(snaps) != 0 {
+		t.Fatalf("empty snap list misread: %v", snaps)
+	}
+	simulation := "Reading package lists...\nPurg snapd [2.66]\n"
+	if others := otherRemovals(simulation); len(others) != 0 {
+		t.Fatalf("snapd alone reported dependents: %v", others)
+	}
+	if others := otherRemovals("Remv ubuntu-server [1.539]\n" + simulation); !slices.Equal(others, []string{"ubuntu-server"}) {
+		t.Fatalf("dependent package removal ignored: %v", others)
+	}
+}

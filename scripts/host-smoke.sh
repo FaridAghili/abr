@@ -171,8 +171,18 @@ fixture_shell() {
     zsh -i -c '[[ $plugins[-1] == zsh-syntax-highlighting && ${plugins[(Ie)git]} -gt 0 && ${plugins[(Ie)zsh-autosuggestions]} -gt 0 && ${+functions[_zsh_autosuggest_start]} == 1 && ${+functions[_zsh_highlight]} == 1 ]] && [[ $(abr_shell_fixture) == preserved ]]'
   test "$(sudo grep -Fc '# Begin abr shell' /root/.zshrc)" = 1
 }
+# Exercise swap creation: setup only adds swap to a server without any.
+sudo swapoff -a
 abr_ci setup --hostname abr-ci-vps --no-firewall --ssh-port 22 --admin-user root
 fixture_shell
+swapon --show=NAME --noheadings | grep -Fx /swapfile
+test "$(sudo blkid --match-tag LABEL --output value /swapfile)" = abr-swap
+test "$(sudo stat -c '%u:%a' /swapfile)" = 0:600
+systemctl is-enabled --quiet swapfile.swap
+test "$(sysctl -n vm.swappiness)" = 10
+if ! dpkg-query -W -f='${Status}' snapd 2>/dev/null | grep -Fxq 'install ok installed'; then
+  grep -Fx 'Pin-Priority: -10' /etc/apt/preferences.d/abr-no-snapd
+fi
 sudo cmp /root/.zshrc.pre-abr "$abr_binary_directory/zshrc-before"
 test "$(hostname)" = abr-ci-vps
 test "$(hostnamectl --static hostname)" = abr-ci-vps
@@ -335,7 +345,7 @@ fixture_denied redis touch /etc/redis/.abr-ci-write-probe
 sudo redis-cli CONFIG GET appendonly | grep -Fx yes
 sudo redis-cli CONFIG GET maxmemory-policy | grep -Fx noeviction
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \
-  -e 'SELECT @@innodb_buffer_pool_size, @@max_connections;' | grep -Fx $'268435456\t100'
+  -e 'SELECT @@innodb_buffer_pool_size, @@max_connections, @@log_bin, @@performance_schema;' | grep -Fx $'268435456\t200\t0\t0'
 # Shared identity tests remain offline: no GitHub account or private repository.
 abr_ci git setup
 abr_ci git setup
@@ -1010,6 +1020,7 @@ abr_ci doctor
 # Repeated setup must allow its recorded loopback account, retain its password,
 # and leave other apps' retained databases intact.
 abr_ci setup --hostname abr-ci-vps --no-firewall --ssh-port 22 --admin-user root
+swapon --show=NAME --noheadings | grep -Fx /swapfile
 fixture_shell
 sudo cmp /root/.zshrc.pre-abr "$abr_binary_directory/zshrc-before"
 sudo cmp /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin-before.json"

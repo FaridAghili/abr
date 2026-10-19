@@ -4,7 +4,7 @@ Abr 1.0.0 is the initial release for fresh Ubuntu 26.04 LTS AMD64 servers.
 - Native PHP 8.5, shared RoadRunner/Octane, Node 24, Caddy HTTPS, MySQL and Redis.
 - Dedicated app users, managed services and ports, deployment preflight checks,
   database backup/import, and removal that preserves app data unless purged.
-- VPS setup with key-only SSH, UFW, Fail2ban and automatic security updates.
+- VPS setup with key-only SSH, UFW, Fail2ban, automatic security updates, swap and unused snapd removal.
 - Continuous VPS setup through GitHub keys, optional Composer credentials and
   the TablePlus MySQL login.
 - Clone-to-deploy workflow with framework detection, optional advanced settings,

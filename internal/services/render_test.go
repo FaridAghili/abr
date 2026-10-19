@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/fcgi"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -124,7 +125,8 @@ func TestCaddyProxyHeaders(t *testing.T) {
 	}
 }
 
-func startCaddyFixture(t *testing.T, caddy string, a config.App, r ports.Registry) string {
+// Replacements are old/new pairs applied to the rendered site, e.g. a test socket.
+func startCaddyFixture(t *testing.T, caddy string, a config.App, r ports.Registry, replacements ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	plan, err := Render(a, r, "../../templates", dir)
@@ -144,6 +146,9 @@ func startCaddyFixture(t *testing.T, caddy string, a config.App, r ports.Registr
 			// certificates or binding the production HTTP/HTTPS ports.
 			site, _, _ = strings.Cut(string(file.Data), "# Explicit HTTP routes")
 			site = strings.Replace(site, "app.test {", "http://"+address+" {", 1)
+			if len(replacements) > 0 {
+				site = strings.NewReplacer(replacements...).Replace(site)
+			}
 		}
 	}
 	path := filepath.Join(dir, "Caddyfile")
@@ -172,6 +177,66 @@ func startCaddyFixture(t *testing.T, caddy string, a config.App, r ports.Registr
 			t.Fatal(err)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// PHP-FPM must only execute Laravel's front controller. A FastCGI fixture
+// reports which script Caddy asked it to run.
+func TestCaddyFrontController(t *testing.T) {
+	caddy, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("Caddy is not installed")
+	}
+	socketDirectory, err := os.MkdirTemp("", "abr-fpm-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDirectory) })
+	socket := filepath.Join(socketDirectory, "fpm.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		_ = fcgi.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = io.WriteString(w, fcgi.ProcessEnv(r)["SCRIPT_FILENAME"])
+		}))
+	}()
+	a := config.App{Name: "app", User: "abr-app", Directory: t.TempDir(), Type: "laravel", Domain: "app.test", Web: config.Web{Driver: "fpm"}}
+	root := filepath.Join(a.Directory, "public")
+	for _, name := range []string{"index.php", "storage/upload.php", "storage/upload.PHP", "uploads/index.php", "robots.txt"} {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("public fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	address := startCaddyFixture(t, caddy, a, ports.Empty(), "unix//run/php/abr-app.sock", "unix/"+socket)
+	client := &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	front := filepath.Join(root, "index.php")
+	for _, path := range []string{"/", "/route", "/index.php", "/index.php/route", "/storage/upload.php", "/storage/upload.PHP", "/storage/upload.php/extra", "/storage/missing.php", "/uploads/", "/uploads", "/uploads/index.php"} {
+		response, err := client.Get("http://" + address + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusOK || string(body) != front {
+			t.Fatalf("%s: status=%d script=%q; want only %s", path, response.StatusCode, body, front)
+		}
+	}
+	response, err := client.Get("http://" + address + "/robots.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || string(body) != "public fixture" {
+		t.Fatalf("static file was not served directly: status=%d body=%q", response.StatusCode, body)
 	}
 }
 
@@ -361,7 +426,7 @@ func TestRenderAllComponents(t *testing.T) {
 			t.Fatalf("unrendered template %s", f.Path)
 		}
 		if strings.HasSuffix(f.Path, ".service") {
-			for _, want := range []string{"User=abr-app\n", "NoNewPrivileges=true\n", "CapabilityBoundingSet=\n", "ProtectSystem=full\n", "ProtectHome=true\n", "PrivateTmp=true\n"} {
+			for _, want := range []string{"User=abr-app\n", "NoNewPrivileges=true\n", "CapabilityBoundingSet=\n", "ProtectSystem=full\n", "ProtectHome=true\n", "PrivateTmp=true\n", "LockPersonality=true\n", "SystemCallArchitectures=native\n"} {
 				if !strings.Contains(text, want) {
 					t.Errorf("missing service protection %q in %s", want, f.Path)
 				}
@@ -373,6 +438,10 @@ func TestRenderAllComponents(t *testing.T) {
 					t.Errorf("missing %s in %s", want, text)
 				}
 			}
+		}
+		// Laravel's queue:restart, octane:stop and memory limits exit cleanly.
+		if strings.HasSuffix(f.Path, ".service") && !strings.HasSuffix(f.Path, "scheduler.service") && !strings.Contains(text, "Restart=always\n") {
+			t.Errorf("long-running service is not always restarted: %s", f.Path)
 		}
 		if strings.HasSuffix(f.Path, "octane.service") && (!strings.Contains(text, "WorkingDirectory=/srv/apps/my app%%\n") || !strings.Contains(text, "EnvironmentFile=/var/lib/abr/env/app.env\n") || !strings.Contains(text, "--rpc-host=127.0.0.1 --rpc-port=10001")) {
 			t.Fatal(text)
@@ -407,7 +476,7 @@ func TestNuxtAndFPMTemplates(t *testing.T) {
 			if strings.HasSuffix(f.Path, ".caddy") && (!strings.Contains(string(f.Data), "@private path /.env /.env.* /.git /.git/*") || !strings.Contains(string(f.Data), "handle @private {\n        respond 404")) {
 				t.Fatal("private static files are not blocked", f.Path)
 			}
-			if strings.HasSuffix(f.Path, "nuxt.service") && !strings.Contains(string(f.Data), "--env-file-if-exists=.env .output/server/index.mjs") {
+			if strings.HasSuffix(f.Path, "nuxt.service") && !strings.Contains(string(f.Data), "--max-old-space-size=512 --env-file-if-exists=.env .output/server/index.mjs") {
 				t.Fatal(string(f.Data))
 			}
 			if strings.HasSuffix(f.Path, ".conf") && !strings.HasPrefix(string(f.Data), "; Managed by abr") {

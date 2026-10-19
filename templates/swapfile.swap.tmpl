@@ -1,0 +1,10 @@
+# Managed by abr; edit the source template instead.
+# Setup creates /swapfile only when the server has no swap.
+[Unit]
+Description=Abr swap file
+
+[Swap]
+What=/swapfile
+
+[Install]
+WantedBy=swap.target

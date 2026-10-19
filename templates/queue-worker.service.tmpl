@@ -14,11 +14,17 @@ PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
 User={{.User}}
 WorkingDirectory={{unitPath .Directory}}
 EnvironmentFile={{unitPath .ManagedEnvironmentFile}}
 ExecStart={{unit .PHPBinary}} artisan queue:work --sleep=3 --tries=3 --timeout=60 --no-interaction
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStopSec=120
 

@@ -7,8 +7,13 @@ local-infile = 0
 skip-name-resolve = ON
 # Modest shared-host defaults; size for measured workload and available RAM.
 innodb_buffer_pool_size = 256M
-max_connections = 100
-thread_cache_size = 16
+# Instrumentation reserves hundreds of MB that a single app host rarely reads.
+performance_schema = OFF
+# Octane and queue workers hold connections for their whole lifetime.
+max_connections = 200
+thread_cache_size = 32
 # Preserve transaction durability.
 innodb_flush_log_at_trx_commit = 1
-sync_binlog = 1
+# Single host without replicas: backups are SQL dumps, so binary logs would only
+# double commit fsyncs and fill the disk for 30 days.
+disable_log_bin

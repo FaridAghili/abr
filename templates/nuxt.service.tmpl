@@ -14,13 +14,23 @@ PrivateTmp=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
 User={{.User}}
 WorkingDirectory={{unitPath .Directory}}
 EnvironmentFile={{unitPath .ManagedEnvironmentFile}}
 Environment=NITRO_HOST=127.0.0.1
 Environment=NITRO_PORT={{.NuxtHTTPPort}}
-ExecStart={{unit .NodeBinary}} --env-file-if-exists=.env .output/server/index.mjs
-Restart=on-failure
+# Fewer glibc arenas limit native-memory fragmentation, e.g. from sharp image resizing.
+Environment=MALLOC_ARENA_MAX=2
+# Node sizes its heap from host RAM and collects lazily; a bound keeps idle
+# SSR servers small and turns an unbounded cache or leak into a restart.
+ExecStart={{unit .NodeBinary}} --max-old-space-size=512 --env-file-if-exists=.env .output/server/index.mjs
+Restart=always
 RestartSec=5
 
 [Install]
