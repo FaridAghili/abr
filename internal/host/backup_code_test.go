@@ -103,6 +103,13 @@ func TestBackupWorkingSourceConfigurationDeletionsAndExecutable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A group execute bit alone is an ACL mask, not an executable source file.
+	if err := os.WriteFile(filepath.Join(a.Directory, "public.txt"), []byte("asset"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(a.Directory, "public.txt"), 0650); err != nil {
+		t.Fatal(err)
+	}
 	h.Runner = deletedSourceRunner{base: runner}
 	if err := h.FullBackup(output); err != nil {
 		t.Fatal(err)
@@ -141,6 +148,9 @@ func TestBackupWorkingSourceConfigurationDeletionsAndExecutable(t *testing.T) {
 	info, err := os.Stat(filepath.Join(project, "bin/tool"))
 	if err != nil || info.Mode().Perm() != 0700 {
 		t.Fatal("source executable bits lost", err)
+	}
+	if info, err := os.Stat(filepath.Join(project, "public.txt")); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatal("ACL mask treated as executable", err)
 	}
 	if data, err := os.ReadFile(filepath.Join(project, "local.ini")); err != nil || string(data) != "ignored local config" {
 		t.Fatal("local config lost", err)

@@ -193,7 +193,9 @@ func copyWorkingSourceFile(root *os.Root, name, destination string, mode os.File
 		return err
 	}
 	_, copyErr := io.Copy(out, f)
-	if copyErr == nil && mode.Perm()&0111 != 0 {
+	// Git tracks only the owner execute bit. Group bits can show an ACL mask
+	// (for example Caddy's inherited rx on public assets), not an executable.
+	if copyErr == nil && mode.Perm()&0100 != 0 {
 		copyErr = out.Chmod(0700)
 	}
 	closeErr := out.Close()
