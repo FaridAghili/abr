@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -152,25 +153,52 @@ func copyBackupFile(source, destination string, optional bool) error {
 	return errors.Join(copyErr, out.Close())
 }
 
-func copyBackupTree(source, destination string, optional bool) error {
-	info, err := os.Lstat(source)
-	if optional && os.IsNotExist(err) {
+// stageLiveTree opens parent/rel for backup.Write to stream in place of an
+// empty staged directory. The tree is resolved beneath parent, which its owner
+// cannot replace, so a swapped link cannot redirect reads outside parent. A
+// missing tree is skipped; rel itself must be a directory, not a symlink.
+func stageLiveTree(live map[string]*os.Root, stage, name, parent, rel string) error {
+	resolved, err := filepath.EvalSymlinks(parent)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if resolved != filepath.Clean(parent) {
+		return fmt.Errorf("backup directory parents must not be symlinks")
+	}
+	root, err := os.OpenRoot(parent)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	info, err := root.Lstat(rel)
+	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
 	if !info.IsDir() {
-		return fmt.Errorf("backup source must be a directory without symlinks: %s", source)
+		return fmt.Errorf("backup source must be a directory without symlinks: %s", filepath.Join(parent, rel))
 	}
-	resolved, err := filepath.EvalSymlinks(source)
+	tree, err := root.OpenRoot(rel)
 	if err != nil {
 		return err
 	}
-	if resolved != filepath.Clean(source) {
-		return fmt.Errorf("backup directory parents must not be symlinks")
+	if err := os.MkdirAll(filepath.Join(stage, filepath.FromSlash(name)), 0700); err != nil {
+		tree.Close()
+		return err
 	}
-	return backup.CopyTree(source, destination)
+	live[name] = tree
+	return nil
+}
+
+func closeLiveTrees(live map[string]*os.Root) {
+	for _, tree := range live {
+		tree.Close()
+	}
 }
 
 // FullBackup produces one complete, root-only archive. It publishes only after
@@ -226,6 +254,8 @@ func (h Host) FullBackup(output string) error {
 				return err
 			}
 			defer os.RemoveAll(stage)
+			live := map[string]*os.Root{}
+			defer closeLiveTrees(live)
 			dbRecords := map[string]credentials{}
 			for _, a := range c.Apps {
 				if a.Type == "laravel" {
@@ -283,7 +313,7 @@ func (h Host) FullBackup(output string) error {
 					return err
 				}
 				if a.Type == "laravel" {
-					if err := copyBackupTree(h.path(filepath.Join(a.Directory, "storage/app")), filepath.Join(stage, "apps", a.Name, "storage/app"), true); err != nil {
+					if err := stageLiveTree(live, stage, "apps/"+a.Name+"/storage/app", h.path(a.Directory), "storage/app"); err != nil {
 						return err
 					}
 				}
@@ -301,7 +331,7 @@ func (h Host) FullBackup(output string) error {
 					return err
 				}
 			}
-			if err := copyBackupTree(h.path("/var/lib/caddy/.local/share/caddy"), filepath.Join(stage, "caddy"), true); err != nil {
+			if err := stageLiveTree(live, stage, "caddy", h.path("/var/lib/caddy"), ".local/share/caddy"); err != nil {
 				return err
 			}
 			f, err := os.CreateTemp(filepath.Dir(output), ".abr-backup-")
@@ -311,7 +341,7 @@ func (h Host) FullBackup(output string) error {
 			defer os.Remove(f.Name())
 			defer f.Close()
 			m := backup.Manifest{Version: 1, CreatedAt: time.Now().UTC(), Config: c, Ports: r, Apps: records, Settings: settings}
-			if err := backup.Write(f, stage, &m); err != nil {
+			if err := backup.Write(f, stage, &m, live); err != nil {
 				return err
 			}
 			if err := validateFullBackup(m, stage); err != nil {
@@ -354,16 +384,32 @@ func (h Host) FullRestore(input string, o RestoreOptions) error {
 	return h.RestoreArchives([]string{input}, o)
 }
 
+// RestoreArchives provisions a fresh server from its saved settings, then
+// restores every app. On a server that is already set up, app archives are
+// added as new apps and this server's settings and shared data are kept. A
+// single directory selects the newest app archive of each app in it.
 func (h Host) RestoreArchives(inputs []string, o RestoreOptions) error {
 	if !o.Yes && !h.DryRun {
-		return fmt.Errorf("full restore imports SQL and Redis data; pass --yes to confirm")
+		return fmt.Errorf("restore imports SQL and, from full backups, Redis data; pass --yes to confirm")
 	}
 	if len(inputs) == 0 {
 		return fmt.Errorf("select at least one backup archive")
 	}
+	if len(inputs) == 1 && filepath.IsAbs(inputs[0]) && !strings.HasSuffix(inputs[0], ".tar.gz") {
+		files, err := backup.LatestArchives(inputs[0])
+		if err != nil {
+			return err
+		}
+		names := make([]string, len(files))
+		for i, file := range files {
+			names[i] = filepath.Base(file)
+		}
+		h.say("Selected the newest backup of each app: %s", strings.Join(names, ", "))
+		inputs = files
+	}
 	for _, input := range inputs {
 		if !filepath.IsAbs(input) || !strings.HasSuffix(input, ".tar.gz") || strings.ContainsAny(input, "\x00\r\n") {
-			return fmt.Errorf("use absolute backup FILE.tar.gz paths")
+			return fmt.Errorf("use absolute backup FILE.tar.gz paths or one directory of app backups")
 		}
 	}
 	if o.SSHPort < 0 || o.SSHPort > 65535 {
@@ -372,12 +418,22 @@ func (h Host) RestoreArchives(inputs []string, o RestoreOptions) error {
 	if err := h.guard(); err != nil {
 		return err
 	}
-	// A preview extracts only to an ephemeral private directory, never host paths.
-	stage, err := os.MkdirTemp("", "abr-restore-")
+	// Archives can hold gigabytes of uploads and /tmp may be RAM-backed, so
+	// extract on disk. A preview extracts only here, never to host paths.
+	parent, err := os.MkdirTemp(h.path("/var/tmp"), "abr-restore-")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(stage)
+	defer os.RemoveAll(parent)
+	if _, err := os.Lstat(h.path(filepath.Join(h.Manager.StateDir, "setup.json"))); err == nil {
+		return h.restoreIntoServer(inputs, o, parent)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	stage := filepath.Join(parent, "restore")
+	if err := os.Mkdir(stage, 0700); err != nil {
+		return err
+	}
 	var m backup.Manifest
 	for _, input := range inputs {
 		if err := h.extractRestoreArchive(input, stage, &m); err != nil {
@@ -442,64 +498,301 @@ func (h Host) RestoreArchives(inputs []string, o RestoreOptions) error {
 }
 
 func (h Host) extractRestoreArchive(input, destination string, combined *backup.Manifest) error {
-	f, err := os.OpenFile(input, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return err
+	if combined.Files == nil {
+		m, err := h.extractArchive(input, destination)
+		if err != nil {
+			return err
+		}
+		*combined = m
+		return nil
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("backup must be a regular file")
-	}
-	stage, err := os.MkdirTemp("", "abr-archive-")
+	// A sibling extraction on the same filesystem lets Merge move, not copy.
+	stage, err := os.MkdirTemp(filepath.Dir(destination), "archive-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(stage)
-	m, err := backup.Extract(f, stage)
+	m, err := h.extractArchive(input, stage)
 	if err != nil {
-		return fmt.Errorf("invalid backup: %w", err)
-	}
-	if err := validateFullBackup(m, stage); err != nil {
 		return err
 	}
 	return backup.Merge(combined, m, stage, destination)
 }
 
+// extractArchive extracts and checks one archive in an empty private directory.
+func (h Host) extractArchive(input, destination string) (backup.Manifest, error) {
+	f, err := os.OpenFile(input, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return backup.Manifest{}, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return backup.Manifest{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return backup.Manifest{}, fmt.Errorf("backup must be a regular file: %s", input)
+	}
+	m, err := backup.Extract(f, destination)
+	if err != nil {
+		return m, fmt.Errorf("invalid backup %s: %w", filepath.Base(input), err)
+	}
+	if err := validateFullBackup(m, destination); err != nil {
+		return m, fmt.Errorf("invalid backup %s: %w", filepath.Base(input), err)
+	}
+	return m, nil
+}
+
+// restoreIntoServer adds app archives to this set-up server as new apps. Its
+// settings, templates, shared runtime configuration and Redis data are kept.
+// Saved ports are reused when free in this server's range; others are new.
+func (h Host) restoreIntoServer(inputs []string, o RestoreOptions, parent string) error {
+	if o.AdminUser != "" || o.SSHPort != 0 {
+		return fmt.Errorf("--admin-user and --ssh-port apply only to a fresh server; this server is already set up")
+	}
+	type archive struct {
+		m     backup.Manifest
+		stage string
+	}
+	var archives []archive
+	var apps []config.App
+	var records []backup.App
+	for i, input := range inputs {
+		stage := filepath.Join(parent, strconv.Itoa(i))
+		if err := os.Mkdir(stage, 0700); err != nil {
+			return err
+		}
+		m, err := h.extractArchive(input, stage)
+		if err != nil {
+			return err
+		}
+		if m.Scope != "app" {
+			return fmt.Errorf("%s is a full-server backup; restore it on a fresh server, or restore app backups here", filepath.Base(input))
+		}
+		for i := range m.Config.Apps {
+			m.Config.Apps[i].Directory = filepath.Join(h.AppsDir, m.Config.Apps[i].Name)
+		}
+		archives = append(archives, archive{m, stage})
+		apps = append(apps, m.Config.Apps...)
+		records = append(records, m.Apps...)
+	}
+	probe := h.Manager.Probe
+	if probe == nil {
+		probe = ports.CheckAvailable
+	}
+	// plan checks every app against this server and assigns ports in memory.
+	plan := func(hostChecks bool) (config.Config, ports.Registry, error) {
+		c, err := config.Load(h.Manager.ConfigPath)
+		if errors.Is(err, os.ErrNotExist) {
+			c, err = config.Default(), nil
+		}
+		if err != nil {
+			return c, ports.Registry{}, err
+		}
+		r, err := ports.Load(h.Manager.RegistryPath())
+		if err != nil {
+			return c, r, err
+		}
+		for i, a := range apps {
+			if slices.ContainsFunc(c.Apps, func(existing config.App) bool { return existing.Name == a.Name }) {
+				return c, r, fmt.Errorf("%s is already registered on this server; existing app preserved", a.Name)
+			}
+			if slices.ContainsFunc(apps[:i], func(other config.App) bool { return other.Name == a.Name }) {
+				return c, r, fmt.Errorf("%s is selected in more than one backup; choose one", a.Name)
+			}
+		}
+		c.Apps = append(c.Apps, apps...)
+		if err := c.Validate(); err != nil {
+			return c, r, err
+		}
+		for _, x := range archives {
+			for _, a := range x.m.Config.Apps {
+				if err := h.freshAppTarget(a, hostChecks); err != nil {
+					return c, r, err
+				}
+				if err := r.Ensure(a, c.Ports, restoreImports(a, x.m.Ports, r, c.Ports, probe), probe); err != nil {
+					return c, r, err
+				}
+				if _, err := services.Render(a, r, h.TemplatesDir, h.Manager.StateDir); err != nil {
+					return c, r, err
+				}
+			}
+		}
+		return c, r, nil
+	}
+	if h.DryRun {
+		_, r, err := plan(false)
+		if err != nil {
+			return err
+		}
+		h.say("Restore preview: %d apps into this server; its settings, templates, shared runtime configuration, Redis data and other apps are kept", len(apps))
+		for _, a := range apps {
+			record := restoreRecord(records, a.Name)
+			var reserved []string
+			for _, assignment := range r.Assignments {
+				if assignment.App == a.Name {
+					reserved = append(reserved, fmt.Sprintf("%s %d", assignment.Purpose, assignment.Port))
+				}
+			}
+			h.say("Would restore %s: saved code %s on branch %s into %s from its bundled repository; ports: %s; restore .env/storage/SQL, build, migrate and optimize; start afterwards: %t", a.Name, record.Commit, record.Branch, a.Directory, strings.Join(reserved, ", "), record.Enabled)
+		}
+		h.say("No host changes")
+		return nil
+	}
+	return h.locked(func() (result error) {
+		h.lockHeld = true
+		c, _, err := plan(true)
+		if err != nil {
+			return err
+		}
+		for _, x := range archives {
+			if err := h.restoreDatabasePreflight(x.m); err != nil {
+				return err
+			}
+		}
+		var restored []config.App
+		defer h.stopFailedRestore(&restored, &result, "Remove each restored app with abr remove NAME --purge --yes, then retry; other apps were not changed.")
+		for _, x := range archives {
+			if err := h.restoreSharedCredentials(x.stage, true); err != nil {
+				return err
+			}
+		}
+		var r ports.Registry
+		for _, x := range archives {
+			for _, a := range x.m.Config.Apps {
+				current, err := ports.Load(h.Manager.RegistryPath())
+				if err != nil {
+					return err
+				}
+				if r, err = h.Manager.Register(a, restoreImports(a, x.m.Ports, current, c.Ports, probe)); err != nil {
+					return err
+				}
+				restored = append(restored, a)
+				if err := h.restoreApplication(a, restoreRecord(records, a.Name), x.stage, x.m); err != nil {
+					return err
+				}
+			}
+		}
+		if err := h.startRestoredApps(restored, records, r); err != nil {
+			return err
+		}
+		if slices.ContainsFunc(restored, func(a config.App) bool { return a.Backup.Schedule != "" }) {
+			if err := h.ensureBackupTimer(); err != nil {
+				return err
+			}
+		}
+		h.say("App restore complete: %d apps rebuilt from saved source commits. Point their DNS at this server; keep the old server's workers stopped.", len(restored))
+		return nil
+	})
+}
+
+// restoreImports keeps an app's saved ports that are free and inside this
+// server's range; every other endpoint is allocated a new port.
+func restoreImports(a config.App, saved, current ports.Registry, pool config.Range, probe ports.Probe) map[string]int {
+	used := map[int]bool{}
+	for _, assignment := range current.Assignments {
+		used[assignment.Port] = true
+	}
+	imports := map[string]int{}
+	for _, purpose := range a.Endpoints() {
+		port, ok := saved.Lookup(a.Name, purpose)
+		if ok && port >= pool.First && port <= pool.Last && !used[port] && probe(port) == nil {
+			imports[purpose] = port
+			used[port] = true
+		}
+	}
+	return imports
+}
+
+func restoreRecord(records []backup.App, name string) backup.App {
+	return records[slices.IndexFunc(records, func(record backup.App) bool { return record.Name == name })]
+}
+
 // Shared runtimes and the empty-target snapshot are installed before this phase.
 func (h Host) restoreApplications(m backup.Manifest, stage string) (result error) {
 	// All new apps stay stopped until every build/import succeeds.
-	defer func() {
-		if result != nil {
-			var stopErrors []error
-			for _, a := range m.Config.Apps {
-				if err := h.disable(a); err != nil {
-					stopErrors = append(stopErrors, err)
-				}
-			}
-			result = errors.Join(result, errors.Join(stopErrors...))
-			if len(stopErrors) == 0 {
-				h.say("Full restore failed; restored app services are stopped. Partial data is retained for inspection.")
-			} else {
-				h.say("Full restore failed; some apps could not be stopped. Check service status. Partial data is retained for inspection.")
-			}
+	apps := m.Config.Apps
+	defer h.stopFailedRestore(&apps, &result, "Partial data is retained for inspection.")
+	if err := h.restoreSharedCredentials(stage, false); err != nil {
+		return err
+	}
+	for _, a := range m.Config.Apps {
+		if err := h.restoreApplication(a, restoreRecord(m.Apps, a.Name), stage, m); err != nil {
+			return err
 		}
-	}()
-	for _, name := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json"} {
-		data, err := os.ReadFile(filepath.Join(stage, "state", name))
+	}
+	if err := h.restoreSharedData(stage, m); err != nil {
+		return err
+	}
+	if err := h.startRestoredApps(m.Config.Apps, m.Apps, m.Ports); err != nil {
+		return err
+	}
+	h.say("Full restore complete: %d apps rebuilt from saved source commits. Check app health and point DNS at this server; keep the old server's workers stopped.", len(m.Apps))
+	return nil
+}
+
+// stopFailedRestore stops every restored app after a failure; it runs deferred.
+func (h Host) stopFailedRestore(apps *[]config.App, result *error, retry string) {
+	if *result == nil || len(*apps) == 0 {
+		return
+	}
+	var stopErrors []error
+	for _, a := range *apps {
+		if err := h.disable(a); err != nil {
+			stopErrors = append(stopErrors, err)
+		}
+	}
+	*result = errors.Join(*result, errors.Join(stopErrors...))
+	if len(stopErrors) == 0 {
+		h.say("Restore failed; restored app services are stopped. %s", retry)
+	} else {
+		h.say("Restore failed; some apps could not be stopped. Check service status. %s", retry)
+	}
+}
+
+// restoreSharedCredentials installs the saved Git identity and Composer
+// credentials. With keep, this server's own are kept and only missing ones
+// are installed.
+func (h Host) restoreSharedCredentials(stage string, keep bool) error {
+	for _, group := range []struct {
+		names []string
+		kept  string
+	}{
+		{[]string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts"}, "Kept this server's Git deploy key; give it read access to the restored repositories before their next deployment"},
+		{[]string{"composer/auth.json"}, "Kept this server's Composer credentials; add any private repository credentials the restored apps need"},
+	} {
+		saved, err := os.ReadFile(filepath.Join(stage, "state", group.names[0]))
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
 			return err
 		}
-		if err := h.write(filepath.Join(h.Manager.StateDir, name), data, 0600); err != nil {
-			return err
+		if keep {
+			current, err := h.read(filepath.Join(h.Manager.StateDir, group.names[0]))
+			if err == nil {
+				if !bytes.Equal(current, saved) {
+					h.say("%s", group.kept)
+				}
+				continue
+			}
+			if !os.IsNotExist(err) {
+				return err
+			}
 		}
-		if name == "composer/auth.json" {
+		for _, name := range group.names {
+			data, err := os.ReadFile(filepath.Join(stage, "state", name))
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if err := h.write(filepath.Join(h.Manager.StateDir, name), data, 0600); err != nil {
+				return err
+			}
+		}
+		if group.names[0] == "composer/auth.json" {
 			// The backup records credentials; recreate Composer's generated home
 			// guard before deployments grant apps read access to that home.
 			if err := h.writeComposerGuard(); err != nil {
@@ -507,68 +800,71 @@ func (h Host) restoreApplications(m backup.Manifest, stage string) (result error
 			}
 		}
 	}
-	for _, a := range m.Config.Apps {
-		record := m.Apps[slices.IndexFunc(m.Apps, func(record backup.App) bool { return record.Name == a.Name })]
-		if err := h.cloneRepository(record.Repository, a.Directory, filepath.Join(stage, "apps", a.Name, "repository.bundle"), record.Branch); err != nil {
-			return fmt.Errorf("clone %s: %w", a.Name, err)
-		}
-		if err := h.ensureUser(a); err != nil {
-			return err
-		}
-		if err := h.permissions(a); err != nil {
-			return err
-		}
-		if _, err := h.asUser(a, nil, true, "git", "checkout", record.Branch); err != nil {
-			return fmt.Errorf("checkout %s: %w", a.Name, err)
-		}
-		commit, err := h.asUser(a, nil, true, "git", "rev-parse", "--verify", "HEAD")
-		if err != nil || strings.TrimSpace(string(commit)) != record.Commit {
-			return fmt.Errorf("%s: bundled source commit differs from manifest", a.Name)
-		}
-		if _, err := h.asUser(a, nil, true, "git", "remote", "set-url", "origin", record.Repository); err != nil {
-			return err
-		}
-		if err := h.restoreWorkingSource(stage, a, m); err != nil {
-			return err
-		}
-		if err := restoreAppFiles(stage, a, h); err != nil {
-			return err
-		}
-		dbPath := filepath.Join(stage, "state/databases", a.Name+".json")
-		if data, err := os.ReadFile(dbPath); err == nil {
-			var c credentials
-			if err := json.Unmarshal(data, &c); err != nil {
-				return err
-			}
-			c.Ready, c.TCPManaged, c.TCPReady = false, false, false
-			data, _ = json.Marshal(c)
-			if err := h.write(h.credentialsPath(a.Name), data, 0600); err != nil {
-				return err
-			}
-			dbApp := a
-			dbApp.Database.Enabled = true
-			if err := h.database(dbApp, false); err != nil {
-				return err
-			}
-			if err := h.importDatabaseFile(dbApp, filepath.Join(stage, "sql", a.Name+".sql")); err != nil {
-				return err
-			}
-		} else if !os.IsNotExist(err) {
-			return err
-		}
+	return nil
+}
+
+// restoreApplication recreates one app's user, saved source, files and database.
+func (h Host) restoreApplication(a config.App, record backup.App, stage string, m backup.Manifest) error {
+	if err := h.cloneRepository(record.Repository, a.Directory, filepath.Join(stage, "apps", a.Name, "repository.bundle"), record.Branch); err != nil {
+		return fmt.Errorf("clone %s: %w", a.Name, err)
 	}
-	if err := h.restoreSharedData(stage, m); err != nil {
+	if err := h.ensureUser(a); err != nil {
 		return err
 	}
-	for _, a := range m.Config.Apps {
-		if err := h.deploy(a, m.Ports, DeployOptions{NoPull: true, deferEnable: true}); err != nil {
+	if err := h.permissions(a); err != nil {
+		return err
+	}
+	if _, err := h.asUser(a, nil, true, "git", "checkout", record.Branch); err != nil {
+		return fmt.Errorf("checkout %s: %w", a.Name, err)
+	}
+	commit, err := h.asUser(a, nil, true, "git", "rev-parse", "--verify", "HEAD")
+	if err != nil || strings.TrimSpace(string(commit)) != record.Commit {
+		return fmt.Errorf("%s: bundled source commit differs from manifest", a.Name)
+	}
+	if _, err := h.asUser(a, nil, true, "git", "remote", "set-url", "origin", record.Repository); err != nil {
+		return err
+	}
+	if err := h.restoreWorkingSource(stage, a, m); err != nil {
+		return err
+	}
+	if err := restoreAppFiles(stage, a, h); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(filepath.Join(stage, "state/databases", a.Name+".json"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var c credentials
+	if err := json.Unmarshal(data, &c); err != nil {
+		return err
+	}
+	c.Ready, c.TCPManaged, c.TCPReady = false, false, false
+	data, _ = json.Marshal(c)
+	if err := h.write(h.credentialsPath(a.Name), data, 0600); err != nil {
+		return err
+	}
+	dbApp := a
+	dbApp.Database.Enabled = true
+	if err := h.database(dbApp, false); err != nil {
+		return err
+	}
+	return h.importDatabaseFile(dbApp, filepath.Join(stage, "sql", a.Name+".sql"))
+}
+
+// startRestoredApps builds every restored app with its services stopped, then
+// starts only the apps that were enabled when they were backed up.
+func (h Host) startRestoredApps(apps []config.App, records []backup.App, r ports.Registry) error {
+	for _, a := range apps {
+		if err := h.deploy(a, r, DeployOptions{NoPull: true, deferEnable: true}); err != nil {
 			return fmt.Errorf("restore deployment %s: %w", a.Name, err)
 		}
 	}
-	for _, a := range m.Config.Apps {
-		record := m.Apps[slices.IndexFunc(m.Apps, func(record backup.App) bool { return record.Name == a.Name })]
-		if record.Enabled {
-			if err := h.enable(a, m.Ports); err != nil {
+	for _, a := range apps {
+		if restoreRecord(records, a.Name).Enabled {
+			if err := h.enable(a, r); err != nil {
 				return err
 			}
 			if err := h.deploymentHealth(a); err != nil {
@@ -576,7 +872,6 @@ func (h Host) restoreApplications(m backup.Manifest, stage string) (result error
 			}
 		}
 	}
-	h.say("Full restore complete: %d apps rebuilt from saved source commits. Check app health and point DNS at this server; keep the old server's workers stopped.", len(m.Apps))
 	return nil
 }
 
@@ -601,17 +896,8 @@ func (h Host) freshRestoreTarget(m backup.Manifest, hostChecks bool) error {
 		}
 	}
 	for _, a := range m.Config.Apps {
-		for _, name := range []string{a.Directory, "/var/lib/abr-users/" + a.User} {
-			if _, err := os.Lstat(h.path(name)); !os.IsNotExist(err) {
-				return fmt.Errorf("restore target already exists: %s", name)
-			}
-		}
-		if hostChecks {
-			if _, exists, err := h.passwd(a.User); err != nil {
-				return err
-			} else if exists {
-				return fmt.Errorf("restore user %s already exists", a.User)
-			}
+		if err := h.freshAppTarget(a, hostChecks); err != nil {
+			return err
 		}
 	}
 	for _, assignment := range m.Ports.Assignments {
@@ -621,6 +907,25 @@ func (h Host) freshRestoreTarget(m backup.Manifest, hostChecks bool) error {
 		}
 		if err := probe(assignment.Port); err != nil {
 			return fmt.Errorf("restore port %d: %w", assignment.Port, err)
+		}
+	}
+	return nil
+}
+
+// freshAppTarget refuses to replace or adopt an app's project, account or records.
+func (h Host) freshAppTarget(a config.App, hostChecks bool) error {
+	for _, name := range []string{a.Directory, "/var/lib/abr-users/" + a.User, h.manifestPath(a.Name), h.credentialsPath(a.Name), h.userPath(a)} {
+		if _, err := os.Lstat(h.path(name)); err == nil {
+			return fmt.Errorf("restore target already exists: %s; existing data preserved", name)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if hostChecks {
+		if _, exists, err := h.passwd(a.User); err != nil {
+			return err
+		} else if exists {
+			return fmt.Errorf("restore user %s already exists", a.User)
 		}
 	}
 	return nil

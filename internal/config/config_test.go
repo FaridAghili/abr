@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func BenchmarkValidateApps(b *testing.B) {
@@ -176,5 +177,24 @@ func TestAppIsolation(t *testing.T) {
 				t.Fatal("validation reordered apps")
 			}
 		})
+	}
+}
+
+func TestBackupScheduleValidationAndInterval(t *testing.T) {
+	for schedule, interval := range map[string]time.Duration{"": 0, "1h": time.Hour, "6h": 6 * time.Hour, "23h": 23 * time.Hour, "daily": 24 * time.Hour, "weekly": 7 * 24 * time.Hour} {
+		b := Backup{Schedule: schedule, Keep: 3}
+		if err := b.Validate(); err != nil || b.Interval() != interval {
+			t.Fatal("valid schedule rejected", schedule, err)
+		}
+	}
+	for _, b := range []Backup{{Schedule: "0h"}, {Schedule: "24h"}, {Schedule: "06h"}, {Schedule: "hourly"}, {Schedule: "off"}, {Keep: -1}, {Keep: 1001}} {
+		if b.Validate() == nil {
+			t.Fatal("invalid backup settings accepted", b)
+		}
+	}
+	a := App{Name: "web", Directory: "/srv/apps/web", User: "abr-web", Type: "nuxt", Domain: "web.example.com", Backup: Backup{Schedule: "6h", Keep: 2}}
+	a, err := (AppChanges{Values: App{Backup: Backup{Schedule: "off"}}, Fields: []string{"backup-schedule"}}).Apply(a)
+	if err != nil || a.Backup != (Backup{Keep: 2}) {
+		t.Fatal("off did not clear only the schedule", a.Backup, err)
 	}
 }

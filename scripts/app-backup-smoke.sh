@@ -74,6 +74,27 @@ PY
   fi
   grep -F 'restore target already exists: /srv/apps/' "$abr_binary_directory/app-restore-refusal.log"
   sudo test ! -e "$abr_binary_directory/app-restore/state"
+  # Scheduled backups: setup installed the hourly timer. Run its service exactly
+  # as the timer does; keep 1 deletes the older archive on the backup server,
+  # which needs no setup. Stop the timer meanwhile so a tick cannot interleave.
+  sudo systemd-analyze verify /etc/systemd/system/abr-backup.service /etc/systemd/system/abr-backup.timer
+  sudo systemctl is-active --quiet abr-backup.timer
+  sudo systemctl stop abr-backup.timer
+  app_schedule_before=$(sudo find "$app_backup_remote" -maxdepth 1 -name 'fixture-php-*.tar.gz')
+  abr_ci edit fixture-php --config-only --backup-schedule 6h --backup-keep 1
+  sudo systemctl start abr-backup.service
+  app_schedule_after=$(sudo find "$app_backup_remote" -maxdepth 1 -name 'fixture-php-*.tar.gz')
+  test "$(printf '%s\n' "$app_schedule_after" | wc -l)" = 1
+  test "$app_schedule_after" != "$app_schedule_before"
+  abr_ci backup status | grep -F 'fixture-php: every 6h, keep newest 1; last backup: '
+  abr_ci backup --due | grep -F 'No scheduled app backups are due'
+  # The following restores use the newest archive; save it without a schedule
+  # so restored hosts do not start timed backups during this test.
+  abr_ci edit fixture-php --config-only --backup-schedule off
+  abr_ci backup fixture-php --transfer --output-dir "$app_backup_local"
+  test "$(sudo find "$app_backup_remote" -maxdepth 1 -name 'fixture-php-*.tar.gz' | wc -l)" = 1
+  test "$(sudo find "$app_backup_remote" -maxdepth 1 -name '*.tar.gz' | wc -l)" = 4
+  sudo systemctl start abr-backup.timer
   # Fail on a nonexistent remote directory, retain the first local archive and
   # never advance to the second selected app.
   fixture_refused 'local backup retained' backup fixture-php fixture-octane \
@@ -143,5 +164,5 @@ EOF
   # Clear only this test's destination so the following full-server round trip
   # continues without depending on the temporary SSH daemon.
   sudo rm /var/lib/abr-ci/backup-destination.json
-  echo 'Online app backup, verified SSH transfer, password auth, destination diagnostics and failure retention passed.'
+  echo 'Online app backup, scheduled backups with remote retention, verified SSH transfer, password auth, destination diagnostics and failure retention passed.'
 )

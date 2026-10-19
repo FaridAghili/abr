@@ -784,10 +784,16 @@ func nextStep(args []string) string {
 		if len(args) > 1 && (args[1] == "test" || args[1] == "trust") {
 			return "Choose Back up apps to transfer one archive at a time to the verified destination."
 		}
+		if len(args) > 1 && args[1] == "status" {
+			return "Change an app's schedule or retention in its Edit settings > Backups."
+		}
 		return "Copy the private backup archive to storage outside this VPS."
 	case "restore":
 		return "Check the restored apps, point DNS at this server, and keep the old server’s workers stopped."
 	case "edit":
+		if slices.Contains(args, "--backup-schedule") {
+			return "Backups now run automatically when due. Choose Backup & restore > Backup status to check results."
+		}
 		return "Choose Deploy to apply saved settings. Database credentials and data are retained when a component is disabled."
 	case "disk":
 		return "Choose Disk usage again and Refresh now for a new app scan. Clear logs from More actions or Tools when needed."

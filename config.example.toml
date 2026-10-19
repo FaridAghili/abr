@@ -30,6 +30,11 @@ enabled = true
 enabled = true
 [apps.inertia_ssr]
 enabled = false
+# Automatic backups: "6h" (every 1-23 hours), "daily" or "weekly".
+# keep retains the newest archives here and on the backup server; 0 keeps all.
+[apps.backup]
+schedule = "6h"
+keep = 12
 
 [[apps]]
 name = "portal"
@@ -45,6 +50,9 @@ driver = "fpm"
 workers = 1
 [apps.scheduler]
 enabled = true
+[apps.backup]
+schedule = "weekly"
+keep = 4
 
 [[apps]]
 name = "frontend"

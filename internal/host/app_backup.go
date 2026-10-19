@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,7 @@ import (
 
 type BackupOptions struct {
 	All       bool
+	Due       bool
 	OutputDir string
 	Remote    string
 	RemoteDir string
@@ -33,7 +35,11 @@ type BackupOptions struct {
 }
 
 func (o BackupOptions) Validate(names []string) error {
-	if o.All == (len(names) > 0) {
+	if o.Due {
+		if o.All || len(names) > 0 {
+			return fmt.Errorf("--due selects apps by their backup schedule; do not combine it with APP... or --all")
+		}
+	} else if o.All == (len(names) > 0) {
 		return fmt.Errorf("select APP... or --all")
 	}
 	if o.OutputDir != "" && (!filepath.IsAbs(o.OutputDir) || strings.ContainsAny(o.OutputDir, "\x00\r\n")) {
@@ -58,98 +64,64 @@ func (o BackupOptions) Validate(names []string) error {
 	return nil
 }
 
-// BackupApps completes capture, transfer and local cleanup before the next app.
-// App and shared services remain running throughout capture and transfer.
+// BackupApps completes capture, transfer and cleanup before the next app. Only
+// each app's capture holds the host lock, so other abr commands wait at most
+// for one capture, never for transfers. App and shared services keep running.
+// Due runs continue after a failed app and report every failure at the end.
 func (h Host) BackupApps(names []string, o BackupOptions) error {
 	if err := o.Validate(names); err != nil {
 		return err
 	}
-	return h.locked(func() error {
+	var selected []config.App
+	err := h.locked(func() error {
 		var err error
-		o, err = h.backupOptions(o)
-		if err != nil {
+		if o, err = h.backupOptions(o); err != nil {
 			return err
 		}
 		if o.Transfer && o.Remote == "" {
 			return fmt.Errorf("configure a backup destination in the menu or with abr backup configure before transferring")
 		}
-		capture := func(c config.Config, r ports.Registry) error {
-			if err := manager.CheckReservations(c, r); err != nil {
-				return err
-			}
-			selected, err := selectBackupApps(c, names, o.All)
-			if err != nil {
-				return err
-			}
-			if h.DryRun {
-				for _, a := range selected {
-					h.say("Would back up %s online: managed SQL, .env, full Laravel storage/app and saved source and recovery settings into %s; services remain running", a.Name, o.OutputDir)
-					if o.Remote != "" {
-						h.say("Would transfer %s to %s:%s, verify SHA256 and remote publication, then remove only its local archive before the next app", a.Name, o.Remote, o.RemoteDir)
-					}
-				}
-				h.say("App backups exclude shared Redis persistence and Caddy certificate storage; no files changed")
-				return nil
-			}
-			if err := h.prepareAppBackupDirectory(c, o.OutputDir); err != nil {
-				return err
-			}
-			// One small shared snapshot gives all archives identical recovery settings.
-			shared, err := os.MkdirTemp(h.path(h.Manager.StateDir), ".app-backup-shared-")
-			if err != nil {
-				return err
-			}
-			defer os.RemoveAll(shared)
-			settings, err := h.backupSettings()
-			if err != nil {
-				return err
-			}
-			for _, name := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json"} {
-				if err := copyBackupFile(h.path(filepath.Join(h.Manager.StateDir, name)), filepath.Join(shared, "state", name), name != "git/id_ed25519" && name != "git/known_hosts"); err != nil {
-					return err
-				}
-			}
-			if err := h.copyBackupTemplates(filepath.Join(shared, "templates")); err != nil {
-				return err
-			}
-			for name, source := range sharedBackupFiles() {
-				if err := copyBackupFile(h.path(source), filepath.Join(shared, name), true); err != nil {
-					return err
-				}
-			}
-			stamp := time.Now().UTC().Format("20060102150405")
-			for _, a := range selected {
-				output := filepath.Join(o.OutputDir, a.Name+"-"+stamp+".tar.gz")
-				if err := h.captureAppBackup(a, c, r, settings, shared, output); err != nil {
-					return fmt.Errorf("backup %s: %w", a.Name, err)
-				}
-				if o.Remote == "" {
-					h.say("App backup complete: %s (0600; contains secrets)", output)
-					continue
-				}
-				if err := h.transferAppBackup(output, o); err != nil {
-					return fmt.Errorf("transfer %s failed; local backup retained at %s: %w", a.Name, output, err)
-				}
-				if err := os.Remove(output); err != nil {
-					return fmt.Errorf("remote backup verified; local cleanup failed at %s: %w", output, err)
-				}
-				h.say("Backed up %s to %s:%s; verified SHA256; local archive removed", a.Name, o.Remote, path.Join(o.RemoteDir, filepath.Base(output)))
-			}
-			return nil
+		c, err := config.Load(h.Manager.ConfigPath)
+		if err != nil {
+			return err
 		}
-		if h.DryRun {
-			c, err := config.Load(h.Manager.ConfigPath)
-			if err != nil {
-				return err
-			}
-			r, err := ports.Load(h.Manager.RegistryPath())
-			if err != nil {
-				return err
-			}
-			return capture(c, r)
+		if o.Due {
+			selected, err = h.dueBackups(c, time.Now())
+		} else {
+			selected, err = selectBackupApps(c, names, o.All)
 		}
-		return h.Manager.WithSnapshot(capture)
+		return err
 	})
+	if err != nil {
+		return err
+	}
+	if o.Due && len(selected) == 0 {
+		h.say("No scheduled app backups are due")
+		return nil
+	}
+	if h.DryRun {
+		for _, a := range selected {
+			h.say("Would back up %s online: managed SQL, .env, full Laravel storage/app and saved source and recovery settings into %s; services remain running", a.Name, o.OutputDir)
+			if o.Remote != "" {
+				h.say("Would transfer %s to %s:%s, verify SHA256 and remote publication, then remove only its local archive before the next app", a.Name, o.Remote, o.RemoteDir)
+			}
+			if a.Backup.Keep > 0 {
+				h.say("Would keep the newest %d backups of %s and delete older ones", a.Backup.Keep, a.Name)
+			}
+		}
+		h.say("App backups exclude shared Redis persistence and Caddy certificate storage; no files changed")
+		return nil
+	}
+	var failures []error
+	for _, a := range selected {
+		if err := h.backupApp(a.Name, o); err != nil {
+			if !o.Due {
+				return err
+			}
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func selectBackupApps(c config.Config, names []string, all bool) ([]config.App, error) {
@@ -170,6 +142,119 @@ func selectBackupApps(c config.Config, names []string, all bool) ([]config.App, 
 		selected = append(selected, c.Apps[index])
 	}
 	return selected, nil
+}
+
+// backupApp captures one app under the host lock, then transfers, prunes and
+// records the result without holding it.
+func (h Host) backupApp(name string, o BackupOptions) (result error) {
+	started := time.Now().UTC()
+	defer func() { result = errors.Join(result, h.recordBackup(name, started, result)) }()
+	var output, checksum string
+	keep := 0
+	err := h.locked(func() error {
+		// Archive names have one-second resolution. Captures are serialized by
+		// the host lock, so holding it into the next second keeps names unique.
+		started = time.Now().UTC()
+		defer func() {
+			if wait := time.Until(started.Truncate(time.Second).Add(time.Second)); wait > 0 {
+				time.Sleep(wait)
+			}
+		}()
+		return h.Manager.WithSnapshot(func(c config.Config, r ports.Registry) error {
+			if err := manager.CheckReservations(c, r); err != nil {
+				return err
+			}
+			index := slices.IndexFunc(c.Apps, func(a config.App) bool { return a.Name == name })
+			if index < 0 {
+				return fmt.Errorf("unknown application %q", name)
+			}
+			a := c.Apps[index]
+			keep = a.Backup.Keep
+			if err := h.prepareAppBackupDirectory(c, o.OutputDir); err != nil {
+				return err
+			}
+			shared, err := os.MkdirTemp(h.path(h.Manager.StateDir), ".app-backup-shared-")
+			if err != nil {
+				return err
+			}
+			defer os.RemoveAll(shared)
+			settings, err := h.stageSharedBackup(shared)
+			if err != nil {
+				return err
+			}
+			output = filepath.Join(o.OutputDir, a.Name+"-"+started.Format("20060102150405")+".tar.gz")
+			checksum, err = h.captureAppBackup(a, c, r, settings, shared, output)
+			return err
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("backup %s: %w", name, err)
+	}
+	// Bound local archives too, including ones retained after failed transfers.
+	if err := h.pruneLocalBackups(o.OutputDir, name, keep, filepath.Base(output)); err != nil {
+		return fmt.Errorf("backup %s saved at %s; local cleanup failed: %w", name, output, err)
+	}
+	if o.Remote == "" {
+		h.say("App backup complete: %s (0600; contains secrets)", output)
+		return nil
+	}
+	removed, err := h.transferAppBackup(output, checksum, name, keep, o)
+	if err != nil {
+		return fmt.Errorf("transfer %s failed; local backup retained at %s: %w", name, output, err)
+	}
+	if err := os.Remove(output); err != nil {
+		return fmt.Errorf("remote backup verified; local cleanup failed at %s: %w", output, err)
+	}
+	h.say("Backed up %s to %s:%s; verified SHA256; local archive removed", name, o.Remote, path.Join(o.RemoteDir, filepath.Base(output)))
+	if removed > 0 {
+		h.say("Deleted %d older backups of %s from the backup server; kept the newest %d", removed, name, keep)
+	}
+	return nil
+}
+
+// stageSharedBackup copies the small server-wide recovery files every app
+// archive carries and returns the saved server settings.
+func (h Host) stageSharedBackup(shared string) (backup.Settings, error) {
+	settings, err := h.backupSettings()
+	if err != nil {
+		return settings, err
+	}
+	for _, name := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json"} {
+		if err := copyBackupFile(h.path(filepath.Join(h.Manager.StateDir, name)), filepath.Join(shared, "state", name), name != "git/id_ed25519" && name != "git/known_hosts"); err != nil {
+			return settings, err
+		}
+	}
+	if err := h.copyBackupTemplates(filepath.Join(shared, "templates")); err != nil {
+		return settings, err
+	}
+	for name, source := range sharedBackupFiles() {
+		if err := copyBackupFile(h.path(source), filepath.Join(shared, name), true); err != nil {
+			return settings, err
+		}
+	}
+	return settings, nil
+}
+
+// pruneLocalBackups deletes app's local archives beyond the newest keep. The
+// directory was checked as private and root-owned under the host lock.
+func (h Host) pruneLocalBackups(directory, app string, keep int, protect string) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.Type().IsRegular() {
+			names = append(names, entry.Name())
+		}
+	}
+	for _, name := range backup.Expired(names, app, keep, protect) {
+		if err := os.Remove(filepath.Join(directory, name)); err != nil {
+			return err
+		}
+		h.say("Deleted older local backup %s", name)
+	}
+	return nil
 }
 
 func (h Host) prepareAppBackupDirectory(c config.Config, directory string) error {
@@ -197,7 +282,9 @@ func (h Host) prepareAppBackupDirectory(c config.Config, directory string) error
 	return nil
 }
 
-func (h Host) captureAppBackup(a config.App, c config.Config, r ports.Registry, settings backup.Settings, shared, output string) error {
+// captureAppBackup publishes output and returns its SHA256, hashed while writing.
+// captureAppBackup publishes output and returns its SHA256, hashed while writing.
+func (h Host) captureAppBackup(a config.App, c config.Config, r ports.Registry, settings backup.Settings, shared, output string) (string, error) {
 	c.Apps = []config.App{a}
 	appPorts := ports.Empty()
 	for _, assignment := range r.Assignments {
@@ -207,101 +294,114 @@ func (h Host) captureAppBackup(a config.App, c config.Config, r ports.Registry, 
 	}
 	records, err := h.backupRepositories(c)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var creds *credentials
 	_, err = os.Lstat(h.path(h.credentialsPath(a.Name)))
 	if os.IsNotExist(err) && a.Type == "laravel" {
-		return fmt.Errorf("full app backup requires recorded managed MySQL credentials")
+		return "", fmt.Errorf("full app backup requires recorded managed MySQL credentials")
 	}
 	if !os.IsNotExist(err) || a.Database.Enabled {
 		dbApp := a
 		dbApp.Database.Enabled = true
 		record, err := h.transferCredentials(dbApp)
 		if err != nil {
-			return err
+			return "", err
 		}
 		creds = &record
 	}
 	if a.Type == "laravel" {
 		if _, err := readProjectEnv(h.path(filepath.Join(a.Directory, ".env"))); err != nil {
-			return err
+			return "", err
 		}
 	}
 	stage, err := os.MkdirTemp(h.path(h.Manager.StateDir), ".app-backup-")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer os.RemoveAll(stage)
 	if err := backup.CopyTree(shared, stage); err != nil {
-		return err
+		return "", err
 	}
 	if err := h.captureBackupCode(a, records[0], stage); err != nil {
-		return err
+		return "", err
 	}
 	if creds != nil {
 		if err := os.MkdirAll(filepath.Join(stage, "sql"), 0700); err != nil {
-			return err
+			return "", err
 		}
 		if err := h.dumpDatabase(*creds, filepath.Join(stage, "sql", a.Name+".sql")); err != nil {
-			return err
+			return "", err
 		}
 		data, err := json.Marshal(creds)
 		if err != nil {
-			return err
+			return "", err
 		}
 		if err := os.MkdirAll(filepath.Join(stage, "state/databases"), 0700); err != nil {
-			return err
+			return "", err
 		}
 		if err := os.WriteFile(filepath.Join(stage, "state/databases", a.Name+".json"), data, 0600); err != nil {
-			return err
+			return "", err
 		}
 	}
 	if err := copyBackupFile(h.path(filepath.Join(a.Directory, ".env")), filepath.Join(stage, "apps", a.Name, ".env"), a.Type == "nuxt"); err != nil {
-		return err
+		return "", err
 	}
+	live := map[string]*os.Root{}
+	defer closeLiveTrees(live)
 	if a.Type == "laravel" {
-		if err := copyBackupTree(h.path(filepath.Join(a.Directory, "storage/app")), filepath.Join(stage, "apps", a.Name, "storage/app"), true); err != nil {
-			return err
+		if err := stageLiveTree(live, stage, "apps/"+a.Name+"/storage/app", h.path(a.Directory), "storage/app"); err != nil {
+			return "", err
 		}
 	}
 	m := backup.Manifest{Version: 1, Scope: "app", CreatedAt: time.Now().UTC(), Config: c, Ports: appPorts, Apps: records, Settings: settings}
 	f, err := os.CreateTemp(filepath.Dir(output), ".abr-app-backup-")
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
-	if err := backup.Write(f, stage, &m); err != nil {
-		return err
+	hash := sha256.New()
+	if err := backup.Write(io.MultiWriter(f, hash), stage, &m, live); err != nil {
+		return "", err
 	}
 	if err := validateFullBackup(m, stage); err != nil {
-		return err
+		return "", err
 	}
 	if err := f.Sync(); err != nil {
-		return err
+		return "", err
 	}
 	if err := f.Close(); err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Link(f.Name(), output); err != nil {
-		return err
+		return "", err
 	}
 	dir, err := os.Open(filepath.Dir(output))
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer dir.Close()
-	return dir.Sync()
+	if err := dir.Sync(); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // The receiver publishes by hard link only after hashing and syncing the upload.
 // SSH's exit status alone is insufficient: an exact receipt is required too.
+// It then deletes this app's archives beyond the newest keep (0 keeps all),
+// matching only exact NAME-YYYYMMDDHHMMSS.tar.gz names like backup.Expired,
+// and uploads interrupted over a day ago. The backup server needs no setup.
 const backupReceiver = `set -eu
 umask 077
+export LC_ALL=C
 directory=$1
 name=$2
 expected=$3
+keep=$4
+app=$5
+case $keep in ''|*[!0-9]*) exit 1 ;; esac
 test -d "$directory"
 test "$(realpath -e -- "$directory")" = "$directory"
 test "$(stat -c '%u:%a' -- "$directory")" = "$(id -u):700"
@@ -316,33 +416,53 @@ sync -f "$temporary"
 ln -- "$temporary" "$name"
 rm -f -- "$temporary"
 sync -f .
-printf 'ABR_BACKUP_OK %s %s\n' "$actual" "$name"
+find . -maxdepth 1 -type f -name '.abr-upload-*' -mmin +1440 -delete 2>/dev/null || true
+removed=0
+if [ "$keep" -gt 0 ]; then
+	digits='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+	count=0
+	for archive in "$app"-$digits.tar.gz; do
+		if [ -f "$archive" ] && [ ! -L "$archive" ]; then count=$((count + 1)); fi
+	done
+	excess=$((count - keep))
+	for archive in "$app"-$digits.tar.gz; do
+		[ "$excess" -gt 0 ] || break
+		if [ -f "$archive" ] && [ ! -L "$archive" ]; then
+			excess=$((excess - 1))
+			if [ "$archive" != "$name" ]; then
+				rm -f -- "$archive"
+				removed=$((removed + 1))
+			fi
+		fi
+	done
+	sync -f .
+fi
+printf 'ABR_BACKUP_OK %s %s %s\n' "$actual" "$name" "$removed"
 `
 
-func (h Host) transferAppBackup(file string, o BackupOptions) error {
+// transferAppBackup uploads and verifies one archive, then lets the receiver
+// apply retention; it returns how many older archives the receiver deleted.
+func (h Host) transferAppBackup(file, checksum, app string, keep int, o BackupOptions) (int, error) {
 	f, err := os.Open(file)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer f.Close()
-	hash := sha256.New()
-	if _, err := io.Copy(hash, f); err != nil {
-		return err
-	}
-	checksum := hex.EncodeToString(hash.Sum(nil))
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
 	name := filepath.Base(file)
-	command := "sh -c " + shellQuote(backupReceiver) + " abr-backup " + shellQuote(o.RemoteDir) + " " + shellQuote(name) + " " + shellQuote(checksum)
+	command := "sh -c " + shellQuote(backupReceiver) + " abr-backup " + shellQuote(o.RemoteDir) + " " + shellQuote(name) + " " + shellQuote(checksum) + " " + strconv.Itoa(keep) + " " + shellQuote(app)
 	out, err := h.backupSSH(o, command, f)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if strings.TrimSpace(string(out)) != "ABR_BACKUP_OK "+checksum+" "+name {
-		return fmt.Errorf("remote verification receipt missing or invalid")
+	fields := strings.Fields(string(out))
+	if len(fields) != 4 || fields[0] != "ABR_BACKUP_OK" || fields[1] != checksum || fields[2] != name {
+		return 0, fmt.Errorf("remote verification receipt missing or invalid")
 	}
-	return nil
+	removed, err := strconv.Atoi(fields[3])
+	if err != nil || removed < 0 {
+		return 0, fmt.Errorf("remote verification receipt missing or invalid")
+	}
+	return removed, nil
 }
 
 func (h Host) backupSSH(o BackupOptions, command string, input io.Reader) ([]byte, error) {

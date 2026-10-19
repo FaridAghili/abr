@@ -1,6 +1,7 @@
 package host
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -158,16 +159,12 @@ func TestBackupWorkingSourceConfigurationDeletionsAndExecutable(t *testing.T) {
 }
 
 func TestBackupRefusesUnsupportedSourceAndChangedCommit(t *testing.T) {
-	for _, mode := range []string{"symlink", "submodule", "commit"} {
+	for _, mode := range []string{"submodule", "commit"} {
 		t.Run(mode, func(t *testing.T) {
 			h, runner, output, cleanup := fullFixture(t, false)
 			defer cleanup()
 			directory := filepath.Join(h.AppsDir, "app")
-			if mode == "symlink" {
-				if err := os.Symlink("saved.txt", filepath.Join(directory, "linked-source")); err != nil {
-					t.Fatal(err)
-				}
-			} else if mode == "submodule" {
+			if mode == "submodule" {
 				if err := os.WriteFile(filepath.Join(directory, ".gitmodules"), []byte("submodule fixture"), 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -190,6 +187,49 @@ func TestBackupRefusesUnsupportedSourceAndChangedCommit(t *testing.T) {
 				t.Fatal("incomplete archive published")
 			}
 		})
+	}
+}
+
+func TestBackupSkipsSourceLinksWithoutFollowing(t *testing.T) {
+	h, _, output, cleanup := fullFixture(t, false)
+	defer cleanup()
+	directory := filepath.Join(h.AppsDir, "app")
+	outside := filepath.Join(h.root, "outside")
+	if err := os.MkdirAll(outside, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("outside secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture lists every file as tracked; links model both a committed
+	// link and an extra storage:link target into data outside the project.
+	for name, target := range map[string]string{"linked-source": "saved.txt", "public/uploads": outside, "public/secret": filepath.Join(outside, "secret")} {
+		if err := os.Symlink(target, filepath.Join(directory, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.FullBackup(output); err != nil {
+		t.Fatal("source links blocked the backup", err)
+	}
+	m, stage := readFullArchive(t, output)
+	for name := range m.Files {
+		if strings.Contains(name, "linked-source") || strings.Contains(name, "public/uploads") || strings.Contains(name, "public/secret") {
+			t.Fatal("saved a source link or followed it", name)
+		}
+	}
+	err := filepath.WalkDir(stage, func(name string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() {
+			if data, _ := os.ReadFile(name); string(data) == "outside secret" {
+				t.Fatal("followed a source link outside the project", name)
+			}
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := h.Output.(*bytes.Buffer).String(); !strings.Contains(text, "3 symlinks or special files") {
+		t.Fatal("skipped links not reported", text)
 	}
 }
 

@@ -28,7 +28,7 @@ func archiveFixture(t *testing.T) ([]byte, Manifest) {
 	}
 	m := Manifest{Version: 1, CreatedAt: time.Now().UTC(), Config: config.Default(), Ports: ports.Empty(), Apps: []App{}, Settings: Settings{Hostname: "backup-host", RoadRunnerVersion: "latest", NoRedis: true}}
 	var out bytes.Buffer
-	if err := Write(&out, stage, &m); err != nil {
+	if err := Write(&out, stage, &m, nil); err != nil {
 		t.Fatal(err)
 	}
 	return out.Bytes(), m
@@ -81,18 +81,25 @@ func TestArchiveRoundTripWithLargeInventory(t *testing.T) {
 	// Long but valid upload paths cross the former 8 MiB manifest cap without
 	// needing gigabytes of payload or tens of thousands of filesystem entries.
 	directory := strings.TrimSuffix(strings.Repeat(strings.Repeat("u", 200)+"/", 8), "/")
-	if err := os.MkdirAll(filepath.Join(stage, filepath.FromSlash(directory)), 0700); err != nil {
+	// Create through os.Root, as the archive code does: the full path exceeds
+	// macOS's PATH_MAX, while each component stays within NAME_MAX.
+	root, err := os.OpenRoot(stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := root.MkdirAll(filepath.FromSlash(directory), 0700); err != nil {
 		t.Fatal(err)
 	}
 	const files = 5000
 	for i := range files {
-		name := filepath.Join(stage, filepath.FromSlash(directory), fmt.Sprintf("upload-%04d", i))
-		if err := os.WriteFile(name, []byte("upload"), 0600); err != nil {
+		name := filepath.Join(filepath.FromSlash(directory), fmt.Sprintf("upload-%04d", i))
+		if err := root.WriteFile(name, []byte("upload"), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var out bytes.Buffer
-	if err := Write(&out, stage, &m); err != nil {
+	if err := Write(&out, stage, &m, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, err := json.Marshal(m)
@@ -115,7 +122,12 @@ func TestArchiveRoundTripWithLargeInventory(t *testing.T) {
 			t.Fatalf("lost metadata or checksum for %s", name)
 		}
 	}
-	payload, err := os.ReadFile(filepath.Join(target, filepath.FromSlash(directory), "upload-4999"))
+	restoredRoot, err := os.OpenRoot(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restoredRoot.Close()
+	payload, err := restoredRoot.ReadFile(filepath.Join(filepath.FromSlash(directory), "upload-4999"))
 	if err != nil || string(payload) != "upload" {
 		t.Fatalf("lost upload payload: %q, %v", payload, err)
 	}
@@ -216,7 +228,7 @@ func TestCopyAndWriteRejectSourceLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := Write(&out, source, &m); err == nil {
+	if err := Write(&out, source, &m, nil); err == nil {
 		t.Fatal("source link accepted")
 	}
 	if err := CopyTree(source, t.TempDir()); err == nil {
@@ -235,5 +247,89 @@ func TestCopyAndWriteRejectSourceLinks(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "root:") {
 		t.Fatal("read linked secret")
+	}
+}
+
+func TestWriteStreamsLiveTreesWithoutStagingOrLinks(t *testing.T) {
+	_, m := archiveFixture(t)
+	stage := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stage, "apps/demo/storage/app"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	uploads := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(uploads, "public/empty"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uploads, "public/photo.jpg"), []byte("live upload"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := os.OpenRoot(uploads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tree.Close()
+	live := map[string]*os.Root{"apps/demo/storage/app": tree}
+	var out bytes.Buffer
+	if err := Write(&out, stage, &m, live); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(stage, "apps/demo/storage/app")); len(entries) != 0 {
+		t.Fatal("live data was copied into staging")
+	}
+	target := t.TempDir()
+	restored, err := Extract(&out, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "apps/demo/storage/app/public/photo.jpg")); err != nil || string(data) != "live upload" {
+		t.Fatal("live upload missing", err)
+	}
+	if record := restored.Files["apps/demo/storage/app/public/empty"]; !record.Directory {
+		t.Fatal("live empty directory missing")
+	}
+	if err := Write(&out, stage, &m, map[string]*os.Root{"apps/demo/missing": tree}); err == nil {
+		t.Fatal("unstaged live tree was silently omitted")
+	}
+	if err := os.Symlink("/etc/passwd", filepath.Join(uploads, "public/secret")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(&out, stage, &m, live); err == nil {
+		t.Fatal("followed or accepted a live link")
+	}
+}
+
+func TestLatestArchivesSelectsNewestPerApp(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"api-20261010020000.tar.gz", "api-20261011020000.tar.gz", "portal-20261010020000.tar.gz", "full-20261019T150405Z.tar.gz", "notes.sql"} {
+		if err := os.WriteFile(filepath.Join(directory, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(directory, "web-20261012020000.tar.gz"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	files, err := LatestArchives(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Join(directory, "api-20261011020000.tar.gz"), filepath.Join(directory, "portal-20261010020000.tar.gz")}
+	if strings.Join(files, "\n") != strings.Join(want, "\n") {
+		t.Fatal("wrong archive selection", files)
+	}
+	if _, err := LatestArchives(t.TempDir()); err == nil {
+		t.Fatal("empty directory accepted")
+	}
+}
+
+func TestExpiredKeepsNewestArchivesOfOneApp(t *testing.T) {
+	names := []string{"api-20261003000000.tar.gz", "api-20261001000000.tar.gz", "api-20261002000000.tar.gz", "api-v2-20261001000000.tar.gz", "api-20261004000000.tar.gz", "api.sql", ".abr-upload-x"}
+	if got := strings.Join(Expired(names, "api", 2, ""), " "); got != "api-20261001000000.tar.gz api-20261002000000.tar.gz" {
+		t.Fatal("wrong expired archives", got)
+	}
+	if got := Expired(names, "api", 2, "api-20261001000000.tar.gz"); len(got) != 1 || got[0] != "api-20261002000000.tar.gz" {
+		t.Fatal("protected archive expired", got)
+	}
+	if Expired(names, "api", 0, "") != nil || Expired(names, "api", 10, "") != nil {
+		t.Fatal("kept-all or under-limit archives expired")
 	}
 }

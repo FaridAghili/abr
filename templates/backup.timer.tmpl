@@ -1,0 +1,12 @@
+# Managed by abr; edit the source template instead.
+# Runs hourly; each app is backed up only when its schedule is due.
+[Unit]
+Description=Abr scheduled app backups
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=abr-backup.service
+
+[Install]
+WantedBy=timers.target

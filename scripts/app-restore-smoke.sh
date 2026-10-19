@@ -8,7 +8,8 @@
   mapfile -t app_restore_archives < <(sudo find /var/backups/abr-ci-app-remote -maxdepth 1 -name '*.tar.gz' | sort)
   test "${#app_restore_archives[@]}" = 4
   # Validate the combined archives only after the disposable target is fresh.
-  abr_ci restore "${app_restore_archives[@]}" --dry-run
+  # A directory selects the newest backup of each app.
+  abr_ci restore /var/backups/abr-ci-app-remote --dry-run
   sudo test ! -e /var/lib/abr-ci/setup.json
   sudo test ! -e /etc/abr-ci/config.toml
   for app_restore_name in fixture-php fixture-octane fixture-ssr fixture-spa; do
@@ -33,6 +34,22 @@ SQL
   if sudo systemctl is-active --quiet abr-fixture-spa-nuxt.service; then
     echo 'App restore enabled a previously disabled app' >&2; exit 1
   fi
+  # A set-up server adds one app backup as a new app. Purge only fixture-php,
+  # then restore it while the other restored apps keep their data and services.
+  abr_ci remove fixture-php --purge --yes
+  app_restore_php=$(printf '%s\n' "${app_restore_archives[@]}" | grep -F '/fixture-php-')
+  abr_ci restore "$app_restore_php" --dry-run > "$abr_binary_directory/app-into-server.log"
+  grep -F 'into this server' "$abr_binary_directory/app-into-server.log"
+  sudo test ! -e /srv/apps/fixture-php
+  abr_ci restore "$app_restore_php" --yes
+  sudo cmp /srv/apps/fixture-php/.env "$abr_binary_directory/full-env-before"
+  sudo grep -Fx 'saved private upload' /srv/apps/fixture-php/storage/app/private/full-private.txt
+  sudo mysql --protocol=socket --user=root --batch --skip-column-names fixture_php <<'SQL' | grep -Fx 73
+SELECT id FROM abr_full_backup_probe;
+SQL
+  fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+  fixture_https api.fixture-octane.localhost | grep -F 'Abr Nuxt fixture'
+  fixture_refused 'already registered on this server' restore "$app_restore_php" --yes
   # Reset only the recorded disposable fixtures for the following full archive
   # test. Retain the shared runtime ownership record just as its first reset did.
   for app_restore_name in fixture-php fixture-octane fixture-ssr fixture-spa; do
@@ -47,5 +64,5 @@ DROP USER 'root'@'127.0.0.1';
 SQL
   sudo systemctl stop caddy
   sudo rm -rf /var/lib/caddy/.local
-  echo 'Multiple app archives restored saved source, storage, SQL and HTTPS on a fresh target.'
+  echo 'Multiple app archives restored on a fresh target, and one app backup restored into the set-up server.'
 )

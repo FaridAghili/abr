@@ -70,11 +70,20 @@ not automatically rolled back.
 | Check disk usage | `sudo abr disk` |
 | Update server tools | `sudo abr update` |
 | Back up apps | `sudo abr backup --all` |
+| Schedule backups, keep newest 7 | `sudo abr edit api --backup-schedule daily --backup-keep 7` |
+| Check backup schedules | `sudo abr backup status` |
+| Restore app backups or a server | `sudo abr restore /var/backups/abr/restore --yes` |
 | Remove an app, keeping its data | `sudo abr remove api` |
 
 Backups use the saved remote destination when configured; otherwise they stay
-local. Archives contain secrets and are **not encrypted**. Keep a protected
-off-server copy and test restores. Permanent removal requires `--purge --yes`.
+local. Schedules are `6h` (every 1-23 hours), `daily` or `weekly`; an hourly
+timer backs up each app when due. Older archives beyond `--backup-keep` are
+deleted locally and on the backup server, which needs only SSH access and a
+private directory. Archives contain secrets and are **not encrypted**. Keep a protected
+off-server copy and test restores. Restoring a directory uses the newest backup
+of each app in it. On a set-up server, app backups are added as new apps; on a
+fresh server, the saved server settings are provisioned first. Permanent
+removal requires `--purge --yes`.
 
 In menus, type to filter, Enter to continue, Shift+Tab to revisit a field,
 and Esc to go back. Advanced settings are optional.

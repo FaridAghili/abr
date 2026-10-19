@@ -1,0 +1,13 @@
+# Managed by abr; edit the source template instead.
+# Backs up the apps whose schedule is due; app services keep running.
+[Unit]
+Description=Abr scheduled app backups
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+ExecStart={{unit .Binary}} --config {{unit .Config}} --state-dir {{unit .StateDir}} --templates-dir {{unit .TemplatesDir}} --apps-dir {{unit .AppsDir}} backup --due

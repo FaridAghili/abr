@@ -233,6 +233,9 @@ func (h Host) Setup(o SetupOptions) error {
 		if err := h.command("systemctl", "reload", "caddy"); err != nil {
 			return err
 		}
+		if err := h.ensureBackupTimer(); err != nil {
+			return err
+		}
 		if !h.DryRun {
 			data, err := json.Marshal(o)
 			if err != nil {

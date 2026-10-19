@@ -30,7 +30,7 @@ func within(parent, path string) bool {
 func (h Host) planPurge(a config.App) (purgePlan, error) {
 	p := purgePlan{
 		trees: []string{a.Directory, "/var/lib/abr-users/" + a.User, filepath.Join(h.Manager.StateDir, "deployments", a.Name)},
-		files: []string{h.credentialsEnvPath(a.Name), filepath.Join(h.Manager.StateDir, "env", a.Name+".env")},
+		files: []string{h.credentialsEnvPath(a.Name), filepath.Join(h.Manager.StateDir, "env", a.Name+".env"), h.backupRecordPath(a.Name)},
 	}
 	if !filepath.IsAbs(h.AppsDir) || filepath.Clean(h.AppsDir) == "/" || !within(h.AppsDir, a.Directory) || filepath.Clean(a.Directory) == filepath.Clean(h.AppsDir) {
 		return p, fmt.Errorf("project must be in its own directory inside %s", h.AppsDir)

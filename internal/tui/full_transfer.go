@@ -30,14 +30,17 @@ func (m *model) fullTransferMenu() tea.Cmd {
 			return m.fullBackupForm()
 		case "restore":
 			return m.fullRestoreForm()
+		case "status":
+			return m.start(action{title: "Backup status", args: []string{"backup", "status"}})
 		}
 		return m.serverMenu()
-	}, huh.NewGroup(huh.NewSelect[string]().Title("Backup actions").Description("Preserve source, data and settings; restore the saved app on a fresh server.").Options(
+	}, huh.NewGroup(huh.NewSelect[string]().Title("Backup actions").Description("Preserve source, data and settings; restore apps here, or a whole server onto a fresh one.").Options(
 		huh.NewOption("Back up apps and transfer", "backup"),
+		huh.NewOption("Backup status", "status"),
 		huh.NewOption("Configure backup server", "configure"),
 		huh.NewOption("Test backup destination", "test"),
 		huh.NewOption("Full server archive (local)", "full"),
-		huh.NewOption("Restore onto a fresh server", "restore"),
+		huh.NewOption("Restore apps or a server", "restore"),
 		huh.NewOption("Back", "back")).Value(&selected)))
 }
 
@@ -80,15 +83,15 @@ func (m *model) fullBackupForm() tea.Cmd {
 
 func (m *model) fullRestoreForm() tea.Cmd {
 	var input string
-	return m.setForm("form", "Full restore", func() tea.Cmd {
+	return m.setForm("form", "Restore", func() tea.Cmd {
 		files, err := restorePaths(input)
 		if err != nil {
 			return m.workflowError("Restore", err)
 		}
 		args := append([]string{"restore"}, files...)
 		args = append(args, "--yes")
-		return m.review(action{title: "Restore onto a fresh server", args: args, note: fmt.Sprintf("Backup: %s\n\nConfirm SQL and Redis imports when included, and server provisioning. Requires a fresh Ubuntu server with working SSH key access. A directory selects all app archives; include each app once. Recreate users/accounts, restore the bundled source and lockfiles, restore .env/uploads/data, build, migrate and optimize. App archives exclude shared Redis data and Caddy certificates. Previously enabled apps start only after all builds succeed. Keep the old server’s workers stopped during cutover.", input)})
-	}, huh.NewGroup(textInput("Backup file or directory", "Absolute archive path, or directory containing one app archive per app. Copy the backups here first.", "/var/backups/abr/restore", &input).Validate(func(s string) error {
+		return m.review(action{title: "Restore", args: args, note: fmt.Sprintf("Backup: %s\n\nConfirm SQL and Redis imports when included. On a server that is already set up, app backups are added as new apps; its settings, other apps and Redis data stay unchanged, and an app or database that already exists is refused. A fresh Ubuntu server with working SSH key access is provisioned from the backup's settings first; a full server archive restores only there. Recreate users/accounts, restore the bundled source and lockfiles, restore .env/uploads/data, build, migrate and optimize. App backups exclude shared Redis data and Caddy certificates. Previously enabled apps start only after all builds succeed. Keep the old server’s workers stopped during cutover.", input)})
+	}, huh.NewGroup(textInput("Backup file or directory", "Absolute archive path, or a directory of app backups; the newest backup of each app is used. Copy the backups here first.", "/var/backups/abr/restore", &input).Validate(func(s string) error {
 		if !filepath.IsAbs(s) || strings.ContainsAny(s, "\x00\r\n") {
 			return errors.New("Use an absolute backup file or directory")
 		}
@@ -100,14 +103,7 @@ func restorePaths(input string) ([]string, error) {
 	if strings.HasSuffix(input, ".tar.gz") {
 		return []string{input}, archivePath(input)
 	}
-	files, err := filepath.Glob(filepath.Join(input, "*.tar.gz"))
-	if err != nil {
-		return nil, err
-	}
-	if len(files) == 0 {
-		return nil, errors.New("No .tar.gz archives found in this directory")
-	}
-	return files, nil
+	return backup.LatestArchives(input)
 }
 
 func (m *model) appBackupForm() tea.Cmd {

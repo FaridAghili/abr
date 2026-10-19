@@ -322,6 +322,9 @@ func freshFullHost(t *testing.T) Host {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "var/tmp"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	return Host{Manager: manager.Manager{ConfigPath: filepath.Join(root, "etc/config.toml"), StateDir: filepath.Join(root, "state"), Probe: func(int) error { return nil }}, AppsDir: filepath.Join(root, "apps"), TemplatesDir: filepath.Join(root, "templates"), root: root, check: func() error { return nil }, Output: &bytes.Buffer{}}
 }
 
@@ -577,5 +580,134 @@ func TestRestoreRefusesExistingMySQLIdentity(t *testing.T) {
 	h.Runner = transferRunner{func(Command) ([]byte, error) { return []byte("0\n"), nil }}
 	if err := h.restoreDatabasePreflight(m); err != nil {
 		t.Fatal("empty MySQL target refused", err)
+	}
+}
+
+func TestRestoreAppsIntoSetUpServer(t *testing.T) {
+	source, _, output, cleanup := fullFixture(t, false)
+	defer cleanup()
+	addSecondBackupApp(t, source)
+	a, _, err := source.application("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := source.transferCredentials(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := setEnvValues([]byte("APP_KEY=existing-key\n"), [][2]string{{"DB_CONNECTION", "mysql"}, {"DB_HOST", "127.0.0.1"}, {"DB_PORT", "3306"}, {"DB_DATABASE", original.Database}, {"DB_USERNAME", original.User}, {"DB_PASSWORD", original.Password}})
+	if err := os.WriteFile(filepath.Join(a.Directory, ".env"), env, 0600); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Dir(output)
+	if err := source.BackupApps(nil, BackupOptions{All: true, OutputDir: directory}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := filepath.Glob(filepath.Join(directory, "app-*.tar.gz"))
+	if len(current) != 1 {
+		t.Fatal("app archive missing", current)
+	}
+	// An older generation of the same app must not be selected from the directory.
+	older := filepath.Join(directory, "app-20000101000000.tar.gz")
+	if err := os.Link(current[0], older); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := source.Manager.Registry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	savedPort, ok := saved.Lookup("second", "nuxt-http")
+	if !ok {
+		t.Fatal("saved Nuxt port missing")
+	}
+
+	h := freshFullHost(t)
+	templates, err := abr.TemplateFS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.installTemplates(templates); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{"setup.json": "{}\n", "git/id_ed25519": "target server key", "git/known_hosts": githubHostKey} {
+		if err := h.write(filepath.Join(h.Manager.StateDir, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// This server's own app already holds the saved port of the restored app.
+	web := config.App{Name: "web", User: "abr-web", Directory: filepath.Join(h.AppsDir, "web"), Type: "nuxt", Domain: "web.localhost"}
+	if _, err := h.Manager.Register(web, map[string]int{"nuxt-http": savedPort}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.DryRun = true
+	if err := h.RestoreArchives([]string{directory}, RestoreOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	text := h.Output.(*bytes.Buffer).String()
+	if !strings.Contains(text, "into this server") || strings.Contains(text, filepath.Base(older)) || !strings.Contains(text, filepath.Base(current[0])) {
+		t.Fatal("preview did not select the newest archives for this server", text)
+	}
+	if c, err := config.Load(h.Manager.ConfigPath); err != nil || len(c.Apps) != 1 {
+		t.Fatal("preview changed configuration", err)
+	}
+	h.DryRun = false
+	if err := h.RestoreArchives([]string{directory}, RestoreOptions{Yes: true, AdminUser: "root"}); err == nil || !strings.Contains(err.Error(), "only to a fresh server") {
+		t.Fatal("fresh-server options accepted on a set-up server", err)
+	}
+
+	repository := t.TempDir()
+	for _, name := range []string{"artisan", "composer.json", "composer.lock", "package.json", "package-lock.json", "public/index.php", "bootstrap/cache/.gitignore"} {
+		path := filepath.Join(repository, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := &fakeRunner{users: map[string]string{"_apt": "_apt:x:42:65534::/nonexistent:/usr/sbin/nologin"}}
+	runner := &fullRunner{base: base, cloneSource: repository, freshRoot: h.root}
+	h.Runner = runner
+	if err := h.RestoreArchives([]string{directory}, RestoreOptions{Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range base.calls {
+		if c.Name == "apt-get" || c.Name == "hostnamectl" || c.Name == "redis-cli" {
+			t.Fatal("app restore changed shared server setup", c.Name, c.Args)
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(h.Manager.StateDir, "git/id_ed25519")); err != nil || string(data) != "target server key" {
+		t.Fatal("replaced this server's Git key", err)
+	}
+	c, r, err := h.Manager.Snapshot()
+	if err != nil || len(c.Apps) != 3 {
+		t.Fatal("restored apps not registered", err)
+	}
+	if port, _ := r.Lookup("web", "nuxt-http"); port != savedPort {
+		t.Fatal("existing app lost its port")
+	}
+	if port, ok := r.Lookup("second", "nuxt-http"); !ok || port == savedPort {
+		t.Fatal("restored app took an occupied port", port)
+	}
+	restored, err := h.transferCredentials(c.Apps[1])
+	if err != nil || restored.Password != original.Password || !restored.TCPReady {
+		t.Fatal("database identity/password not restored", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(h.AppsDir, "app/storage/app/private/private.txt")); err != nil || string(data) != "private fixture upload" {
+		t.Fatal("uploads not restored", err)
+	}
+	text = h.Output.(*bytes.Buffer).String()
+	if !strings.Contains(text, "Kept this server's Git deploy key") || !strings.Contains(text, "App restore complete: 2 apps") || strings.Contains(text, original.Password) {
+		t.Fatal("restore report inaccurate", text)
+	}
+	if err := h.RestoreArchives(current, RestoreOptions{Yes: true}); err == nil || !strings.Contains(err.Error(), "already registered") {
+		t.Fatal("restored over an existing app", err)
+	}
+	if err := source.FullBackup(output); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.RestoreArchives([]string{output}, RestoreOptions{Yes: true}); err == nil || !strings.Contains(err.Error(), "fresh server") {
+		t.Fatal("full-server backup restored into a set-up server", err)
 	}
 }

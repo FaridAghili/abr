@@ -127,10 +127,12 @@ func (h Host) captureWorkingSource(a config.App, destination string) error {
 		if err != nil {
 			return err
 		}
-		if !info.Mode().IsRegular() {
+		// Tracked links are restored from the saved commit.
+		if !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
 			return fmt.Errorf("source must contain regular files without symlinks: %s", name)
 		}
 	}
+	var skipped []string
 	err = fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -155,12 +157,17 @@ func (h Host) captureWorkingSource(a config.App, destination string) error {
 			return os.MkdirAll(filepath.Join(destination, "source", filepath.FromSlash(name)), 0700)
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("source must contain regular files without symlinks: %s", name)
+			// Links and sockets hold no file data and are never followed.
+			skipped = append(skipped, name)
+			return nil
 		}
 		return copyWorkingSourceFile(root, name, filepath.Join(destination, "source", filepath.FromSlash(name)), info.Mode())
 	})
 	if err != nil {
 		return err
+	}
+	if len(skipped) > 0 {
+		h.say("Not saved from %s's working source: %d symlinks or special files (%s). Tracked links come from the saved commit; Laravel storage links are recreated on restore.", a.Name, len(skipped), strings.Join(skipped[:min(len(skipped), 5)], ", "))
 	}
 	if err := os.MkdirAll(filepath.Join(destination, "source"), 0700); err != nil {
 		return err

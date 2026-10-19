@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -41,6 +43,7 @@ type App struct {
 	Nightwatch  Component `toml:"nightwatch,omitempty"`
 	InertiaSSR  Component `toml:"inertia_ssr,omitempty"`
 	Database    Database  `toml:"database,omitempty"`
+	Backup      Backup    `toml:"backup,omitempty"`
 }
 
 type Embedding struct {
@@ -61,6 +64,39 @@ type Component struct {
 }
 type Database struct {
 	Enabled bool `toml:"enabled,omitempty"`
+}
+
+// Backup schedules automatic app backups: every N hours as "Nh" (1-23),
+// "daily" or "weekly". Keep retains that many newest archives; 0 keeps all.
+type Backup struct {
+	Schedule string `toml:"schedule,omitempty"`
+	Keep     int    `toml:"keep,omitempty"`
+}
+
+var backupSchedulePattern = regexp.MustCompile(`^(?:[1-9]|1[0-9]|2[0-3])h$`)
+
+func (b Backup) Validate() error {
+	if b.Schedule != "" && b.Schedule != "daily" && b.Schedule != "weekly" && !backupSchedulePattern.MatchString(b.Schedule) {
+		return fmt.Errorf("backup.schedule must be Nh (every 1-23 hours), daily or weekly")
+	}
+	if b.Keep < 0 || b.Keep > 1000 {
+		return fmt.Errorf("backup.keep must be between 0 (keep all) and 1000")
+	}
+	return nil
+}
+
+// Interval is the time between scheduled backups; 0 means not scheduled.
+func (b Backup) Interval() time.Duration {
+	switch b.Schedule {
+	case "":
+		return 0
+	case "daily":
+		return 24 * time.Hour
+	case "weekly":
+		return 7 * 24 * time.Hour
+	}
+	hours, _ := strconv.Atoi(strings.TrimSuffix(b.Schedule, "h"))
+	return time.Duration(hours) * time.Hour
 }
 
 const (
@@ -181,6 +217,9 @@ func (a App) Validate() error {
 		}
 	}
 	if err := a.Embedding.Validate(); err != nil {
+		return err
+	}
+	if err := a.Backup.Validate(); err != nil {
 		return err
 	}
 	if a.HealthCheck != "" {

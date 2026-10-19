@@ -466,7 +466,7 @@ func TestFullTransferCLIValidationAndBackupPreview(t *testing.T) {
 		}
 	}
 	help, err := invoke(t, "help")
-	if err != nil || !strings.Contains(help, "restore FILE.tar.gz --yes") {
+	if err != nil || !strings.Contains(help, "restore FILE.tar.gz... | DIR --yes") {
 		t.Fatal("full transfer missing from help", err)
 	}
 }

@@ -18,7 +18,7 @@ func (m *model) editMenu(app config.App) tea.Cmd {
 	if app.Type == "laravel" {
 		choices = append(choices, huh.NewOption("Workers", "workers"), huh.NewOption("Components", "components"), huh.NewOption("Build order", "build-order"))
 	}
-	choices = append(choices, huh.NewOption("Iframe embedding", "embedding"), huh.NewOption("Back", "back"))
+	choices = append(choices, huh.NewOption("Iframe embedding", "embedding"), huh.NewOption("Backups", "backups"), huh.NewOption("Back", "back"))
 	return m.setForm("app", app.Name+" / Edit settings", func() tea.Cmd {
 		if selected == "back" {
 			return m.goBack()
@@ -79,6 +79,35 @@ func (m *model) editForm(app config.App, section string) tea.Cmd {
 				}
 			}
 			return args
+		}
+	case "backups":
+		schedule, hours, keep := app.Backup.Schedule, "6", strconv.Itoa(app.Backup.Keep)
+		switch schedule {
+		case "":
+			schedule = "off"
+		case "daily", "weekly":
+		default:
+			schedule, hours = "hours", strings.TrimSuffix(schedule, "h")
+		}
+		groups = []*huh.Group{
+			huh.NewGroup(huh.NewSelect[string]().Title("Automatic backups").Description("How often to back up this app to the backup server. Services keep running.\nExample: daily for a small site, every few hours for busy data.").Options(huh.NewOption("Off (manual only)", "off"), huh.NewOption("Every few hours", "hours"), huh.NewOption("Daily", "daily"), huh.NewOption("Weekly", "weekly")).Value(&schedule)),
+			huh.NewGroup(textInput("Hours between backups", "Back up every this many hours, from 1 to 23.", "6", &hours).Validate(func(s string) error {
+				return (config.Backup{Schedule: s + "h"}).Validate()
+			})).WithHideFunc(func() bool { return schedule != "hours" }),
+			huh.NewGroup(textInput("Backups to keep", "Newest backups kept here and on the backup server; older ones are deleted. 0 keeps all.", "7", &keep).Validate(func(s string) error {
+				n, err := strconv.Atoi(s)
+				if err != nil {
+					return fmt.Errorf("Enter a number from 0 to 1000")
+				}
+				return (config.Backup{Keep: n}).Validate()
+			})),
+		}
+		flags = func() []string {
+			value := schedule
+			if schedule == "hours" {
+				value = hours + "h"
+			}
+			return []string{"--backup-schedule", value, "--backup-keep", keep}
 		}
 	case "health":
 		health := app.HealthCheck
@@ -141,7 +170,11 @@ func (m *model) editForm(app config.App, section string) tea.Cmd {
 	}
 	return m.setForm("form", app.Name+" / "+section, func() tea.Cmd {
 		args := append([]string{"edit", app.Name}, flags()...)
-		return m.review(action{title: "Save settings: " + app.Name, args: args, note: "Save these settings and reserve any required ports. Choose Deploy afterward to apply them.\n\n" + clean(strings.Join(flags(), " "))})
+		note := "Save these settings and reserve any required ports. Choose Deploy afterward to apply them."
+		if section == "backups" {
+			note = "Save the backup schedule and retention. An hourly timer backs this app up when due; no deploy is needed."
+		}
+		return m.review(action{title: "Save settings: " + app.Name, args: args, note: note + "\n\n" + clean(strings.Join(flags(), " "))})
 	}, groups...)
 }
 

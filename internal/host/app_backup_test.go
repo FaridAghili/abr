@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -80,7 +79,7 @@ func TestAppBackupSequentialVerifiedCleanupAndMerge(t *testing.T) {
 		}
 		received = append(received, path)
 		hash := sha256.Sum256(data)
-		return []byte("ABR_BACKUP_OK " + hex.EncodeToString(hash[:]) + " " + name + "\n"), nil
+		return []byte("ABR_BACKUP_OK " + hex.EncodeToString(hash[:]) + " " + name + " 0\n"), nil
 	}}
 	if err := h.BackupApps(nil, BackupOptions{All: true, OutputDir: directory, Remote: "backup@fixture", RemoteDir: "/srv/backups/abr"}); err != nil {
 		t.Fatal(err)
@@ -236,7 +235,7 @@ func TestAppBackupRejectsManagedOutputAndIncompleteCapture(t *testing.T) {
 	}
 }
 
-func TestAppBackupRejectsConflictingSharedFilesOnRestore(t *testing.T) {
+func TestRestoreUsesNewestSharedFilesFromAppBackups(t *testing.T) {
 	h, _, output, cleanup := fullFixture(t, false)
 	defer cleanup()
 	addSecondBackupApp(t, h)
@@ -250,10 +249,37 @@ func TestAppBackupRejectsConflictingSharedFilesOnRestore(t *testing.T) {
 	if err := h.BackupApps([]string{"second"}, BackupOptions{OutputDir: directory}); err != nil {
 		t.Fatal(err)
 	}
-	files, _ := filepath.Glob(filepath.Join(directory, "*.tar.gz"))
+	older, _ := filepath.Glob(filepath.Join(directory, "app-*.tar.gz"))
+	newer, _ := filepath.Glob(filepath.Join(directory, "second-*.tar.gz"))
+	if len(older) != 1 || len(newer) != 1 {
+		t.Fatal("app archives missing")
+	}
 	fresh := freshFullHost(t)
 	fresh.DryRun = true
-	if err := fresh.RestoreArchives(files, RestoreOptions{}); err == nil || !strings.Contains(fmt.Sprint(err), "conflicting shared file") {
-		t.Fatal("conflicting shared settings accepted", err)
+	if err := fresh.RestoreArchives([]string{older[0], newer[0]}, RestoreOptions{}); err != nil {
+		t.Fatal("app backups from different times cannot be restored together", err)
+	}
+	// Scheduled backups are taken at different times: the newest shared files win in either order.
+	for _, order := range [][]string{{older[0], newer[0]}, {newer[0], older[0]}} {
+		parent, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		stage := filepath.Join(parent, "restore")
+		if err := os.Mkdir(stage, 0700); err != nil {
+			t.Fatal(err)
+		}
+		var m backup.Manifest
+		for _, file := range order {
+			if err := fresh.extractRestoreArchive(file, stage, &m); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if data, err := os.ReadFile(filepath.Join(stage, "templates/php-cli.ini.tmpl")); err != nil || string(data) != "; edited shared setting\n" {
+			t.Fatal("older shared file won", string(data), err)
+		}
+		if err := validateFullBackup(m, stage); err != nil || len(m.Apps) != 2 {
+			t.Fatal("merged backup invalid", err)
+		}
 	}
 }

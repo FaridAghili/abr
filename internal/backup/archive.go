@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -133,14 +134,24 @@ func (m Manifest) Validate() error {
 	return nil
 }
 
-// Write streams a private staging tree. Symlinks and special files are rejected.
-func Write(w io.Writer, directory string, manifest *Manifest) (result error) {
+// Write streams a private staging tree. Each live entry maps an empty staged
+// directory to an open host tree streamed in its place, so large data such as
+// uploads is read once instead of being copied into staging first. Symlinks and
+// special files are rejected. Staged files must not change; a live file is
+// captured at its size when opened, and live entries deleted during the walk
+// are omitted. The caller owns and closes the live roots.
+func Write(w io.Writer, directory string, manifest *Manifest, live map[string]*os.Root) (result error) {
 	root, err := os.OpenRoot(directory)
 	if err != nil {
 		return err
 	}
 	defer root.Close()
-	gz := gzip.NewWriter(w)
+	// Uploads are mostly compressed media; the fastest level keeps online
+	// capture CPU-light and rarely costs much size on SQL or text.
+	gz, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
+	if err != nil {
+		return err
+	}
 	tw := tar.NewWriter(gz)
 	defer func() {
 		closeTar := tw.Close()
@@ -154,6 +165,69 @@ func Write(w io.Writer, directory string, manifest *Manifest) (result error) {
 		}
 	}()
 	manifest.Files = map[string]File{}
+	add := func(tree *os.Root, rel, name string, online bool) error {
+		if len(manifest.Files) >= maxEntries {
+			return fmt.Errorf("too many backup entries (limit %d)", maxEntries)
+		}
+		if !safeName(name) || name == manifestName {
+			return fmt.Errorf("invalid archive path")
+		}
+		info, err := tree.Lstat(rel)
+		if online && errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		record := File{Mode: int64(info.Mode().Perm()), Directory: info.IsDir()}
+		header := &tar.Header{Name: name, Mode: record.Mode, Typeflag: tar.TypeDir}
+		if info.IsDir() {
+			if err := tw.WriteHeader(header); err != nil {
+				return err
+			}
+			manifest.Files[name] = record
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("backup does not support symlinks or special files: %s", name)
+		}
+		f, err := tree.OpenFile(rel, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if online && errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		current, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if !current.Mode().IsRegular() {
+			return fmt.Errorf("backup file changed type")
+		}
+		record.Size = current.Size()
+		header.Typeflag, header.Size = tar.TypeReg, record.Size
+		if err := tw.WriteHeader(header); err != nil {
+			return err
+		}
+		sum := sha256.New()
+		if _, err := io.CopyN(io.MultiWriter(tw, sum), f, record.Size); err == io.EOF {
+			return fmt.Errorf("%s shrank while being backed up; retry the backup", name)
+		} else if err != nil {
+			return err
+		}
+		if !online {
+			var extra [1]byte
+			if n, err := f.Read(extra[:]); n != 0 || err != io.EOF {
+				return fmt.Errorf("backup file changed while reading")
+			}
+		}
+		record.SHA256 = hex.EncodeToString(sum.Sum(nil))
+		manifest.Files[name] = record
+		return nil
+	}
+	mounted := 0
 	err = fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -161,56 +235,37 @@ func Write(w io.Writer, directory string, manifest *Manifest) (result error) {
 		if name == "." {
 			return nil
 		}
-		if len(manifest.Files) >= maxEntries {
-			return fmt.Errorf("too many backup entries (limit %d)", maxEntries)
+		if err := add(root, name, name, false); err != nil {
+			return err
 		}
-		if !safeName(name) || name == manifestName {
-			return fmt.Errorf("invalid archive path")
+		tree, ok := live[name]
+		if !ok {
+			return nil
 		}
-		info, err := root.Lstat(name)
+		if !entry.IsDir() {
+			return fmt.Errorf("live backup tree must be staged as a directory: %s", name)
+		}
+		mounted++
+		err := fs.WalkDir(tree.FS(), ".", func(rel string, entry fs.DirEntry, walkErr error) error {
+			// A directory deleted during the walk is omitted, like a deleted file.
+			if walkErr != nil && rel != "." && errors.Is(walkErr, fs.ErrNotExist) {
+				return nil
+			}
+			if walkErr != nil || rel == "." {
+				return walkErr
+			}
+			return add(tree, rel, name+"/"+rel, true)
+		})
 		if err != nil {
 			return err
 		}
-		record := File{Mode: int64(info.Mode().Perm()), Directory: info.IsDir()}
-		header := &tar.Header{Name: name, Mode: record.Mode, Typeflag: tar.TypeDir}
-		if !info.IsDir() {
-			if !info.Mode().IsRegular() {
-				return fmt.Errorf("backup does not support symlinks or special files: %s", name)
-			}
-			f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-			current, err := f.Stat()
-			if err != nil {
-				return err
-			}
-			if !current.Mode().IsRegular() {
-				return fmt.Errorf("backup file changed type")
-			}
-			record.Size = current.Size()
-			header.Typeflag, header.Size = tar.TypeReg, record.Size
-			if err := tw.WriteHeader(header); err != nil {
-				return err
-			}
-			sum := sha256.New()
-			if _, err := io.CopyN(io.MultiWriter(tw, sum), f, record.Size); err != nil {
-				return err
-			}
-			var extra [1]byte
-			if n, err := f.Read(extra[:]); n != 0 || err != io.EOF {
-				return fmt.Errorf("backup file changed while reading")
-			}
-			record.SHA256 = hex.EncodeToString(sum.Sum(nil))
-		} else if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-		manifest.Files[name] = record
-		return nil
+		return fs.SkipDir
 	})
 	if err != nil {
 		return err
+	}
+	if mounted != len(live) {
+		return fmt.Errorf("live backup tree is not staged")
 	}
 	if err := manifest.Validate(); err != nil {
 		return err

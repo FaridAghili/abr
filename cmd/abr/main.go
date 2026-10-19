@@ -58,8 +58,10 @@ Commands:
   env APP          Prepare .env when its example exists; fill managed Laravel MySQL values
   database APP     Create/verify MySQL database (--show prints credentials)
   database --admin TablePlus root connection details (--show prints password)
-  backup APP... | --all --output-dir DIR
-                   Back up apps sequentially online using the saved backup destination
+  backup APP... | --all | --due [--output-dir DIR]
+                   Back up apps sequentially online using the saved backup destination;
+                   --due backs up apps whose schedule is due and applies retention
+  backup status    Show each app's backup schedule, retention and last result
                    --remote USER@HOST --remote-dir DIR verifies transfer then deletes local archive
   backup configure --host HOST --user USER --path DIR [--key FILE | --password-stdin]
                    Save backup server settings; generates a dedicated key by default
@@ -69,8 +71,9 @@ Commands:
                    Pin a fingerprint verified against the backup server's console
   backup --output FILE.tar.gz
                    Online full-server backup including shared Redis and Caddy data
-  restore FILE.tar.gz --yes
-                   Restore saved source, databases, storage and settings on a fresh server
+  restore FILE.tar.gz... | DIR --yes
+                   Add app backups to this server, or restore everything on a fresh server;
+                   DIR restores the newest app backup of each app in it
   database backup APP... | --all --output-dir DIR
                    Export selected/all managed databases as private SQL files
   database import APP FILE.sql --yes
@@ -143,11 +146,11 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "logs" && len(args) > 0 && args[0] == "clear" {
 		command, args = "logs clear", args[1:]
 	}
-	if command == "backup" && len(args) > 0 && (args[0] == "configure" || args[0] == "test" || args[0] == "host-key" || args[0] == "trust") {
+	if command == "backup" && len(args) > 0 && (args[0] == "configure" || args[0] == "test" || args[0] == "host-key" || args[0] == "trust" || args[0] == "status") {
 		command, args = "backup "+args[0], args[1:]
 	}
 	switch command {
-	case "backup", "backup configure", "backup test", "backup host-key", "backup trust", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
+	case "backup", "backup configure", "backup test", "backup host-key", "backup trust", "backup status", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -182,6 +185,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.StringVar(&appBackup.RemoteDir, "remote-dir", "", "existing private directory on the backup server (0700)")
 		fs.IntVar(&appBackup.SSHPort, "ssh-port", 0, "backup server SSH port (default: 22)")
 		fs.BoolVar(&appBackup.Transfer, "transfer", false, "require a remote destination; remove local archive only after verified transfer")
+		fs.BoolVar(&appBackup.Due, "due", false, "back up only apps whose backup schedule is due (run hourly by abr-backup.timer)")
 	case "backup configure":
 		fs.StringVar(&destination.Host, "host", "", "backup server IP or hostname")
 		fs.StringVar(&destination.User, "user", "", "backup server SSH user")
@@ -192,7 +196,7 @@ func run(args []string, out, stderr io.Writer) error {
 	case "backup trust":
 		fs.StringVar(&hostFingerprint, "fingerprint", "", "SHA256 host fingerprint verified against the backup server's console")
 	case "restore":
-		fs.BoolVar(&restore.Yes, "yes", false, "confirm full SQL and Redis restore on a fresh server")
+		fs.BoolVar(&restore.Yes, "yes", false, "confirm SQL imports, and Redis data from a full backup")
 		fs.StringVar(&restore.AdminUser, "admin-user", "", "existing administrator on this new server")
 		fs.IntVar(&restore.SSHPort, "ssh-port", 0, "SSH port to preserve on this new server (default: discover)")
 	case "disk":
@@ -216,6 +220,8 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&app.Nightwatch.Enabled, "nightwatch", false, "enable/disable Nightwatch")
 		fs.BoolVar(&app.InertiaSSR.Enabled, "inertia-ssr", false, "enable/disable Inertia SSR")
 		fs.BoolVar(&app.Database.Enabled, "database", false, "enable/disable managed database; existing data retained")
+		fs.StringVar(&app.Backup.Schedule, "backup-schedule", "", "automatic backups: 6h (every 1-23 hours), daily, weekly or off")
+		fs.IntVar(&app.Backup.Keep, "backup-keep", 0, "newest backups to keep locally and on the backup server (0 keeps all)")
 		fs.BoolVar(&configOnly, "config-only", false, "save portable config/ports without host operations")
 	case "remove":
 		fs.BoolVar(&purge, "purge", false, "permanently delete project, uploads, managed database/account, home, credentials and history")
@@ -292,7 +298,7 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "edit" {
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
-			case "embed-path", "embed-origin", "domain", "canonical-host", "alias", "serving-domain", "health-check", "build-order", "web-driver", "octane-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "database":
+			case "embed-path", "embed-origin", "domain", "canonical-host", "alias", "serving-domain", "health-check", "build-order", "web-driver", "octane-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "database", "backup-schedule", "backup-keep":
 				changes.Fields = append(changes.Fields, f.Name)
 			}
 		})
@@ -324,7 +330,7 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 	case "restore":
 		if len(positional) < 1 {
-			return fmt.Errorf("use abr restore /absolute/backup.tar.gz --yes")
+			return fmt.Errorf("use abr restore /absolute/backup.tar.gz... --yes, or abr restore /absolute/directory --yes")
 		}
 	case "artisan":
 		if len(positional) < 1 {
@@ -415,6 +421,8 @@ func run(args []string, out, stderr io.Writer) error {
 		return h.ConfigureBackup(destination, gitKey)
 	case "backup test":
 		return h.TestBackupDestination()
+	case "backup status":
+		return h.BackupStatus()
 	case "backup host-key":
 		_, err := h.BackupHostKey()
 		return err

@@ -45,6 +45,13 @@ func (changes AppChanges) Apply(a App) (App, error) {
 			a.InertiaSSR.Enabled = v.InertiaSSR.Enabled
 		case "database":
 			a.Database.Enabled = v.Database.Enabled
+		case "backup-schedule":
+			a.Backup.Schedule = v.Backup.Schedule
+			if a.Backup.Schedule == "off" {
+				a.Backup.Schedule = ""
+			}
+		case "backup-keep":
+			a.Backup.Keep = v.Backup.Keep
 		case "canonical-host": // Apply after the primary domain and alias changes.
 		default:
 			return App{}, fmt.Errorf("unsupported app setting %q", field)

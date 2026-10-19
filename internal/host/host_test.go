@@ -194,8 +194,11 @@ func fixture(t *testing.T) (Host, *fakeRunner, *bytes.Buffer, config.App) {
 	if err := h.write("/etc/hostname", []byte("my-vps\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(h.path("/var/lib/abr-users/"+a.User), 0700); err != nil {
-		t.Fatal(err)
+	// Disposable hosts provide /var/tmp, where restores extract archives.
+	for _, dir := range []string{"/var/lib/abr-users/" + a.User, "/var/tmp"} {
+		if err := os.MkdirAll(h.path(dir), 0700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, dir := range []string{"public", "storage/app/public", "bootstrap/cache", "vendor"} {
 		if err := os.MkdirAll(filepath.Join(a.Directory, dir), 0755); err != nil {
