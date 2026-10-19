@@ -175,13 +175,16 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 			}
 		}()
 	}
-	dirty, err := h.asUser(a, plan.Environment, true, "git", "status", "--porcelain")
-	if err != nil {
-		return err
-	}
 	// Fresh restores preserve captured local changes and deploy without pulling.
-	if len(strings.TrimSpace(string(dirty))) > 0 && !(o.deferEnable && o.NoPull) {
-		return fmt.Errorf("working tree is dirty; commit/stash changes before deployment")
+	// Every other deployment discards tracked edits and untracked files so the
+	// fast-forward cannot fail on a dirty tree. Ignored files (.env, uploads) stay.
+	if !(o.deferEnable && o.NoPull) {
+		if _, err := h.asUser(a, plan.Environment, true, "git", "reset", "--hard", "HEAD"); err != nil {
+			return err
+		}
+		if _, err := h.asUser(a, plan.Environment, true, "git", "clean", "-fd"); err != nil {
+			return err
+		}
 	}
 	commit, err = h.deploymentTarget(a, plan.Environment, o.NoPull)
 	if err != nil {
