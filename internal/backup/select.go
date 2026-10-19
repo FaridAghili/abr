@@ -40,6 +40,18 @@ func LatestArchives(directory string) ([]string, error) {
 	return files, nil
 }
 
+// Archives returns app's exact NAME-YYYYMMDDHHMMSS.tar.gz names, oldest first.
+func Archives(names []string, app string) []string {
+	var archives []string
+	for _, name := range names {
+		if match := appArchiveName.FindStringSubmatch(name); match != nil && match[1] == app {
+			archives = append(archives, name)
+		}
+	}
+	slices.Sort(archives)
+	return archives
+}
+
 // Expired returns app's archives beyond the newest keep, oldest first. Only
 // exact NAME-YYYYMMDDHHMMSS.tar.gz names count, so other apps' archives and
 // unrelated files are never selected. protect is never returned; keep 0
@@ -48,13 +60,7 @@ func Expired(names []string, app string, keep int, protect string) []string {
 	if keep <= 0 {
 		return nil
 	}
-	var archives []string
-	for _, name := range names {
-		if match := appArchiveName.FindStringSubmatch(name); match != nil && match[1] == app {
-			archives = append(archives, name)
-		}
-	}
-	slices.Sort(archives)
+	archives := Archives(names, app)
 	var expired []string
 	for _, name := range archives[:max(len(archives)-keep, 0)] {
 		if name != protect {

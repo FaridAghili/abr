@@ -155,6 +155,53 @@ func TestAppBackupFailedTransferRetainsArchiveAndStopsRun(t *testing.T) {
 	}
 }
 
+func TestAppBackupUploadsArchivesLeftByFailedTransfers(t *testing.T) {
+	h, runner, output, cleanup := fullFixture(t, false)
+	defer cleanup()
+	directory := filepath.Dir(output)
+	fail := true
+	var received []string
+	h.Runner = backupSSHRunner{base: runner, ssh: func(c Command) ([]byte, error) {
+		if fail {
+			return nil, errors.New("fixture SSH failure")
+		}
+		data, err := io.ReadAll(c.Stdin)
+		if err != nil {
+			return nil, err
+		}
+		name := filepath.Base(c.Stdin.(*os.File).Name())
+		received = append(received, name)
+		hash := sha256.Sum256(data)
+		return []byte("ABR_BACKUP_OK " + hex.EncodeToString(hash[:]) + " " + name + " 0\n"), nil
+	}}
+	o := BackupOptions{All: true, OutputDir: directory, Remote: "backup@fixture", RemoteDir: "/srv/backups/abr"}
+	if err := h.BackupApps(nil, o); err == nil || !strings.Contains(err.Error(), "local backup retained") {
+		t.Fatal("failed transfer reported success", err)
+	}
+	retained, _ := filepath.Glob(filepath.Join(directory, "app-*.tar.gz"))
+	// Another app's archive and unrelated files are never uploaded or removed.
+	other := filepath.Join(directory, "other-20200101000000.tar.gz")
+	if err := os.WriteFile(other, []byte("other"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fail = false
+	if err := h.BackupApps(nil, o); err != nil {
+		t.Fatal(err)
+	}
+	if len(retained) != 1 || len(received) != 2 || received[0] != filepath.Base(retained[0]) || received[1] <= received[0] {
+		t.Fatalf("retained archive not uploaded first: %v %v", retained, received)
+	}
+	if files, _ := filepath.Glob(filepath.Join(directory, "app-*.tar.gz")); len(files) != 0 {
+		t.Fatal("local archives remain after verified transfer", files)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatal("another app's archive was touched")
+	}
+	if !strings.Contains(h.Output.(*bytes.Buffer).String(), "Transferred earlier local backup") {
+		t.Fatal("upload of retained archive not reported")
+	}
+}
+
 func TestBackupDestinationPasswordPrivateAndSSHDescriptor(t *testing.T) {
 	h, runner, _, cleanup := fullFixture(t, false)
 	defer cleanup()

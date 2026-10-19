@@ -115,7 +115,7 @@ func (m *model) appBackupForm() tea.Cmd {
 		} else {
 			args = append(args, strings.Fields(names)...)
 		}
-		return m.review(action{title: "Back up apps", args: args, note: "Keep all apps running. Capture one app's source and lockfiles, SQL, .env, full Laravel storage/app and recovery settings, compress, transfer to the configured backup server, verify SHA256, then remove its local archive before the next app. Failed transfers retain their archive and stop the run. Redis data is excluded. HTTPS is recreated from saved domains/settings on restore. Avoid schema changes; SQL and files may differ in time."})
+		return m.review(action{title: "Back up apps", args: args, note: "Keep all apps running. Capture one app's source and lockfiles, SQL, .env, full Laravel storage/app and recovery settings, compress, transfer to the configured backup server, verify SHA256, then remove its local archive before the next app. Failed transfers retain their archive and stop the run; the next successful backup of that app uploads and removes it, leaving no archive on this server. Redis data is excluded. HTTPS is recreated from saved domains/settings on restore. Avoid schema changes; SQL and files may differ in time."})
 	}, huh.NewGroup(textInput("Apps (optional)", "Space-separated registered app names. Blank backs up every app, one at a time.", "api portal", &names).Validate(func(s string) error {
 		for _, name := range strings.Fields(s) {
 			if err := applicationName(name); err != nil {

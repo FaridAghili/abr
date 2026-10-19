@@ -77,7 +77,9 @@ not automatically rolled back.
 | Remove an app, keeping its data | `sudo abr remove api` |
 
 Backups use the saved remote destination when configured; otherwise they stay
-local. Schedules are `6h` (every 1-23 hours), `daily` or `weekly`; an hourly
+local. After a verified transfer no archive stays on the production server: an
+archive kept by a failed transfer is uploaded and removed on the next
+successful run. Schedules are `6h` (every 1-23 hours), `daily` or `weekly`; an hourly
 timer backs up each app when due. Older archives beyond `--backup-keep` are
 deleted locally and on the backup server, which needs only SSH access and a
 private directory. Archives contain secrets and are **not encrypted**. Keep a protected

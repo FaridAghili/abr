@@ -111,6 +111,11 @@ import sys
 files = list(Path(sys.argv[1]).glob('*.tar.gz'))
 assert len(files) == 1 and files[0].name.startswith('fixture-php-')
 PY
+  # The next verified transfer uploads the retained archive too and leaves no
+  # backup on this server; retention still keeps the newest one remotely.
+  abr_ci backup fixture-php --transfer --output-dir "$app_backup_local" | grep -F 'Transferred earlier local backup fixture-php-'
+  test -z "$(sudo find "$app_backup_local" -maxdepth 1 -name '*.tar.gz')"
+  test "$(sudo find "$app_backup_remote" -maxdepth 1 -name 'fixture-php-*.tar.gz' | wc -l)" = 1
   # Exercise real password auth on an isolated loopback SSH daemon. The main
   # SSH service retains its key-only authentication settings.
   sudo useradd --no-create-home --shell /bin/sh abr-backup-fixture

@@ -103,7 +103,7 @@ func (h Host) BackupApps(names []string, o BackupOptions) error {
 		for _, a := range selected {
 			h.say("Would back up %s online: managed SQL, .env, full Laravel storage/app and saved source and recovery settings into %s; services remain running", a.Name, o.OutputDir)
 			if o.Remote != "" {
-				h.say("Would transfer %s to %s:%s, verify SHA256 and remote publication, then remove only its local archive before the next app", a.Name, o.Remote, o.RemoteDir)
+				h.say("Would transfer %s to %s:%s, verify SHA256 and remote publication, then remove its local archive and any earlier ones left by failed transfers before the next app", a.Name, o.Remote, o.RemoteDir)
 			}
 			if a.Backup.Keep > 0 {
 				h.say("Would keep the newest %d backups of %s and delete older ones", a.Backup.Keep, a.Name)
@@ -198,18 +198,74 @@ func (h Host) backupApp(name string, o BackupOptions) (result error) {
 		h.say("App backup complete: %s (0600; contains secrets)", output)
 		return nil
 	}
-	removed, err := h.transferAppBackup(output, checksum, name, keep, o)
+	// Archives kept by earlier failed transfers go first, oldest first, so each
+	// upload is the newest on the backup server and its retention stays exact.
+	// A verified transfer leaves no local archive of this app on the server.
+	pending, err := h.pendingBackups(o.OutputDir, name, filepath.Base(output))
 	if err != nil {
-		return fmt.Errorf("transfer %s failed; local backup retained at %s: %w", name, output, err)
+		return fmt.Errorf("backup %s saved at %s; listing earlier local backups failed: %w", name, output, err)
 	}
-	if err := os.Remove(output); err != nil {
-		return fmt.Errorf("remote backup verified; local cleanup failed at %s: %w", output, err)
+	removed := 0
+	for _, file := range append(pending, output) {
+		sum := checksum
+		if file != output {
+			if sum, err = fileChecksum(file); err != nil {
+				return fmt.Errorf("transfer %s failed; local backups retained in %s: %w", name, o.OutputDir, err)
+			}
+		}
+		count, err := h.transferAppBackup(file, sum, name, keep, o)
+		if err != nil {
+			if file == output && len(pending) == 0 {
+				return fmt.Errorf("transfer %s failed; local backup retained at %s: %w", name, output, err)
+			}
+			return fmt.Errorf("transfer %s failed; local backups retained in %s: %w", name, o.OutputDir, err)
+		}
+		if err := os.Remove(file); err != nil {
+			return fmt.Errorf("remote backup verified; local cleanup failed at %s: %w", file, err)
+		}
+		removed += count
+		if file != output {
+			h.say("Transferred earlier local backup %s left by a failed transfer; verified SHA256; local archive removed", filepath.Base(file))
+		}
 	}
 	h.say("Backed up %s to %s:%s; verified SHA256; local archive removed", name, o.Remote, path.Join(o.RemoteDir, filepath.Base(output)))
 	if removed > 0 {
 		h.say("Deleted %d older backups of %s from the backup server; kept the newest %d", removed, name, keep)
 	}
 	return nil
+}
+
+// pendingBackups lists app's other local archives, oldest first. The directory
+// was checked as private and root-owned under the host lock.
+func (h Host) pendingBackups(directory, app, current string) ([]string, error) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && entry.Name() != current {
+			names = append(names, entry.Name())
+		}
+	}
+	files := backup.Archives(names, app)
+	for i, name := range files {
+		files[i] = filepath.Join(directory, name)
+	}
+	return files, nil
+}
+
+func fileChecksum(file string) (string, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // stageSharedBackup copies the small server-wide recovery files every app
