@@ -135,7 +135,7 @@ func (h Host) createSwapFile() (created bool, result error) {
 	if err != nil {
 		return false, err
 	}
-	size := swapSize(kib<<10)
+	size := swapSize(kib << 10)
 	var disk syscall.Statfs_t
 	if err := syscall.Statfs(h.path("/"), &disk); err != nil {
 		return false, err
