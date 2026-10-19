@@ -173,6 +173,8 @@ fixture_shell() {
 }
 # Exercise swap creation: setup only adds swap to a server without any.
 sudo swapoff -a
+# The runner image may ship an unlabeled /swapfile, which setup refuses to touch.
+sudo rm -f /swapfile
 abr_ci setup --hostname abr-ci-vps --no-firewall --ssh-port 22 --admin-user root
 fixture_shell
 swapon --show=NAME --noheadings | grep -Fx /swapfile
