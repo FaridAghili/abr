@@ -160,6 +160,10 @@ func TestBackupReceiverPublishesAndPrunesOnlyThisApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The receiver requires a private directory owned by the SSH account.
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"api-20261001000000.tar.gz", "api-20261002000000.tar.gz", "api-20261003000000.tar.gz", "api-v2-20261001000000.tar.gz", "notes.txt", ".abr-upload-stale", ".abr-upload-active"} {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte(name), 0600); err != nil {
 			t.Fatal(err)

@@ -82,7 +82,13 @@ PY
   sudo systemctl stop abr-backup.timer
   app_schedule_before=$(sudo find "$app_backup_remote" -maxdepth 1 -name 'fixture-php-*.tar.gz')
   abr_ci edit fixture-php --config-only --backup-schedule 6h --backup-keep 1
-  sudo systemctl start abr-backup.service
+  # The --all run above counts as fixture-php's latest backup; forget it so
+  # the 6h schedule is due now, and show the service journal if the run fails.
+  abr_ci backup --due | grep -F 'No scheduled app backups are due'
+  sudo rm /var/lib/abr-ci/backups/fixture-php.json
+  if ! sudo systemctl start abr-backup.service; then
+    sudo journalctl -u abr-backup.service --no-pager >&2; exit 1
+  fi
   app_schedule_after=$(sudo find "$app_backup_remote" -maxdepth 1 -name 'fixture-php-*.tar.gz')
   test "$(printf '%s\n' "$app_schedule_after" | wc -l)" = 1
   test "$app_schedule_after" != "$app_schedule_before"
