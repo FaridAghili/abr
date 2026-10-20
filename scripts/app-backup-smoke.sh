@@ -111,9 +111,9 @@ import sys
 files = list(Path(sys.argv[1]).glob('*.tar.gz'))
 assert len(files) == 1 and files[0].name.startswith('fixture-php-')
 PY
-  # The next verified transfer uploads the retained archive too and leaves no
-  # backup on this server; retention still keeps the newest one remotely.
-  abr_ci backup fixture-php --transfer --output-dir "$app_backup_local" | grep -F 'Transferred earlier local backup fixture-php-'
+  # With keep 1 the next run supersedes the retained archive: local retention
+  # deletes it before transfer, and no backup stays on this server.
+  abr_ci backup fixture-php --transfer --output-dir "$app_backup_local" | grep -F 'Deleted older local backup fixture-php-'
   test -z "$(sudo find "$app_backup_local" -maxdepth 1 -name '*.tar.gz')"
   test "$(sudo find "$app_backup_remote" -maxdepth 1 -name 'fixture-php-*.tar.gz' | wc -l)" = 1
   # Exercise real password auth on an isolated loopback SSH daemon. The main
