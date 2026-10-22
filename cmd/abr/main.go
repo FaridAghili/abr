@@ -51,7 +51,7 @@ Commands:
   ports            Show reservations (--allocate reconciles config edits)
   doctor           Check configuration, reservations and app TCP listener ownership
   update           Upgrade apt packages, stable Caddy, Composer, global npm tools, Oh My Zsh and shell plugins
-  setup            Install shared VPS packages, Caddy, Node 24, RoadRunner and root's Zsh
+  setup            Install shared VPS packages, Caddy, Node 26, Redis, RoadRunner and root's Zsh
                    Prompts for VPS name; --hostname NAME is scriptable
   git setup        Create/reuse one VPS GitHub SSH key (--key imports an existing key)
   composer auth    Save shared private-package credentials; prompts for email/token

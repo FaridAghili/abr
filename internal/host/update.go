@@ -59,7 +59,7 @@ func (h Host) Update() error {
 		}); err != nil {
 			return err
 		}
-		if err := h.verifyNode24(); err != nil {
+		if err := h.verifyNode(); err != nil {
 			return err
 		}
 		if err := h.updateNodeTools(); err != nil {

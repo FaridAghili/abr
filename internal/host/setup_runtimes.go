@@ -71,19 +71,19 @@ func verifySHA256(data []byte, digest string) error {
 }
 
 func (h Host) installNPM(images bool) error {
-	if err := h.verifyNode24(); err != nil {
+	if err := h.verifyNode(); err != nil {
 		return err
 	}
 	return h.installNodeTools(images)
 }
 
-func (h Host) verifyNode24() error {
-	out, err := h.run("Verify Node 24", Command{Name: "/usr/bin/node", Args: []string{"-p", "process.versions.node"}, Private: true})
+func (h Host) verifyNode() error {
+	out, err := h.run("Verify Node "+NodeMajor, Command{Name: "/usr/bin/node", Args: []string{"-p", "process.versions.node"}, Private: true})
 	if err != nil {
 		return err
 	}
-	if !h.DryRun && !strings.HasPrefix(strings.TrimSpace(string(out)), "24.") {
-		return fmt.Errorf("Node 24 is required")
+	if !h.DryRun && !strings.HasPrefix(strings.TrimSpace(string(out)), NodeMajor+".") {
+		return fmt.Errorf("Node %s is required", NodeMajor)
 	}
 	return nil
 }

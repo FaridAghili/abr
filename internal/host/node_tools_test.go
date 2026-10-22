@@ -22,7 +22,7 @@ func (r nodeToolsRunner) Run(c Command) ([]byte, error) {
 		return data, err
 	}
 	if c.Name == "/usr/bin/node" {
-		return []byte("24.1.0\n"), nil
+		return []byte(NodeMajor + ".1.0\n"), nil
 	}
 	if c.Name == "runuser" && slices.Contains(c.Args, "prefix") && slices.Contains(c.Args, "--global") {
 		return []byte("/usr\n"), nil

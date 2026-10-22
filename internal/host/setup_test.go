@@ -670,3 +670,32 @@ func TestSwapSizeAndSnapdRemovalChecks(t *testing.T) {
 		t.Fatalf("dependent package removal ignored: %v", others)
 	}
 }
+
+func TestSetupInstallsUpstreamRedisAndNode(t *testing.T) {
+	for _, noRedis := range []bool{false, true} {
+		h, _, out, _ := fixture(t)
+		h.DryRun = true
+		if err := h.Setup(SetupOptions{Hostname: "my-vps", RoadRunnerVersion: DefaultRoadRunnerVersion, NoRedis: noRedis}); err != nil {
+			t.Fatal(err)
+		}
+		preview := out.String()
+		for _, line := range strings.Split(preview, "\n") {
+			if strings.Contains(line, "Install shared Ubuntu packages") && strings.Contains(line, "redis-server") {
+				t.Fatalf("installed Redis from the Ubuntu archive: %s", line)
+			}
+		}
+		upstream := "Install upstream packages: nodejs"
+		if !noRedis {
+			upstream += ", redis-server"
+		}
+		if !strings.Contains(preview, upstream+"\n") || !strings.Contains(preview, "/etc/apt/preferences.d/abr-node") {
+			t.Fatalf("upstream packages missing from preview:\n%s", preview)
+		}
+		if strings.Contains(preview, "/etc/apt/sources.list.d/abr-redis.sources") == noRedis || strings.Contains(preview, "/etc/apt/preferences.d/abr-redis") == noRedis {
+			t.Fatalf("Redis repository with NoRedis=%t:\n%s", noRedis, preview)
+		}
+	}
+	if !strings.Contains(nodeRepository.source, "node_"+NodeMajor+".x") || !strings.Contains(redisRepository.source, "URIs: https://"+redisRepository.origin+"/deb\n") || !strings.Contains(nodeRepository.source, "URIs: https://"+nodeRepository.origin+"/") {
+		t.Fatal("repository origins do not match their sources")
+	}
+}

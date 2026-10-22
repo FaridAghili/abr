@@ -24,6 +24,16 @@ import (
 
 const DefaultRoadRunnerVersion = "latest"
 
+// NodeMajor is the shared Node.js LTS line installed from NodeSource.
+const NodeMajor = "26"
+
+type aptRepository struct{ name, keyURL, origin, source, packages string }
+
+var (
+	nodeRepository  = aptRepository{"node", "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key", "deb.nodesource.com", "Types: deb\nURIs: https://deb.nodesource.com/node_" + NodeMajor + ".x\nSuites: nodistro\nComponents: main\nArchitectures: amd64\n", "nodejs"}
+	redisRepository = aptRepository{"redis", "https://packages.redis.io/gpg", "packages.redis.io", "Types: deb\nURIs: https://packages.redis.io/deb\nSuites: resolute\nComponents: main\nArchitectures: amd64\n", "redis redis-server redis-tools redis-sentinel"}
+)
+
 type SetupOptions struct {
 	Hostname                      string
 	RoadRunnerVersion             string
@@ -67,9 +77,6 @@ func (h Host) Setup(o SetupOptions) error {
 		for _, extension := range []string{"cli", "fpm", "bcmath", "curl", "gd", "imagick", "intl", "mbstring", "mysql", "redis", "xml", "zip", "excimer"} {
 			packages = append(packages, "php"+services.PHPVersion+"-"+extension)
 		}
-		if !o.NoRedis {
-			packages = append(packages, "redis-server")
-		}
 		if !o.NoImages {
 			packages = append(packages, "imagemagick-7.q16", "gifsicle", "jpegoptim", "libavif-bin", "optipng", "pngquant", "webp")
 		}
@@ -79,9 +86,16 @@ func (h Host) Setup(o SetupOptions) error {
 		if err := h.command("update-alternatives", "--set", "php", "/usr/bin/php"+services.PHPVersion); err != nil {
 			return err
 		}
-		for _, repo := range []struct{ name, keyURL, source string }{
-			{"node", "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key", "Types: deb\nURIs: https://deb.nodesource.com/node_24.x\nSuites: nodistro\nComponents: main\nArchitectures: amd64\n"},
-		} {
+		// Upstream repositories track newer releases than the Ubuntu archive.
+		// Each pin keeps apt on the upstream package when Ubuntu ships the same name;
+		// replacing Ubuntu's Redis keeps the local redis.conf that includes Abr's policy.
+		repos := []aptRepository{nodeRepository}
+		upstream := []string{"nodejs"}
+		if !o.NoRedis {
+			repos = append(repos, redisRepository)
+			upstream = append(upstream, "redis-server")
+		}
+		for _, repo := range repos {
 			var key []byte
 			if !h.DryRun {
 				armored, err := fetch(repo.keyURL, 1<<20)
@@ -96,14 +110,14 @@ func (h Host) Setup(o SetupOptions) error {
 			if err := h.writeAPTRepository(repo.name, key, repo.source); err != nil {
 				return err
 			}
-		}
-		if err := h.write("/etc/apt/preferences.d/abr-node", []byte("Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n"), 0644); err != nil {
-			return err
+			if err := h.write("/etc/apt/preferences.d/abr-"+repo.name, []byte("Package: "+repo.packages+"\nPin: origin "+repo.origin+"\nPin-Priority: 600\n"), 0644); err != nil {
+				return err
+			}
 		}
 		if err := h.command("apt-get", "-o", "APT::Update::Error-Mode=any", "update"); err != nil {
 			return err
 		}
-		if _, err := h.run("Install shared Node 24/npm", Command{Name: "apt-get", Args: []string{"-o", "DPkg::Lock::Timeout=120", "install", "-y", "nodejs"}, Env: []string{"DEBIAN_FRONTEND=noninteractive"}}); err != nil {
+		if _, err := h.run("Install upstream packages: "+strings.Join(upstream, ", "), Command{Name: "apt-get", Args: append([]string{"-o", "DPkg::Lock::Timeout=120", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", "install", "-y"}, upstream...), Env: []string{"DEBIAN_FRONTEND=noninteractive"}}); err != nil {
 			return err
 		}
 		if err := h.installCaddy(); err != nil {

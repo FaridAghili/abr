@@ -28,7 +28,8 @@ sudo abr setup --hostname my-vps
 sudo abr
 ```
 
-Setup installs PHP 8.5, Node 24, Caddy, RoadRunner, Composer, MySQL, Redis and
+Setup installs PHP 8.5 and MySQL 8.4 LTS from Ubuntu, the latest stable Caddy,
+Node 26 LTS from NodeSource, Redis from packages.redis.io, RoadRunner, Composer and
 image tools. It also configures UFW, Fail2ban, security updates, root's Zsh and
 swap when the server has none, and removes snapd when nothing uses it.
 Use `--admin-user USER` if your SSH account differs from the sudo user.

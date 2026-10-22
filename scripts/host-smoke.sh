@@ -157,6 +157,7 @@ sudo bash -c 'cat /root/.ssh/abr-fixture-ssh.pub >> /root/.ssh/authorized_keys; 
 # Start with Ubuntu's older native Caddy package to exercise setup upgrades.
 sudo apt-get install -y caddy
 caddy_ubuntu_version=$(dpkg-query -W -f='${Version}' caddy)
+# Start with Ubuntu's Redis to exercise the switch to packages.redis.io with data kept.
 sudo apt-get install -y redis-server
 sudo systemctl start redis-server
 sudo redis-cli SET abr-fixture-persist survives-setup >/dev/null
@@ -206,7 +207,7 @@ fixture_caddy_version() {
 fixture_caddy_version
 /usr/local/bin/rr --version | grep -E 'version 2025\.1\.[0-9]+'
 fixture_caddy_format /etc/caddy/Caddyfile
-for repository in node; do
+for repository in node redis; do
   repository_key="/etc/apt/keyrings/abr/$repository.gpg"
   test "$(stat -c '%u:%g:%a' /etc/apt/keyrings/abr)" = 0:0:755
   test "$(stat -c '%u:%g:%a' "$repository_key")" = 0:0:644
@@ -220,6 +221,9 @@ sudo test -f /etc/abr/templates/ssh-hardening.conf.tmpl
 abr_ci config example > "$abr_binary_directory/config.example.toml"
 grep -Fx 'user = "abr-api"' "$abr_binary_directory/config.example.toml"
 sudo redis-cli GET abr-fixture-persist | grep -Fx survives-setup
+apt-cache policy redis-server | grep -F '***' -A1 | grep -F packages.redis.io
+apt-cache policy nodejs | grep -F '***' -A1 | grep -F deb.nodesource.com
+node -p process.versions.node | grep -E '^26\.'
 fixture_default_headers=$(mktemp)
 fixture_default_body=$(mktemp)
 curl --silent --show-error http://127.0.0.1/ -D "$fixture_default_headers" -o "$fixture_default_body"
