@@ -223,7 +223,7 @@ grep -Fx 'user = "abr-api"' "$abr_binary_directory/config.example.toml"
 sudo redis-cli GET abr-fixture-persist | grep -Fx survives-setup
 apt-cache policy redis-server | grep -F '***' -A1 | grep -F packages.redis.io
 apt-cache policy nodejs | grep -F '***' -A1 | grep -F deb.nodesource.com
-node -p process.versions.node | grep -E '^26\.'
+/usr/bin/node -p process.versions.node | grep -E '^26\.'
 fixture_default_headers=$(mktemp)
 fixture_default_body=$(mktemp)
 curl --silent --show-error http://127.0.0.1/ -D "$fixture_default_headers" -o "$fixture_default_body"
