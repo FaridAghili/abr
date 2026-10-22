@@ -162,6 +162,8 @@ sudo apt-get install -y redis-server
 sudo systemctl start redis-server
 sudo redis-cli SET abr-fixture-persist survives-setup >/dev/null
 sudo redis-cli SAVE >/dev/null
+# A locally modified conffile survives the switch, keeping Ubuntu's "daemonize yes".
+echo '# abr-ci local change' | sudo tee -a /etc/redis/redis.conf >/dev/null
 # Exercise preservation of an existing shell configuration on this disposable host.
 printf '%s\n' 'plugins=(git)' "alias abr_shell_fixture='printf preserved'" | sudo tee /root/.zshrc >/dev/null
 sudo chmod 600 /root/.zshrc
@@ -222,6 +224,8 @@ abr_ci config example > "$abr_binary_directory/config.example.toml"
 grep -Fx 'user = "abr-api"' "$abr_binary_directory/config.example.toml"
 sudo redis-cli GET abr-fixture-persist | grep -Fx survives-setup
 apt-cache policy redis-server | grep -F '***' -A1 | grep -F packages.redis.io
+sudo grep -Fx "daemonize yes" /etc/redis/redis.conf
+systemctl is-active redis-server
 apt-cache policy nodejs | grep -F '***' -A1 | grep -F deb.nodesource.com
 /usr/bin/node -p process.versions.node | grep -E '^26\.'
 fixture_default_headers=$(mktemp)

@@ -88,6 +88,8 @@ func (h Host) verifyNode() error {
 	return nil
 }
 
+const redisServiceDropIn = "/etc/systemd/system/redis-server.service.d/abr-supervised.conf"
+
 func (h Host) configureRedis() (result error) {
 	const include = "include /etc/redis/abr.conf"
 	path := "/etc/redis/redis.conf"
@@ -134,6 +136,13 @@ func (h Host) configureRedis() (result error) {
 	policy, err := os.ReadFile(filepath.Join(h.TemplatesDir, "redis-hardening.conf.tmpl"))
 	if err != nil && !h.DryRun {
 		return err
+	}
+	// Install before the first start: a redis.conf kept from Ubuntu's package
+	// daemonizes, which the packages.redis.io unit treats as a failed start.
+	if err := h.setupConfig("redis.service.conf.tmpl", redisServiceDropIn, func() error {
+		return h.command("systemctl", "daemon-reload")
+	}); err != nil {
+		return errors.Join(err, h.command("systemctl", "daemon-reload"))
 	}
 	if h.DryRun || hasDirective(policy, "appendonly yes") {
 		if err := h.command("systemctl", "enable", "--now", "redis-server"); err != nil {
@@ -220,7 +229,7 @@ func (h Host) configurePHP() error {
 }
 
 func requireSetupTemplates(source fs.FS) error {
-	for _, name := range []string{"hostname.cfg.tmpl", "caddy-default.caddy.tmpl", "caddy-site.caddy.tmpl", "caddy-admin.service.conf.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "php-fpm.service.conf.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "automatic-updates.conf.tmpl", "backup.service.tmpl", "backup.timer.tmpl", "swapfile.swap.tmpl", "swap-sysctl.conf.tmpl", "zshrc.tmpl"} {
+	for _, name := range []string{"hostname.cfg.tmpl", "caddy-default.caddy.tmpl", "caddy-site.caddy.tmpl", "caddy-admin.service.conf.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "php-fpm.service.conf.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "redis.service.conf.tmpl", "automatic-updates.conf.tmpl", "backup.service.tmpl", "backup.timer.tmpl", "swapfile.swap.tmpl", "swap-sysctl.conf.tmpl", "zshrc.tmpl"} {
 		if info, err := fs.Stat(source, name); err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("missing embedded template %s", name)
 		}

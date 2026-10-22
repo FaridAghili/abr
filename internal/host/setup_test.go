@@ -267,6 +267,30 @@ func TestRedisValidationFailureRestoresOriginalConfigs(t *testing.T) {
 	}
 }
 
+func TestRedisRunsSupervisedBeforeFirstStart(t *testing.T) {
+	h, r := setupFixture(t)
+	if err := h.write("/etc/redis/redis.conf", []byte("daemonize yes\nbind 127.0.0.1\n"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := false
+	r.fail = func(c Command) error {
+		if c.Name == "systemctl" && slices.Equal(c.Args, []string{"daemon-reload"}) {
+			reloaded = true
+		}
+		if c.Name == "systemctl" && slices.Contains(c.Args, "redis-server") && !reloaded {
+			t.Fatalf("started Redis before loading the supervised unit: %v", c.Args)
+		}
+		return nil
+	}
+	if err := h.configureRedis(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := h.read(redisServiceDropIn)
+	if err != nil || !strings.Contains(string(data), "ExecStart=\nExecStart=/usr/bin/redis-server /etc/redis/redis.conf --supervised systemd --daemonize no\n") {
+		t.Fatal("Redis unit does not override a daemonizing redis.conf")
+	}
+}
+
 func TestRedisSecuresPackagedDirectoryBeforeManagedWrites(t *testing.T) {
 	h, r := setupFixture(t)
 	if err := h.write("/etc/redis/redis.conf", []byte("bind 127.0.0.1\n"), 0640); err != nil {

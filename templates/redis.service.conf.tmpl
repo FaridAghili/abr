@@ -1,0 +1,6 @@
+# Managed by abr; edit the source template instead.
+[Service]
+# The packages.redis.io unit waits for systemd readiness, but a redis.conf kept
+# from Ubuntu's package says "daemonize yes". Command-line options override it.
+ExecStart=
+ExecStart=/usr/bin/redis-server /etc/redis/redis.conf --supervised systemd --daemonize no
