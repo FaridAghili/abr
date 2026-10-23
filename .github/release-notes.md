@@ -5,11 +5,12 @@ Abr 1.0.0 is the initial release for fresh Ubuntu 26.04 LTS AMD64 servers.
 - Dedicated app users, managed services and ports, deployment preflight checks,
   database backup/import, and removal that preserves app data unless purged.
 - VPS setup with key-only SSH, UFW, Fail2ban, automatic security updates, swap and unused snapd removal.
+- Zsh with Oh My Zsh, autosuggestions and syntax highlighting for root and the SSH administrator.
 - Continuous VPS setup through GitHub keys, optional Composer credentials and
   the TablePlus MySQL login.
 - Clone-to-deploy workflow with framework detection, optional advanced settings,
   automatic `.env` database values and an app-user editor.
-- Server updates for apt packages, Composer and shared global npm tools.
+- Server updates for apt packages, Caddy, Composer, shared global npm tools and Oh My Zsh.
 - Online app backups with saved source, managed SQL, secrets and uploads,
   sequential SSH transfer and SHA256 verification.
 - Guided SSH host fingerprint confirmation and clear backup destination errors.
