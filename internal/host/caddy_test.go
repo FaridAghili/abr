@@ -16,7 +16,7 @@ var caddyFixturePackage = []byte("disposable Debian package fixture")
 
 func caddyFixtureMetadata() []byte {
 	sum := sha256.Sum256(caddyFixturePackage)
-	return []byte(fmt.Sprintf(`{"tag_name":"v2.11.7","assets":[{"name":"caddy_2.11.7_linux_amd64.deb","browser_download_url":"https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.deb","digest":"sha256:%s"}]}`, hex.EncodeToString(sum[:])))
+	return fmt.Appendf(nil, `{"tag_name":"v2.11.7","assets":[{"name":"caddy_2.11.7_linux_amd64.deb","browser_download_url":"https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.deb","digest":"sha256:%s"}]}`, hex.EncodeToString(sum[:]))
 }
 
 func caddyFixtureDownload(url string, limit int64) ([]byte, error) {

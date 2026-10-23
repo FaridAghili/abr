@@ -52,9 +52,9 @@ func (r *adminRunner) Run(c Command) ([]byte, error) {
 		}
 		return []byte("root@127.0.0.1\n"), nil
 	case strings.Contains(sql, "Select_priv='Y'"):
-		return []byte(fmt.Sprintf("%d\n", boolInt(r.granted))), nil
+		return fmt.Appendf(nil, "%d\n", boolInt(r.granted)), nil
 	case strings.HasPrefix(sql, "SELECT COUNT(*) FROM mysql.user"):
-		return []byte(fmt.Sprintf("%d\n", boolInt(r.exists))), nil
+		return fmt.Appendf(nil, "%d\n", boolInt(r.exists)), nil
 	}
 	return nil, nil
 }

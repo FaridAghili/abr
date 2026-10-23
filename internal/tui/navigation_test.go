@@ -40,7 +40,7 @@ func TestAppsMenuSortsAppsAndShowsConfiguredSettings(t *testing.T) {
 	m.next() // Main menu → Apps.
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := viewText(m)
-	if strings.Index(view, "alpha · laravel") < 0 || strings.Index(view, "alpha · laravel") >= strings.Index(view, "zebra · laravel") {
+	if !strings.Contains(view, "alpha · laravel") || strings.Index(view, "alpha · laravel") >= strings.Index(view, "zebra · laravel") {
 		t.Fatalf("projects not sorted: %s", view)
 	}
 	for _, settings := range []string{"FPM · Queue: 0 · Scheduler: off · Nightwatch: off", "Octane (4) · Queue: 3 · Scheduler: on · Nightwatch: on"} {

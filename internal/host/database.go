@@ -123,7 +123,7 @@ func (h Host) database(a config.App, show bool) error {
 	// Socket and TCP identities are separate when skip_name_resolve is enabled.
 	// Record ownership before creation and never adopt an unrecorded TCP account.
 	if !c.TCPManaged {
-		out, err := h.mysql([]byte(fmt.Sprintf("SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1';\n", c.User)))
+		out, err := h.mysql(fmt.Appendf(nil, "SELECT COUNT(*) FROM mysql.user WHERE User='%s' AND Host='127.0.0.1';\n", c.User))
 		if err != nil {
 			return err
 		}
@@ -137,7 +137,7 @@ func (h Host) database(a config.App, show bool) error {
 		}
 	}
 	if !c.TCPReady {
-		if _, err := h.mysql([]byte(fmt.Sprintf("CREATE USER IF NOT EXISTS '%s'@'127.0.0.1' IDENTIFIED BY '%s';\n", c.User, c.Password))); err != nil {
+		if _, err := h.mysql(fmt.Appendf(nil, "CREATE USER IF NOT EXISTS '%s'@'127.0.0.1' IDENTIFIED BY '%s';\n", c.User, c.Password)); err != nil {
 			return err
 		}
 	}

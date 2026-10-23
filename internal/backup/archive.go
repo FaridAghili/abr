@@ -336,7 +336,8 @@ func Extract(r io.Reader, directory string) (Manifest, error) {
 			return manifest, fmt.Errorf("too many backup entries (limit %d)", maxEntries)
 		}
 		record := File{Size: header.Size, Mode: header.Mode}
-		if header.Typeflag == tar.TypeDir {
+		switch header.Typeflag {
+		case tar.TypeDir:
 			if header.Size != 0 {
 				return manifest, fmt.Errorf("invalid backup directory")
 			}
@@ -344,7 +345,7 @@ func Extract(r io.Reader, directory string) (Manifest, error) {
 				return manifest, err
 			}
 			record.Directory = true
-		} else if header.Typeflag == tar.TypeReg {
+		case tar.TypeReg:
 			if err := root.MkdirAll(path.Dir(name), 0700); err != nil {
 				return manifest, err
 			}
@@ -362,7 +363,7 @@ func Extract(r io.Reader, directory string) (Manifest, error) {
 				return manifest, closeErr
 			}
 			record.SHA256 = hex.EncodeToString(sum.Sum(nil))
-		} else {
+		default:
 			return manifest, fmt.Errorf("backup links and special files are forbidden")
 		}
 		records[name] = record

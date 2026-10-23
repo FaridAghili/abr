@@ -78,7 +78,7 @@ func TestUsageReportReadsProcForVerifiedAppUsers(t *testing.T) {
 		t.Fatal("unknown app accepted")
 	}
 	// A same-named account that is not the dedicated runtime user is never attributed.
-	if err := os.WriteFile(h.path("/etc/passwd"), []byte(fmt.Sprintf("%s:x:%d:%d:someone:/home/x:/bin/bash\n", a.User, uid, uid)), 0644); err != nil {
+	if err := os.WriteFile(h.path("/etc/passwd"), fmt.Appendf(nil, "%s:x:%d:%d:someone:/home/x:/bin/bash\n", a.User, uid, uid), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if report, _, err := h.UsageReport(a.Name, nil, 0); err != nil || report.Apps[0].Known || report.Apps[0].Processes != 0 {

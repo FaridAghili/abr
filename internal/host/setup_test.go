@@ -202,11 +202,12 @@ func TestMySQLSecurityRefusesUnsafeExistingStateAndSetsLocalPolicy(t *testing.T)
 	for _, bad := range []string{"version", "existing accounts", "hostname accounts"} {
 		t.Run(bad, func(t *testing.T) {
 			h, r := setupFixture(t)
-			if bad == "version" {
+			switch bad {
+			case "version":
 				r.version = "9.7.0\n"
-			} else if bad == "hostname accounts" {
+			case "hostname accounts":
 				r.hostnameAccounts = "1\n"
-			} else {
+			default:
 				r.insecure = "1\n"
 			}
 			if err := h.hardenMySQL(); err == nil {
