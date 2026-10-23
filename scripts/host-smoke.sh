@@ -174,12 +174,28 @@ fixture_shell() {
     zsh -i -c '[[ $plugins[-1] == zsh-syntax-highlighting && ${plugins[(Ie)git]} -gt 0 && ${plugins[(Ie)zsh-autosuggestions]} -gt 0 && ${+functions[_zsh_autosuggest_start]} == 1 && ${+functions[_zsh_highlight]} == 1 ]] && [[ $(abr_shell_fixture) == preserved ]]'
   test "$(sudo grep -Fc '# Begin abr shell' /root/.zshrc)" = 1
 }
+# A separate SSH administrator gets the same shell, configured as that user.
+sudo useradd --create-home --shell /bin/bash abr-ci-admin
+sudo install -d -m 700 -o abr-ci-admin -g abr-ci-admin /home/abr-ci-admin/.ssh
+sudo install -m 600 -o abr-ci-admin -g abr-ci-admin /root/.ssh/abr-fixture-ssh.pub /home/abr-ci-admin/.ssh/authorized_keys
+printf '%s\n' 'plugins=(docker)' "alias abr_shell_fixture='printf preserved'" | sudo -u abr-ci-admin tee /home/abr-ci-admin/.zshrc >/dev/null
+sudo cp /home/abr-ci-admin/.zshrc "$abr_binary_directory/admin-zshrc-before"
+fixture_admin_shell() {
+  test "$(getent passwd abr-ci-admin | cut -d: -f7)" = /usr/bin/zsh
+  sudo -u abr-ci-admin env -i HOME=/home/abr-ci-admin USER=abr-ci-admin LOGNAME=abr-ci-admin PATH=/usr/local/bin:/usr/bin:/bin TERM=xterm \
+    zsh -i -c '[[ $plugins[-1] == zsh-syntax-highlighting && ${plugins[(Ie)docker]} -gt 0 && ${plugins[(Ie)zsh-autosuggestions]} -gt 0 && ${+functions[_zsh_autosuggest_start]} == 1 && ${+functions[_zsh_highlight]} == 1 ]] && [[ $(abr_shell_fixture) == preserved ]]'
+  test "$(sudo grep -Fc '# Begin abr shell' /home/abr-ci-admin/.zshrc)" = 1
+  # Nothing in the administrator's home may belong to root.
+  test -z "$(sudo find /home/abr-ci-admin -not -user abr-ci-admin -print -quit)"
+  sudo cmp /home/abr-ci-admin/.zshrc.pre-abr "$abr_binary_directory/admin-zshrc-before"
+}
 # Exercise swap creation: setup only adds swap to a server without any.
 sudo swapoff -a
 # The runner image may ship an unlabeled /swapfile, which setup refuses to touch.
 sudo rm -f /swapfile
-abr_ci setup --hostname abr-ci-vps --no-firewall --ssh-port 22 --admin-user root
+abr_ci setup --hostname abr-ci-vps --no-firewall --ssh-port 22 --admin-user abr-ci-admin
 fixture_shell
+fixture_admin_shell
 swapon --show=NAME --noheadings | grep -Fx /swapfile
 test "$(sudo blkid --match-tag LABEL --output value /swapfile)" = abr-swap
 test "$(sudo stat -c '%u:%a' /swapfile)" = 0:600
@@ -267,6 +283,12 @@ for shell_repository in "${shell_repositories[@]}"; do
   sudo git -C "$shell_repository" rev-parse HEAD | sudo tee "$abr_binary_directory/$(basename "$shell_repository").head" >/dev/null
   sudo git -C "$shell_repository" reset --hard HEAD~1
 done
+admin_shell_repositories=(/home/abr-ci-admin/.oh-my-zsh /home/abr-ci-admin/.oh-my-zsh/custom/plugins/zsh-autosuggestions /home/abr-ci-admin/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting)
+for shell_repository in "${admin_shell_repositories[@]}"; do
+  sudo -u abr-ci-admin git -C "$shell_repository" fetch --deepen=1 origin master
+  sudo -u abr-ci-admin git -C "$shell_repository" rev-parse HEAD | sudo tee "$abr_binary_directory/admin-$(basename "$shell_repository").head" >/dev/null
+  sudo -u abr-ci-admin git -C "$shell_repository" reset --hard HEAD~1
+done
 sudo cp /root/.zshrc "$abr_binary_directory/zshrc-before-update"
 # Downgrade only this disposable fixture to exercise abr update's GitHub upgrade.
 sudo apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
@@ -283,6 +305,11 @@ sudo cmp /root/.zshrc "$abr_binary_directory/zshrc-before-update"
 for shell_repository in "${shell_repositories[@]}"; do
   shell_expected=$(sudo cat "$abr_binary_directory/$(basename "$shell_repository").head")
   sudo git -C "$shell_repository" merge-base --is-ancestor "$shell_expected" HEAD
+done
+fixture_admin_shell
+for shell_repository in "${admin_shell_repositories[@]}"; do
+  shell_expected=$(sudo cat "$abr_binary_directory/admin-$(basename "$shell_repository").head")
+  sudo -u abr-ci-admin git -C "$shell_repository" merge-base --is-ancestor "$shell_expected" HEAD
 done
 sudo cmp /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin-before-update.json"
 sudo redis-cli GET abr-fixture-persist | grep -Fx survives-setup

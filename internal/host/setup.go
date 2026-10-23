@@ -145,7 +145,7 @@ func (h Host) Setup(o SetupOptions) error {
 		if err := h.configureSwap(); err != nil {
 			return err
 		}
-		if err := h.setupShell(); err != nil {
+		if err := h.setupShell(admin.name); err != nil {
 			return err
 		}
 		if err := h.configureHostname(o.Hostname); err != nil {

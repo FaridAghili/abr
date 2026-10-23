@@ -30,6 +30,12 @@ func sshValues(data []byte) map[string]string {
 	return values
 }
 
+// Reuse the portable Unix username validation for administrator accounts.
+func validAdminUser(name string) bool {
+	a := config.App{Name: "admin", User: name, Directory: "/srv/admin", Domain: "admin.test", Type: "nuxt"}
+	return a.Validate() == nil
+}
+
 // Check for a usable key before installing packages or changing authentication.
 // The owner still verifies a real second SSH session before setup.
 func (h Host) sshPreflight(name string) (sshAdmin, error) {
@@ -39,9 +45,7 @@ func (h Host) sshPreflight(name string) (sshAdmin, error) {
 			name = "root"
 		}
 	}
-	// Reuse the portable Unix username validation, permitting root as an admin.
-	a := config.App{Name: "admin", User: name, Directory: "/srv/admin", Domain: "admin.test", Type: "nuxt"}
-	if name != "root" && a.Validate() != nil {
+	if name != "root" && !validAdminUser(name) {
 		return sshAdmin{}, fmt.Errorf("invalid SSH administrator username")
 	}
 	admin := sshAdmin{name: name, context: "user=" + name + ",host=localhost,addr=127.0.0.1"}
