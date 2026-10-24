@@ -51,9 +51,9 @@ SQL
   fixture_https api.fixture-octane.localhost | grep -F 'Abr Nuxt fixture'
   fixture_refused 'already registered on this server' restore "$app_restore_php" --yes
   # The same backup restored under a new name beside the registered app. Move
-  # the existing app to another domain first; renamed restores keep domains.
+  # the existing app off every saved domain first; renamed restores keep them.
   sudo cp /var/lib/abr-ci/databases/fixture-php.json "$abr_binary_directory/app-existing-db"
-  abr_ci edit fixture-php --domain fixture-php-current.localhost
+  abr_ci edit fixture-php --domain fixture-php-current.localhost --alias '' --serving-domain ''
   abr_ci enable fixture-php
   abr_ci restore "$app_restore_php" --name fixture-php-old --dry-run > "$abr_binary_directory/app-renamed.log"
   grep -F 'Restoring fixture-php as fixture-php-old' "$abr_binary_directory/app-renamed.log"
@@ -87,6 +87,7 @@ SQL
   sudo cmp /var/lib/abr-ci/databases/fixture-php.json "$abr_binary_directory/app-existing-db"
   fixture_https fixture-php-current.localhost | grep -F 'Laravel fixture database=1'
   fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
+  fixture_https extra.fixture-php.localhost | grep -F 'Laravel fixture database=1'
   # Reset only the recorded disposable fixtures for the following full archive
   # test. Retain the shared runtime ownership record just as its first reset did.
   for app_restore_name in fixture-php-old fixture-php fixture-octane fixture-ssr fixture-spa; do
