@@ -459,14 +459,14 @@ func TestFullTransferCLIValidationAndBackupPreview(t *testing.T) {
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
 		t.Fatal("backup preview wrote archive")
 	}
-	for _, command := range [][]string{{"backup"}, {"backup", "unexpected", "--output", output}, {"backup", "--output", "relative.tar.gz"}, {"restore"}, {"restore", output, "extra"}, {"restore", output}, {"restore", output, "--yes", "--ssh-port", "70000"}} {
+	for _, command := range [][]string{{"backup"}, {"backup", "unexpected", "--output", output}, {"backup", "--output", "relative.tar.gz"}, {"restore"}, {"restore", output, "extra"}, {"restore", output}, {"restore", output, "--yes", "--ssh-port", "70000"}, {"restore", output, "--yes", "--name", "Bad_Name"}, {"restore", output, filepath.Join(dir, "other.tar.gz"), "--yes", "--name", "new"}} {
 		out, err := invoke(t, append(append([]string{}, paths...), command...)...)
 		if err == nil || out != "" {
 			t.Fatal("invalid transfer reported success", command, out, err)
 		}
 	}
 	help, err := invoke(t, "help")
-	if err != nil || !strings.Contains(help, "restore FILE.tar.gz... | DIR --yes") {
+	if err != nil || !strings.Contains(help, "restore FILE.tar.gz... | DIR --yes") || !strings.Contains(help, "--name NEW restores one app backup") {
 		t.Fatal("full transfer missing from help", err)
 	}
 }

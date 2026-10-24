@@ -76,6 +76,8 @@ Commands:
   restore FILE.tar.gz... | DIR --yes
                    Add app backups to this server, or restore everything on a fresh server;
                    DIR restores the newest app backup of each app in it
+                   --name NEW restores one app backup as NEW: its project, user, MySQL
+                   database and account, services and ports are renamed; domains are kept
   database backup APP... | --all --output-dir DIR
                    Export selected/all managed databases as private SQL files
   database import APP FILE.sql --yes
@@ -204,6 +206,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&restore.Yes, "yes", false, "confirm SQL imports, and Redis data from a full backup")
 		fs.StringVar(&restore.AdminUser, "admin-user", "", "existing administrator on this new server")
 		fs.IntVar(&restore.SSHPort, "ssh-port", 0, "SSH port to preserve on this new server (default: discover)")
+		fs.StringVar(&restore.Name, "name", "", "restore one app backup under this new app name, e.g. beside an app with the same name")
 	case "disk":
 		fs.BoolVar(&diskUsage.All, "all", false, "report all registered apps (default without APP)")
 		fs.BoolVar(&diskUsage.Refresh, "refresh", false, "bypass the one-minute app-size cache")

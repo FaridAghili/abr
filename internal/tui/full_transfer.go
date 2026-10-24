@@ -82,7 +82,8 @@ func (m *model) fullBackupForm() tea.Cmd {
 }
 
 func (m *model) fullRestoreForm() tea.Cmd {
-	var input string
+	var input, name string
+	var rename bool
 	return m.setForm("form", "Restore", func() tea.Cmd {
 		files, err := restorePaths(input)
 		if err != nil {
@@ -90,13 +91,23 @@ func (m *model) fullRestoreForm() tea.Cmd {
 		}
 		args := append([]string{"restore"}, files...)
 		args = append(args, "--yes")
-		return m.review(action{title: "Restore", args: args, note: fmt.Sprintf("Backup: %s\n\nConfirm SQL and Redis imports when included. On a server that is already set up, app backups are added as new apps; its settings, other apps and Redis data stay unchanged, and an app or database that already exists is refused. A fresh Ubuntu server with working SSH key access is provisioned from the backup's settings first; a full server archive restores only there. Recreate users/accounts, restore the bundled source and lockfiles, restore .env/uploads/data, build, migrate and optimize. App backups exclude shared Redis data and Caddy certificates. Previously enabled apps start only after all builds succeed. Keep the old server’s workers stopped during cutover.", input)})
+		note := fmt.Sprintf("Backup: %s\n\n", input)
+		if rename {
+			if len(files) != 1 {
+				return m.workflowError("Restore", fmt.Errorf("A new name restores one app backup; %s holds backups of %d apps. Enter that app's .tar.gz file instead.", input, len(files)))
+			}
+			args = append(args, "--name", name)
+			note = fmt.Sprintf("Backup: %s\nRestore as: %s\nProject: %s\n\nThe backup's app is renamed to %s. Its Linux user, MySQL database and account, services, ports and records use the new name, and DB_DATABASE and DB_USERNAME in its .env are updated. Domains, secrets, uploads and data are kept as saved. An app named %s on this server is refused, so other apps stay unchanged.\n\n", input, name, filepath.Join(m.options.AppsDir, name), name, name)
+		}
+		return m.review(action{title: "Restore", args: args, note: note + "Confirm SQL and Redis imports when included. On a server that is already set up, app backups are added as new apps; its settings, other apps and Redis data stay unchanged, and an app or database that already exists is refused. A fresh Ubuntu server with working SSH key access is provisioned from the backup's settings first; a full server archive restores only there. Recreate users/accounts, restore the bundled source and lockfiles, restore .env/uploads/data, build, migrate and optimize. App backups exclude shared Redis data and Caddy certificates. Previously enabled apps start only after all builds succeed. Keep the old server’s workers stopped during cutover."})
 	}, huh.NewGroup(textInput("Backup file or directory", "Absolute archive path, or a directory of app backups; the newest backup of each app is used. Copy the backups here first.", "/var/backups/abr/restore", &input).Validate(func(s string) error {
 		if !filepath.IsAbs(s) || strings.ContainsAny(s, "\x00\r\n") {
 			return errors.New("Use an absolute backup file or directory")
 		}
 		return nil
-	})))
+	})),
+		huh.NewGroup(huh.NewSelect[bool]().Title("App name").Description("Keep the saved name, or restore one app under a new name when this server already has an app with that name.\nExample: restore api as api-old beside the existing api.").Options(huh.NewOption("Keep the backup's name (default)", false), huh.NewOption("Restore under a new name", true)).Value(&rename)),
+		huh.NewGroup(textInput("New app name", "Name for the restored app; its project, user, database and services follow it. Domains are kept.", "api-old", &name).Validate(applicationName)).WithHideFunc(func() bool { return !rename }))
 }
 
 func restorePaths(input string) ([]string, error) {

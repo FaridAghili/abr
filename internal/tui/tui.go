@@ -810,6 +810,9 @@ func nextStep(args []string) string {
 		}
 		return "Copy the private backup archive to storage outside this VPS."
 	case "restore":
+		if slices.Contains(args, "--name") {
+			return "Open the app by its new name to check it, point its domains at this server, and keep the old server’s workers stopped."
+		}
 		return "Check the restored apps, point DNS at this server, and keep the old server’s workers stopped."
 	case "edit":
 		if slices.Contains(args, "--backup-schedule") {

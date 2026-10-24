@@ -16,6 +16,7 @@ import (
 	"abr/internal/config"
 	"abr/internal/manager"
 	"abr/internal/ports"
+	"abr/internal/services"
 )
 
 type fullRunner struct {
@@ -595,7 +596,7 @@ func TestRestoreAppsIntoSetUpServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := setEnvValues([]byte("APP_KEY=existing-key\n"), [][2]string{{"DB_CONNECTION", "mysql"}, {"DB_HOST", "127.0.0.1"}, {"DB_PORT", "3306"}, {"DB_DATABASE", original.Database}, {"DB_USERNAME", original.User}, {"DB_PASSWORD", original.Password}})
+	env := setEnvValues([]byte("APP_KEY=existing-key\nLOG_PATH="+a.Directory+"/storage/logs/app.log\n"), [][2]string{{"DB_CONNECTION", "mysql"}, {"DB_HOST", "127.0.0.1"}, {"DB_PORT", "3306"}, {"DB_DATABASE", original.Database}, {"DB_USERNAME", original.User}, {"DB_PASSWORD", original.Password}})
 	if err := os.WriteFile(filepath.Join(a.Directory, ".env"), env, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -709,5 +710,121 @@ func TestRestoreAppsIntoSetUpServer(t *testing.T) {
 	}
 	if err := h.RestoreArchives([]string{output}, RestoreOptions{Yes: true}); err == nil || !strings.Contains(err.Error(), "fresh server") {
 		t.Fatal("full-server backup restored into a set-up server", err)
+	}
+
+	// The same app restored under a new name beside the existing app.
+	for name, options := range map[string]RestoreOptions{
+		"one app backup":     {Yes: true, Name: "app-old"},
+		"lowercase":          {Yes: true, Name: "App-Old"},
+		"already registered": {Yes: true, Name: "web"},
+	} {
+		inputs := current
+		if name == "one app backup" {
+			inputs = []string{directory}
+		}
+		if err := h.RestoreArchives(inputs, options); err == nil || !strings.Contains(err.Error(), name) {
+			t.Fatal("invalid renamed restore accepted", options, err)
+		}
+	}
+	if err := h.Manager.Edit("app", config.AppChanges{Values: config.App{Domain: "www.app.localhost"}, Fields: []string{"domain"}}, true); err != nil {
+		t.Fatal(err)
+	}
+	existing, err := h.transferCredentials(c.Apps[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	existingEnv, err := os.ReadFile(filepath.Join(h.AppsDir, "app/.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Output = &bytes.Buffer{}
+	h.DryRun = true
+	if err := h.RestoreArchives(current, RestoreOptions{Name: "app-old"}); err != nil {
+		t.Fatal(err)
+	}
+	if text := h.Output.(*bytes.Buffer).String(); !strings.Contains(text, "Restoring app as app-old") || !strings.Contains(text, "Would restore app-old") || !strings.Contains(text, filepath.Join(h.AppsDir, "app-old")) {
+		t.Fatal("renamed preview inaccurate", text)
+	}
+	h.DryRun = false
+	// This fake MySQL reports any database once one exists; the new identity is unused.
+	base.database, base.tcp = false, false
+	first := len(base.calls)
+	if err := h.RestoreArchives(current, RestoreOptions{Yes: true, Name: "app-old"}); err != nil {
+		t.Fatal(err)
+	}
+	c, r, err = h.Manager.Snapshot()
+	if err != nil || len(c.Apps) != 4 {
+		t.Fatal("renamed app not registered", err)
+	}
+	renamed, _, err := h.application("app-old")
+	if err != nil || renamed.Directory != filepath.Join(h.AppsDir, "app-old") || renamed.User != "abr-app-old" || renamed.Domain != "app.localhost" {
+		t.Fatal("renamed app settings wrong", renamed, err)
+	}
+	moved, err := h.transferCredentials(renamed)
+	if err != nil || moved.App != "app-old" || moved.Database != "app_old" || moved.User != "app_old" || moved.Password != original.Password || !moved.TCPReady {
+		t.Fatal("database identity not renamed", moved, err)
+	}
+	data, err := os.ReadFile(filepath.Join(h.AppsDir, "app-old/.env"))
+	if err != nil || dotenvValue(data, "DB_DATABASE") != "app_old" || dotenvValue(data, "DB_USERNAME") != "app_old" || dotenvValue(data, "DB_PASSWORD") != original.Password || dotenvValue(data, "APP_KEY") != "existing-key" {
+		t.Fatal("renamed .env not updated", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(h.AppsDir, "app-old/storage/app/private/private.txt")); err != nil || string(data) != "private fixture upload" {
+		t.Fatal("renamed uploads not restored", err)
+	}
+	for _, path := range []string{h.credentialsEnvPath("app-old"), h.userPath(renamed)} {
+		if _, err := os.Stat(h.path(path)); err != nil {
+			t.Fatal("renamed app record missing", path, err)
+		}
+	}
+	plan, err := services.Render(renamed, r, h.TemplatesDir, h.Manager.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range plan.Files {
+		rest := strings.ReplaceAll(file.Path+"\n"+string(file.Data), "abr-app-old", "")
+		if !strings.Contains(file.Path, "app-old") || strings.Contains(rest, "abr-app") || strings.Contains(rest, filepath.Join(h.AppsDir, "app")+"/") {
+			t.Fatal("renamed services still use the old name", file.Path)
+		}
+	}
+	// The existing app keeps its records, data and MySQL identity untouched.
+	if kept, err := h.transferCredentials(c.Apps[1]); err != nil || kept != existing {
+		t.Fatal("existing app database record changed", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(h.AppsDir, "app/.env")); err != nil || !bytes.Equal(data, existingEnv) {
+		t.Fatal("existing app .env changed", err)
+	}
+	for _, call := range base.calls[first:] {
+		text := string(call.Input) + " " + strings.Join(call.Args, " ")
+		if strings.Contains(text, "`app`") || strings.Contains(text, "'app'@") || strings.Contains(text, "--user abr-app ") || strings.Contains(text, "--database=app ") || (call.Name == "useradd" && slices.Contains(call.Args, "abr-app")) {
+			t.Fatal("renamed restore touched the existing app", call.Name, call.Args)
+		}
+	}
+	text = h.Output.(*bytes.Buffer).String()
+	if !strings.Contains(text, "Review LOG_PATH in app-old's .env") || !strings.Contains(text, "App restore complete: 1 apps") || strings.Contains(text, original.Password) {
+		t.Fatal("renamed restore report inaccurate", text)
+	}
+}
+
+func TestRenamedRestoreOnFreshServerAndEnvReview(t *testing.T) {
+	source, _, output, cleanup := fullFixture(t, false)
+	defer cleanup()
+	if err := source.FullBackup(output); err != nil {
+		t.Fatal(err)
+	}
+	h := freshFullHost(t)
+	h.DryRun = true
+	if err := h.FullRestore(output, RestoreOptions{Name: "renamed"}); err != nil {
+		t.Fatal(err)
+	}
+	text := h.Output.(*bytes.Buffer).String()
+	if !strings.Contains(text, "Restoring app as renamed") || !strings.Contains(text, filepath.Join(h.AppsDir, "renamed")) || strings.Contains(text, filepath.Join(h.AppsDir, "app")+" ") {
+		t.Fatal("fresh-server rename preview inaccurate", text)
+	}
+	if _, err := os.Stat(h.Manager.StateDir); !os.IsNotExist(err) {
+		t.Fatal("preview provisioned state")
+	}
+	env := []byte("# LOG=/srv/apps/demo/x\nAPP_NAME=demo\nLOG_PATH=\"/srv/apps/demo/storage/logs\"\nexport CACHE=/srv/apps/demo\nOTHER=/srv/apps/demo-two/x\nDB_URL=mysql://demo@127.0.0.1/demo\nDATABASE_URL=\n")
+	if keys := renamedEnvReview(env, []string{"/srv/apps/demo", "/srv/apps/demo/"}); strings.Join(keys, ",") != "LOG_PATH,CACHE,DB_URL" {
+		t.Fatal("renamed .env review inaccurate", keys)
 	}
 }

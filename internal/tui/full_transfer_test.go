@@ -156,3 +156,41 @@ func TestOnlineAppBackupReviewAndRestoreDirectory(t *testing.T) {
 		t.Fatal("destination configuration missing described first field")
 	}
 }
+
+func TestRestoreUnderNewName(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"api-20261010020000.tar.gz", "portal-20261010020000.tar.gz"} {
+		if err := os.WriteFile(filepath.Join(directory, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, input := range []string{"/var/backups/abr/api-20261010020000.tar.gz", directory} {
+		m := newModel(testOptions(t))
+		m.fullTransferMenu()
+		m.fullRestoreForm()
+		m.Update(tea.PasteMsg{Content: input})
+		m.form.NextGroup()
+		if view := viewText(m); !strings.Contains(view, "App name") || !strings.Contains(view, "Example:") || strings.Contains(view, "New app name") {
+			t.Fatal("rename choice missing or shown out of order", view)
+		}
+		press(m, tea.KeyDown)
+		m.form.NextGroup()
+		if view := viewText(m); !strings.Contains(view, "New app name") || !strings.Contains(view, "Example:") {
+			t.Fatal("new name field lacks description/example", view)
+		}
+		m.Update(tea.PasteMsg{Content: "api-old"})
+		m.next()
+		if input == directory {
+			if m.page == "confirm" || !strings.Contains(viewText(m), "one app backup") {
+				t.Fatal("renamed restore of several apps reached confirmation")
+			}
+			continue
+		}
+		if m.page != "confirm" || m.approved || strings.Join(m.current.args, " ") != "restore "+input+" --yes --name api-old" || !strings.Contains(m.reviewText, "Restore as: api-old") || !strings.Contains(m.reviewText, filepath.Join(m.options.AppsDir, "api-old")) {
+			t.Fatal("renamed restore review inaccurate", m.current.args, m.reviewText)
+		}
+	}
+	if !strings.Contains(nextStep([]string{"restore", "/x.tar.gz", "--yes", "--name", "api-old"}), "new name") {
+		t.Fatal("renamed restore lacks next-step guidance")
+	}
+}

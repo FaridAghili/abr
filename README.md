@@ -76,6 +76,7 @@ not automatically rolled back.
 | Schedule backups, keep newest 7 | `sudo abr edit api --backup-schedule daily --backup-keep 7` |
 | Check backup schedules | `sudo abr backup status` |
 | Restore app backups or a server | `sudo abr restore /var/backups/abr/restore --yes` |
+| Restore an app under a new name | `sudo abr restore /var/backups/abr/api-20261010020000.tar.gz --name api-old --yes` |
 | Remove an app, keeping its data | `sudo abr remove api` |
 
 Backups use the saved remote destination when configured; otherwise they stay
@@ -87,7 +88,11 @@ deleted locally and on the backup server, which needs only SSH access and a
 private directory. Archives contain secrets and are **not encrypted**. Keep a protected
 off-server copy and test restores. Restoring a directory uses the newest backup
 of each app in it. On a set-up server, app backups are added as new apps; on a
-fresh server, the saved server settings are provisioned first. Permanent
+fresh server, the saved server settings are provisioned first. When an app with
+the same name already exists, `--name` restores one app backup under a new
+name: its project, user, MySQL database and account, services and ports follow
+the new name, `DB_DATABASE`/`DB_USERNAME` in its `.env` are updated, and its
+domains are kept. Permanent
 removal requires `--purge --yes`.
 
 In menus, type to filter, Enter to continue, Shift+Tab to revisit a field,

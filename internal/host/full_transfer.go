@@ -37,6 +37,8 @@ type RestoreOptions struct {
 	Yes       bool
 	AdminUser string
 	SSHPort   int
+	// Name restores a single-app backup under a new app name.
+	Name string
 }
 
 func (h Host) backupSettings() (backup.Settings, error) {
@@ -415,6 +417,14 @@ func (h Host) RestoreArchives(inputs []string, o RestoreOptions) error {
 	if o.SSHPort < 0 || o.SSHPort > 65535 {
 		return fmt.Errorf("invalid SSH port")
 	}
+	if o.Name != "" {
+		if !config.ValidName(o.Name) {
+			return fmt.Errorf("--name must start with a lowercase letter and contain only lowercase letters, digits, or hyphens (max 63 characters)")
+		}
+		if len(inputs) != 1 {
+			return fmt.Errorf("--name restores one app backup; select its archive instead of %d", len(inputs))
+		}
+	}
 	if err := h.guard(); err != nil {
 		return err
 	}
@@ -441,6 +451,9 @@ func (h Host) RestoreArchives(inputs []string, o RestoreOptions) error {
 		}
 	}
 	if err := validateFullBackup(m, stage); err != nil {
+		return err
+	}
+	if err := h.renameRestore(&m, stage, o.Name); err != nil {
 		return err
 	}
 	for i := range m.Config.Apps {
@@ -569,6 +582,9 @@ func (h Host) restoreIntoServer(inputs []string, o RestoreOptions, parent string
 		if m.Scope != "app" {
 			return fmt.Errorf("%s is a full-server backup; restore it on a fresh server, or restore app backups here", filepath.Base(input))
 		}
+		if err := h.renameRestore(&m, stage, o.Name); err != nil {
+			return err
+		}
 		for i := range m.Config.Apps {
 			m.Config.Apps[i].Directory = filepath.Join(h.AppsDir, m.Config.Apps[i].Name)
 		}
@@ -684,6 +700,101 @@ func (h Host) restoreIntoServer(inputs []string, o RestoreOptions, parent string
 		h.say("App restore complete: %d apps rebuilt from saved source commits. Point their DNS at this server; keep the old server's workers stopped.", len(restored))
 		return nil
 	})
+}
+
+// renameRestore restores an extracted single-app archive under name. Every
+// resource abr derives from the app name follows it: project directory,
+// runtime user, state records, MySQL database and accounts, services and port
+// reservations. Domains, the saved password and other app settings are kept.
+func (h Host) renameRestore(m *backup.Manifest, stage, name string) error {
+	if name == "" {
+		return nil
+	}
+	if len(m.Config.Apps) != 1 {
+		return fmt.Errorf("--name restores one app backup; this archive holds %d apps", len(m.Config.Apps))
+	}
+	old := m.Config.Apps[0]
+	if name == old.Name {
+		return nil
+	}
+	if err := backup.RenameApp(m, stage, name); err != nil {
+		return err
+	}
+	a := &m.Config.Apps[0]
+	a.User, a.Directory = RuntimeUser(name), filepath.Join(h.AppsDir, name)
+	env := "apps/" + name + "/.env"
+	credentialName := "state/databases/" + name + ".json"
+	database := "no managed database"
+	if _, ok := m.Files[credentialName]; ok {
+		data, err := readProjectFile(filepath.Join(stage, credentialName), 1<<20)
+		if err != nil {
+			return err
+		}
+		var c credentials
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&c) != nil || decoder.Decode(new(any)) != io.EOF || c.App != old.Name || c.Database != databaseName(old.Name) || c.User != databaseUser(old.Name) {
+			return fmt.Errorf("invalid backup database ownership record")
+		}
+		// The saved password moves to the new accounts with the database.
+		c.App, c.Database, c.User = name, databaseName(name), databaseUser(name)
+		data, err = json.Marshal(c)
+		if err != nil {
+			return err
+		}
+		if err := backup.ReplaceFile(m, stage, credentialName, data); err != nil {
+			return err
+		}
+		if _, ok := m.Files[env]; ok {
+			data, err := readProjectFile(filepath.Join(stage, filepath.FromSlash(env)), 1<<20)
+			if err != nil {
+				return err
+			}
+			if err := backup.ReplaceFile(m, stage, env, setEnvValues(data, [][2]string{{"DB_DATABASE", c.Database}, {"DB_USERNAME", c.User}})); err != nil {
+				return err
+			}
+		}
+		database = "MySQL database " + c.Database + " and account " + c.User
+	}
+	h.say("Restoring %s as %s: project %s, user %s, %s; services, ports and records use the new name; domains are unchanged", old.Name, name, a.Directory, a.User, database)
+	if _, ok := m.Files[env]; ok {
+		data, err := readProjectFile(filepath.Join(stage, filepath.FromSlash(env)), 1<<20)
+		if err != nil {
+			return err
+		}
+		for _, key := range renamedEnvReview(data, []string{old.Directory, filepath.Join(h.AppsDir, old.Name)}) {
+			h.say("Review %s in %s's .env after restore: %s", key, name, renamedEnvReason(key))
+		}
+	}
+	return validateFullBackup(*m, stage)
+}
+
+// renamedEnvReview lists .env keys a rename cannot safely rewrite: values
+// naming the old project directory, and connection URLs that override DB_*.
+func renamedEnvReview(data []byte, directories []string) []string {
+	var patterns []*regexp.Regexp
+	for _, directory := range directories {
+		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(filepath.Clean(directory))+`(?:[^a-z0-9-]|$)`))
+	}
+	var keys []string
+	for _, line := range strings.Split(string(data), "\n") {
+		key, value, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(line), "export "), "=")
+		key, value = strings.TrimSpace(key), strings.Trim(strings.TrimSpace(value), `"'`)
+		if !ok || strings.HasPrefix(key, "#") || value == "" || slices.Contains(keys, key) {
+			continue
+		}
+		if key == "DB_URL" || key == "DATABASE_URL" || slices.ContainsFunc(patterns, func(p *regexp.Regexp) bool { return p.MatchString(value) }) {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+func renamedEnvReason(key string) string {
+	if key == "DB_URL" || key == "DATABASE_URL" {
+		return "it overrides the renamed DB_* values"
+	}
+	return "it names the old project directory"
 }
 
 // restoreImports keeps an app's saved ports that are free and inside this

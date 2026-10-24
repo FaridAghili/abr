@@ -50,9 +50,46 @@ SQL
   fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
   fixture_https api.fixture-octane.localhost | grep -F 'Abr Nuxt fixture'
   fixture_refused 'already registered on this server' restore "$app_restore_php" --yes
+  # The same backup restored under a new name beside the registered app. Move
+  # the existing app to another domain first; renamed restores keep domains.
+  sudo cp /var/lib/abr-ci/databases/fixture-php.json "$abr_binary_directory/app-existing-db"
+  abr_ci edit fixture-php --domain fixture-php-current.localhost
+  abr_ci enable fixture-php
+  abr_ci restore "$app_restore_php" --name fixture-php-old --dry-run > "$abr_binary_directory/app-renamed.log"
+  grep -F 'Restoring fixture-php as fixture-php-old' "$abr_binary_directory/app-renamed.log"
+  sudo test ! -e /srv/apps/fixture-php-old
+  abr_ci restore "$app_restore_php" --name fixture-php-old --yes
+  abr_ci list | grep -F fixture-php-old
+  sudo grep -Fx 'DB_DATABASE=fixture_php_old' /srv/apps/fixture-php-old/.env
+  sudo grep -Fx 'DB_USERNAME=fixture_php_old' /srv/apps/fixture-php-old/.env
+  sudo grep -Fx 'saved private upload' /srv/apps/fixture-php-old/storage/app/private/full-private.txt
+  test "$(sudo stat -c %U /srv/apps/fixture-php-old/.env)" = abr-fixture-php-old
+  getent passwd abr-fixture-php-old | grep -F ':abr-fixture-php-old:/var/lib/abr-users/abr-fixture-php-old:'
+  sudo test -e /etc/caddy/abr.d/abr-fixture-php-old.caddy
+  sudo test -e /etc/php/8.5/fpm/pool.d/abr-fixture-php-old.conf
+  sudo test -e /var/lib/abr-ci/env/fixture-php-old.env
+  if sudo grep -E 'abr-fixture-php([^-]|$)|/srv/apps/fixture-php([^-]|$)' /etc/caddy/abr.d/abr-fixture-php-old.caddy /etc/php/8.5/fpm/pool.d/abr-fixture-php-old.conf /var/lib/abr-ci/env/fixture-php-old.env; then
+    echo 'Renamed app services still name the original app' >&2; exit 1
+  fi
+  sudo mysql --protocol=socket --user=root --batch --skip-column-names fixture_php_old <<'SQL' | grep -Fx 73
+SELECT id FROM abr_full_backup_probe;
+SQL
+  sudo mysql --protocol=socket --user=root --batch --skip-column-names <<'SQL' > "$abr_binary_directory/app-renamed-grants.log"
+SHOW GRANTS FOR 'fixture_php_old'@'localhost';
+SHOW GRANTS FOR 'fixture_php_old'@'127.0.0.1';
+SQL
+  if grep -E '`fixture\\?_php`' "$abr_binary_directory/app-renamed-grants.log"; then
+    echo 'Renamed MySQL account can reach the original database' >&2; exit 1
+  fi
+  grep -E '`fixture\\?_php\\?_old`' "$abr_binary_directory/app-renamed-grants.log"
+  # The existing app keeps its project, secrets, database record and service.
+  sudo cmp /srv/apps/fixture-php/.env "$abr_binary_directory/full-env-before"
+  sudo cmp /var/lib/abr-ci/databases/fixture-php.json "$abr_binary_directory/app-existing-db"
+  fixture_https fixture-php-current.localhost | grep -F 'Laravel fixture database=1'
+  fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
   # Reset only the recorded disposable fixtures for the following full archive
   # test. Retain the shared runtime ownership record just as its first reset did.
-  for app_restore_name in fixture-php fixture-octane fixture-ssr fixture-spa; do
+  for app_restore_name in fixture-php-old fixture-php fixture-octane fixture-ssr fixture-spa; do
     abr_ci remove "$app_restore_name" --purge --yes
   done
   sudo mv /var/lib/abr-ci "$abr_binary_directory/app-restored-state"
