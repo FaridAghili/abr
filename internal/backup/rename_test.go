@@ -19,6 +19,7 @@ func renameFixture(t *testing.T) (Manifest, string) {
 		"apps/demo/storage/app/a.txt":   "upload",
 		"sql/demo.sql":                  "CREATE TABLE t (id INT);\n",
 		"state/databases/demo.json":     `{"app":"demo"}`,
+		"state/backups/demo.json":       `{"LastAttempt":"2026-10-10T02:00:00Z"}`,
 		"apps/demonstration/source/x":   "not this app",
 		"state/databases/demo-two.json": "not this app",
 		"shared/Caddyfile":              "shared",
@@ -62,6 +63,7 @@ func TestRenameAppMovesEveryEntryAndRecord(t *testing.T) {
 		"apps/demo-old/storage/app/a.txt": "upload",
 		"sql/demo-old.sql":                "CREATE TABLE t (id INT);\n",
 		"state/databases/demo-old.json":   `{"app":"demo"}`,
+		"state/backups/demo-old.json":     `{"LastAttempt":"2026-10-10T02:00:00Z"}`,
 		"apps/demonstration/source/x":     "not this app",
 		"state/databases/demo-two.json":   "not this app",
 		"shared/Caddyfile":                "shared",
@@ -73,7 +75,7 @@ func TestRenameAppMovesEveryEntryAndRecord(t *testing.T) {
 			t.Fatal("staged entry not moved", name, err)
 		}
 	}
-	for _, name := range []string{"apps/demo", "sql/demo.sql", "state/databases/demo.json"} {
+	for _, name := range []string{"apps/demo", "sql/demo.sql", "state/databases/demo.json", "state/backups/demo.json"} {
 		if _, err := os.Lstat(filepath.Join(stage, name)); !os.IsNotExist(err) {
 			t.Fatal("old staged entry left behind", name)
 		}

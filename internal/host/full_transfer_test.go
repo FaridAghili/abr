@@ -94,6 +94,10 @@ func (r *fullRunner) Run(c Command) ([]byte, error) {
 		}
 		return nil, nil
 	}
+	if c.Name == "ssh-keygen" && slices.Contains(c.Args, "-F") {
+		r.base.calls = append(r.base.calls, c)
+		return (ExecRunner{}).Run(c)
+	}
 	if c.Name == "redis-cli" && len(c.Args) == 2 && c.Args[0] == "--rdb" {
 		r.base.calls = append(r.base.calls, c)
 		return nil, os.WriteFile(c.Args[1], []byte("redis fixture snapshot"), 0600)
@@ -395,6 +399,7 @@ func TestRestoreApplicationOrderingCredentialsAndBuildFailures(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(a.Directory, ".env"), env, 0600); err != nil {
 					t.Fatal(err)
 				}
+				fixtureBackupDestination(t, source)
 				if err := source.FullBackup(output); err != nil {
 					t.Fatal(err)
 				}
@@ -466,6 +471,12 @@ func TestRestoreApplicationOrderingCredentialsAndBuildFailures(t *testing.T) {
 				}
 				if !failBuild && err != nil {
 					t.Fatal(err)
+				}
+				for _, name := range []string{"backup-destination.json", "backup-ssh/id_ed25519", "backups/app.json"} {
+					want, _ := os.ReadFile(filepath.Join(source.Manager.StateDir, name))
+					if got, err := os.ReadFile(filepath.Join(h.Manager.StateDir, name)); err != nil || !bytes.Equal(got, want) {
+						t.Fatal("backup destination or schedule time not restored", name, err)
+					}
 				}
 				restored, err := h.transferCredentials(m.Config.Apps[0])
 				if err != nil || restored.Password != creds.Password || !restored.TCPReady {
@@ -826,5 +837,105 @@ func TestRenamedRestoreOnFreshServerAndEnvReview(t *testing.T) {
 	env := []byte("# LOG=/srv/apps/demo/x\nAPP_NAME=demo\nLOG_PATH=\"/srv/apps/demo/storage/logs\"\nexport CACHE=/srv/apps/demo\nOTHER=/srv/apps/demo-two/x\nDB_URL=mysql://demo@127.0.0.1/demo\nDATABASE_URL=\n")
 	if keys := renamedEnvReview(env, []string{"/srv/apps/demo", "/srv/apps/demo/"}); strings.Join(keys, ",") != "LOG_PATH,CACHE,DB_URL" {
 		t.Fatal("renamed .env review inaccurate", keys)
+	}
+}
+
+const backupFixtureKnownHost = "[backup.example.invalid]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+
+// fixtureBackupDestination saves a key-based backup destination, root's trust
+// of its host key and the app's last scheduled backup on h.
+func fixtureBackupDestination(t *testing.T, h Host) {
+	t.Helper()
+	for name, data := range map[string]string{
+		filepath.Join(h.Manager.StateDir, "backup-destination.json"):   `{"host":"backup.example.invalid","user":"backup","directory":"/srv/backups","port":2222,"auth":"key"}` + "\n",
+		filepath.Join(h.Manager.StateDir, "backup-ssh/id_ed25519"):     "private backup fixture key",
+		filepath.Join(h.Manager.StateDir, "backup-ssh/id_ed25519.pub"): "ssh-ed25519 AAAA backup-fixture\n",
+		filepath.Join(h.Manager.StateDir, "backups/app.json"):          `{"LastSuccess":"2026-10-10T02:00:00Z","LastAttempt":"2026-10-10T02:00:00Z"}` + "\n",
+		// Only entries for the destination are saved; markers never are.
+		h.path("/root/.ssh/known_hosts"): githubHostKey + "\n" + backupFixtureKnownHost + "\n@revoked [backup.example.invalid]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJm\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestBackupDestinationAndScheduleTravelWithBackups(t *testing.T) {
+	h, _, output, cleanup := fullFixture(t, false)
+	defer cleanup()
+	fixtureBackupDestination(t, h)
+	saved := map[string][]byte{}
+	for _, name := range []string{"backup-destination.json", "backup-ssh/id_ed25519", "backup-ssh/id_ed25519.pub", "backups/app.json"} {
+		saved[name], _ = os.ReadFile(filepath.Join(h.Manager.StateDir, name))
+	}
+	if err := h.FullBackup(output); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture backup server is unreachable, so the app archive stays local.
+	if err := h.BackupApps([]string{"app"}, BackupOptions{OutputDir: filepath.Join(h.root, "app-backups")}); err == nil || !strings.Contains(err.Error(), "local backup retained") {
+		t.Fatal("app backup did not use the saved destination", err)
+	}
+	archives, _ := filepath.Glob(filepath.Join(h.root, "app-backups/app-*.tar.gz"))
+	if len(archives) != 1 {
+		t.Fatal("app archive missing")
+	}
+	for _, archive := range []string{output, archives[0]} {
+		m, stage := readFullArchive(t, archive)
+		for name, want := range saved {
+			if got, err := os.ReadFile(filepath.Join(stage, "state", name)); err != nil || !bytes.Equal(got, want) {
+				t.Fatal("backup destination or schedule time not saved", archive, name, err)
+			}
+		}
+		if got, err := os.ReadFile(filepath.Join(stage, "state/backup-ssh/known_hosts")); err != nil || string(got) != backupFixtureKnownHost+"\n" {
+			t.Fatal("saved other or unsafe known_hosts entries", string(got), err)
+		}
+		fresh := freshFullHost(t)
+		for range 2 {
+			if err := fresh.restoreSharedCredentials(stage, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, err := os.ReadFile(fresh.path("/root/.ssh/known_hosts")); err != nil || string(got) != backupFixtureKnownHost+"\n" {
+			t.Fatal("backup server trust not restored once", string(got), err)
+		}
+		// A set-up server keeps its own destination; a full restore never adopts one.
+		kept := freshFullHost(t)
+		if err := kept.write(filepath.Join(kept.Manager.StateDir, "backup-destination.json"), []byte("own destination\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := kept.freshRestoreTarget(m, false); err == nil || !strings.Contains(err.Error(), "backup-destination.json") {
+			t.Fatal("full restore adopted an existing backup destination", err)
+		}
+		if err := kept.restoreSharedCredentials(stage, true); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(filepath.Join(kept.Manager.StateDir, "backup-destination.json")); string(got) != "own destination\n" {
+			t.Fatal("restore replaced this server's backup destination")
+		}
+		if _, err := os.Stat(kept.path("/root/.ssh/known_hosts")); !os.IsNotExist(err) {
+			t.Fatal("kept destination trusted the saved backup server", err)
+		}
+		preview := freshFullHost(t)
+		preview.DryRun = true
+		if err := preview.RestoreArchives([]string{archive}, RestoreOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(preview.Output.(*bytes.Buffer).String(), "restore the saved backup destination") {
+			t.Fatal("preview omitted the backup destination")
+		}
+		if err := backup.ReplaceFile(&m, stage, "state/backup-ssh/known_hosts", []byte("@cert-authority * ssh-ed25519 AAAA\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateFullBackup(m, stage); err == nil {
+			t.Fatal("accepted a known_hosts marker")
+		}
+		delete(m.Files, "state/backup-ssh/known_hosts")
+		delete(m.Files, "state/backup-ssh/id_ed25519")
+		if err := validateFullBackup(m, stage); err == nil || !strings.Contains(err.Error(), "SSH key missing") {
+			t.Fatal("accepted a key destination without its key", err)
+		}
 	}
 }

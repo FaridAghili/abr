@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"abr/internal/backup"
@@ -85,11 +86,8 @@ func (h Host) ConfigureBackup(d backup.Destination, source string) error {
 			if err := h.write(key+".pub", public, 0600); err != nil {
 				return err
 			}
-		} else {
-			// Passwords go through a private descriptor to the native SSH helper.
-			if _, err := h.run("Install native SSH password helper", Command{Name: "apt-get", Args: []string{"-o", "DPkg::Lock::Timeout=120", "install", "-y", "sshpass"}, Env: []string{"DEBIAN_FRONTEND=noninteractive"}, Stream: true}); err != nil {
-				return err
-			}
+		} else if err := h.installSSHPass(); err != nil {
+			return err
 		}
 		if err := h.trustedFile(h.backupDestinationPath()); err != nil && !os.IsNotExist(err) {
 			return err
@@ -108,6 +106,105 @@ func (h Host) ConfigureBackup(d backup.Destination, source string) error {
 		h.say("On the backup server, create %s owned by %s with mode 0700. Choose Test backup destination in the TUI to confirm its host fingerprint, or use abr backup host-key and abr backup trust --fingerprint SHA256:... in the CLI.", d.Directory, d.User)
 		return nil
 	})
+}
+
+// Passwords go through a private descriptor to the native SSH helper.
+func (h Host) installSSHPass() error {
+	_, err := h.run("Install native SSH password helper", Command{Name: "apt-get", Args: []string{"-o", "DPkg::Lock::Timeout=120", "install", "-y", "sshpass"}, Env: []string{"DEBIAN_FRONTEND=noninteractive"}, Stream: true})
+	return err
+}
+
+// stageBackupDestination saves the backup server settings, its dedicated key
+// and root's trusted entries for its host key, so a restored server keeps
+// sending scheduled backups to the same server without trusting it again.
+func (h Host) stageBackupDestination(state string) error {
+	d, err := h.loadBackupDestination()
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	names := []string{"backup-destination.json"}
+	if d.Auth == "key" {
+		names = append(names, "backup-ssh/id_ed25519", "backup-ssh/id_ed25519.pub")
+	}
+	for _, name := range names {
+		if err := copyBackupFile(h.path(filepath.Join(h.Manager.StateDir, name)), filepath.Join(state, name), name == "backup-ssh/id_ed25519.pub"); err != nil {
+			return err
+		}
+	}
+	lines, err := h.knownBackupHostLines(backupHostAddress(d))
+	if err != nil {
+		return err
+	}
+	var trusted []byte
+	for _, line := range lines {
+		// Markers such as @revoked describe policy, not this server's identity.
+		if !strings.HasPrefix(line, "@") {
+			trusted = append(trusted, line+"\n"...)
+		}
+	}
+	if len(trusted) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Join(state, "backup-ssh"), 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(state, "backup-ssh/known_hosts"), trusted, 0600)
+}
+
+// restoreBackupTrust prepares a restored backup destination for its next
+// connection: root trusts the saved host key entries, and password login gets
+// its SSH helper.
+func (h Host) restoreBackupTrust(stage string) error {
+	var d backup.Destination
+	data, err := os.ReadFile(filepath.Join(stage, "state/backup-destination.json"))
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, &d); err != nil {
+		return err
+	}
+	if d.Auth == "password" {
+		if err := h.installSSHPass(); err != nil {
+			return err
+		}
+	}
+	saved, err := os.ReadFile(filepath.Join(stage, "state/backup-ssh/known_hosts"))
+	if os.IsNotExist(err) {
+		h.say("Backup destination restored: %s@%s:%s. Its host key was not trusted when backed up; confirm it with Test backup destination in the TUI, or abr backup host-key and abr backup trust --fingerprint SHA256:...", d.User, d.Host, d.Directory)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	path := h.path("/root/.ssh/known_hosts")
+	if err := h.trustedFile(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	current, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	known := strings.Split(string(current), "\n")
+	data = current
+	for _, line := range strings.Split(strings.TrimSpace(string(saved)), "\n") {
+		if slices.Contains(known, line) {
+			continue
+		}
+		if len(data) > 0 && data[len(data)-1] != '\n' {
+			data = append(data, '\n')
+		}
+		data = append(data, line+"\n"...)
+	}
+	if len(data) != len(current) {
+		if err := h.write(path, data, 0600); err != nil {
+			return err
+		}
+	}
+	h.say("Backup destination restored: %s@%s:%s (SSH port %d) with its saved credentials and trusted host key", d.User, d.Host, d.Directory, d.Port)
+	return nil
 }
 
 func (h Host) loadBackupDestination() (backup.Destination, error) {

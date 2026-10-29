@@ -30,7 +30,7 @@ func RenameApp(m *Manifest, stage, name string) error {
 	if name == old {
 		return nil
 	}
-	moves := [][2]string{{"apps/" + old, "apps/" + name}, {"sql/" + old + ".sql", "sql/" + name + ".sql"}, {"state/databases/" + old + ".json", "state/databases/" + name + ".json"}}
+	moves := [][2]string{{"apps/" + old, "apps/" + name}, {"sql/" + old + ".sql", "sql/" + name + ".sql"}, {"state/databases/" + old + ".json", "state/databases/" + name + ".json"}, {"state/backups/" + old + ".json", "state/backups/" + name + ".json"}}
 	renamed := func(entry string) string {
 		for _, move := range moves {
 			if entry == move[0] {

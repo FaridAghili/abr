@@ -74,6 +74,13 @@ sudo cp /etc/abr/templates/php-cli.ini.tmpl "$abr_binary_directory/full-template
 # Disabled applications must remain disabled after a successful round trip.
 abr_ci disable fixture-spa
 source "$abr_smoke_script_directory/app-backup-smoke.sh"
+# The full backup carries the backup destination, its key and host trust, and
+# each app's last scheduled backup, so the restored host needs no new setup.
+abr_ci backup configure --host 127.0.0.1 --user root --path /var/backups/abr-ci-app-remote
+abr_ci backup test
+sudo cp /var/lib/abr-ci/backup-destination.json "$abr_binary_directory/full-destination-before"
+sudo cp /var/lib/abr-ci/backup-ssh/id_ed25519 "$abr_binary_directory/full-backup-key-before"
+sudo cp /var/lib/abr-ci/backups/fixture-php.json "$abr_binary_directory/full-backup-record-before"
 abr_ci backup --output "$full_backup_fixture"
 sudo test "$(sudo stat -c '%a' "$full_backup_fixture")" = 600
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
@@ -112,7 +119,9 @@ sudo redis-cli -n 5 DEL abr-full-state >/dev/null
 sudo systemctl stop caddy
 sudo rm -rf /var/lib/caddy/.local
 source "$abr_smoke_script_directory/app-restore-smoke.sh"
-abr_ci restore "$full_backup_fixture" --dry-run
+# Forget the backup server's identity; the full restore must trust it again.
+sudo ssh-keygen -R 127.0.0.1 -f /root/.ssh/known_hosts >/dev/null
+abr_ci restore "$full_backup_fixture" --dry-run | grep -F 'restore the saved backup destination'
 sudo test ! -e /var/lib/abr-ci/setup.json
 abr_ci restore "$full_backup_fixture" --yes --admin-user root --ssh-port 22
 sudo test ! -e "$full_node_tools_before"
@@ -126,6 +135,10 @@ sudo cmp /srv/apps/fixture-php/.env "$abr_binary_directory/full-env-before"
 sudo cmp /var/lib/abr-ci/databases/fixture-php.json "$abr_binary_directory/full-db-before"
 sudo cmp /var/lib/abr-ci/git/id_ed25519 "$abr_binary_directory/full-git-before"
 sudo cmp /etc/abr/templates/php-cli.ini.tmpl "$abr_binary_directory/full-template-before"
+sudo cmp /var/lib/abr-ci/backup-destination.json "$abr_binary_directory/full-destination-before"
+sudo cmp /var/lib/abr-ci/backup-ssh/id_ed25519 "$abr_binary_directory/full-backup-key-before"
+sudo cmp /var/lib/abr-ci/backups/fixture-php.json "$abr_binary_directory/full-backup-record-before"
+abr_ci backup test
 abr_ci ports > "$abr_binary_directory/full-ports-after"
 cmp "$abr_binary_directory/full-ports-before" "$abr_binary_directory/full-ports-after"
 sudo grep -Fx 'NUXT_FULL_BACKUP=preserved' /srv/apps/fixture-spa/.env

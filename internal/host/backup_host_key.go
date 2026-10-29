@@ -29,10 +29,7 @@ func (h Host) backupHostKey() (backup.HostKey, error) {
 	if err != nil {
 		return backup.HostKey{}, err
 	}
-	address := d.Host
-	if d.Port != 22 {
-		address = "[" + d.Host + "]:" + strconv.Itoa(d.Port)
-	}
+	address := backupHostAddress(d)
 	key := backup.HostKey{Address: address}
 	if h.DryRun {
 		h.say("Would inspect the backup server's SSH host key; no connection made or identity trusted")
@@ -61,38 +58,55 @@ func (h Host) backupHostKey() (backup.HostKey, error) {
 	if err != nil {
 		return key, err
 	}
-	found := false
+	lines, err := h.knownBackupHostLines(address)
+	if err != nil {
+		return key, err
+	}
+	for _, line := range lines {
+		if fields := strings.Fields(line); len(fields) == 3 && fields[1] == "ssh-ed25519" && fields[2] == key.Key {
+			key.Known = true
+		}
+	}
+	if len(lines) > 0 && !key.Known {
+		return key, fmt.Errorf("backup server host key differs from known_hosts; existing trust preserved. Verify the server identity before changing known_hosts")
+	}
+	h.say("Backup server %s · ED25519 · %s · trusted: %t", key.Address, key.Fingerprint, key.Known)
+	return key, nil
+}
+
+func backupHostAddress(d backup.Destination) string {
+	if d.Port != 22 {
+		return "[" + d.Host + "]:" + strconv.Itoa(d.Port)
+	}
+	return d.Host
+}
+
+// knownBackupHostLines returns root's known_hosts entries OpenSSH matches for
+// address, hashed entries included.
+func (h Host) knownBackupHostLines(address string) ([]string, error) {
+	var lines []string
 	for _, path := range []string{"/root/.ssh/known_hosts", "/etc/ssh/ssh_known_hosts"} {
 		path = h.path(path)
 		if err := h.trustedFile(path); os.IsNotExist(err) {
 			continue
 		} else if err != nil {
-			return key, err
+			return nil, err
 		}
 		if err := h.trustedDirectory(filepath.Dir(path)); err != nil {
-			return key, err
+			return nil, err
 		}
 		out, err := h.run("Check trusted backup server identity", Command{Name: "ssh-keygen", Args: []string{"-F", address, "-f", path}, Private: true})
 		var exit *exec.ExitError
 		if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
-			return key, err
+			return nil, err
 		}
 		for _, line := range strings.Split(string(out), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
-				continue
-			}
-			found = true
-			if len(fields) == 3 && fields[1] == "ssh-ed25519" && fields[2] == key.Key {
-				key.Known = true
+			if fields := strings.Fields(line); len(fields) > 0 && !strings.HasPrefix(fields[0], "#") {
+				lines = append(lines, strings.TrimSpace(line))
 			}
 		}
 	}
-	if found && !key.Known {
-		return key, fmt.Errorf("backup server host key differs from known_hosts; existing trust preserved. Verify the server identity before changing known_hosts")
-	}
-	h.say("Backup server %s · ED25519 · %s · trusted: %t", key.Address, key.Fingerprint, key.Known)
-	return key, nil
+	return lines, nil
 }
 
 // TrustBackupHostKey requires an independently confirmed fingerprint and rescans

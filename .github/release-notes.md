@@ -14,8 +14,9 @@ Abr 1.0.0 is the initial release for fresh Ubuntu 26.04 LTS AMD64 servers.
 - Online app backups with saved source, managed SQL, secrets and uploads,
   sequential SSH transfer and SHA256 verification.
 - Guided SSH host fingerprint confirmation and clear backup destination errors.
-- Full-server and per-app archive restore onto a fresh Ubuntu server, and app restore
-  under a new name beside an existing app with the same name.
+- Full-server and per-app archive restore onto a fresh Ubuntu server, including the
+  backup destination and schedule, and app restore under a new name beside an
+  existing app with the same name.
 
 Download `abr-linux-amd64` for standalone installation. The
 `abr_1.0.0_linux_amd64.tar.gz` bundle contains the same executable as `abr`, editable

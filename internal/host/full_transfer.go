@@ -215,7 +215,7 @@ func (h Host) FullBackup(output string) error {
 			if err != nil {
 				return err
 			}
-			h.say("Would capture %d managed apps online: MySQL, Redis, .env, full Laravel storage/app and saved source, settings, templates and credentials into %s; services remain running; no files changed", len(c.Apps), output)
+			h.say("Would capture %d managed apps online: MySQL, Redis, .env, full Laravel storage/app and saved source, settings, templates, credentials, backup destination and backup times into %s; services remain running; no files changed", len(c.Apps), output)
 			return nil
 		}
 		return h.Manager.WithSnapshot(func(c config.Config, r ports.Registry) (result error) {
@@ -285,6 +285,9 @@ func (h Host) FullBackup(output string) error {
 					return err
 				}
 			}
+			if err := h.stageBackupDestination(filepath.Join(stage, "state")); err != nil {
+				return err
+			}
 			if err := h.copyBackupTemplates(filepath.Join(stage, "templates")); err != nil {
 				return err
 			}
@@ -312,6 +315,9 @@ func (h Host) FullBackup(output string) error {
 					return err
 				}
 				if err := copyBackupFile(h.path(filepath.Join(a.Directory, ".env")), filepath.Join(stage, "apps", a.Name, ".env"), a.Type == "nuxt"); err != nil {
+					return err
+				}
+				if err := copyBackupFile(h.path(h.backupRecordPath(a.Name)), filepath.Join(stage, "state/backups", a.Name+".json"), true); err != nil {
 					return err
 				}
 				if a.Type == "laravel" {
@@ -469,6 +475,9 @@ func (h Host) RestoreArchives(inputs []string, o RestoreOptions) error {
 		h.say("Restore preview: %d apps; hostname %s; MySQL dumps and credentials; Redis data: %t; saved source commits", len(m.Apps), m.Settings.Hostname, !m.Settings.NoRedis && m.Scope != "app")
 		for _, record := range m.Apps {
 			h.say("Would restore saved code %s on branch %s into %s from its bundled repository, restore .env/storage/SQL, install dependencies and build with saved settings, migrate and optimize", record.Commit, record.Branch, filepath.Join(h.AppsDir, record.Name))
+		}
+		if _, ok := m.Files["state/backup-destination.json"]; ok {
+			h.say("Would restore the saved backup destination with its SSH credentials and trusted host key, and each app's last backup time")
 		}
 		h.say("Would provision Ubuntu shared runtimes, recreate users/accounts, regenerate services and ports, restore included shared data, then enable previously enabled apps; no host changes")
 		return nil
@@ -861,8 +870,8 @@ func (h Host) stopFailedRestore(apps *[]config.App, result *error, retry string)
 	}
 }
 
-// restoreSharedCredentials installs the saved Git identity and Composer
-// credentials. With keep, this server's own are kept and only missing ones
+// restoreSharedCredentials installs the saved Git identity, Composer
+// credentials and backup destination. With keep, this server's own are kept and only missing ones
 // are installed.
 func (h Host) restoreSharedCredentials(stage string, keep bool) error {
 	for _, group := range []struct {
@@ -871,6 +880,7 @@ func (h Host) restoreSharedCredentials(stage string, keep bool) error {
 	}{
 		{[]string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts"}, "Kept this server's Git deploy key; give it read access to the restored repositories before their next deployment"},
 		{[]string{"composer/auth.json"}, "Kept this server's Composer credentials; add any private repository credentials the restored apps need"},
+		{[]string{"backup-destination.json", "backup-ssh/id_ed25519", "backup-ssh/id_ed25519.pub"}, "Kept this server's backup destination; restored apps' scheduled backups use it"},
 	} {
 		saved, err := os.ReadFile(filepath.Join(stage, "state", group.names[0]))
 		if os.IsNotExist(err) {
@@ -910,6 +920,11 @@ func (h Host) restoreSharedCredentials(stage string, keep bool) error {
 				return err
 			}
 		}
+		if group.names[0] == "backup-destination.json" {
+			if err := h.restoreBackupTrust(stage); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -939,6 +954,14 @@ func (h Host) restoreApplication(a config.App, record backup.App, stage string, 
 		return err
 	}
 	if err := restoreAppFiles(stage, a, h); err != nil {
+		return err
+	}
+	// The last backup time keeps the app's backup schedule where it was.
+	if data, err := os.ReadFile(filepath.Join(stage, "state/backups", a.Name+".json")); err == nil {
+		if err := h.write(h.backupRecordPath(a.Name), data, 0600); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
 		return err
 	}
 	data, err := os.ReadFile(filepath.Join(stage, "state/databases", a.Name+".json"))
@@ -1001,7 +1024,7 @@ func (h Host) freshRestoreTarget(m backup.Manifest, hostChecks bool) error {
 	if len(r.Assignments) != 0 {
 		return fmt.Errorf("full restore requires an empty port registry")
 	}
-	for _, name := range []string{"apps", "users", "databases", "credentials", "env", "git", "composer", "mysql-admin.json", "setup.json"} {
+	for _, name := range []string{"apps", "users", "databases", "credentials", "env", "git", "composer", "mysql-admin.json", "setup.json", "backup-destination.json", "backup-ssh", "backups"} {
 		if _, err := os.Lstat(h.path(filepath.Join(h.Manager.StateDir, name))); !os.IsNotExist(err) {
 			return fmt.Errorf("full restore requires fresh abr state; found %s", name)
 		}
@@ -1268,10 +1291,10 @@ func validateFullBackup(m backup.Manifest, stage string) error {
 		if _, ok := sharedBackupFiles()[name]; ok {
 			return !directory
 		}
-		if name == "shared" || name == "state" || name == "state/git" || name == "state/composer" || name == "state/databases" || name == "sql" || name == "apps" {
+		if name == "shared" || name == "state" || name == "state/git" || name == "state/composer" || name == "state/databases" || name == "state/backup-ssh" || name == "state/backups" || name == "sql" || name == "apps" {
 			return directory
 		}
-		for _, n := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json"} {
+		for _, n := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json", "backup-destination.json", "backup-ssh/id_ed25519", "backup-ssh/id_ed25519.pub", "backup-ssh/known_hosts"} {
 			if name == "state/"+n {
 				return !directory
 			}
@@ -1289,7 +1312,7 @@ func validateFullBackup(m backup.Manifest, stage string) error {
 			return true
 		}
 		for _, a := range m.Config.Apps {
-			if name == "state/databases/"+a.Name+".json" || name == "sql/"+a.Name+".sql" {
+			if name == "state/databases/"+a.Name+".json" || name == "state/backups/"+a.Name+".json" || name == "sql/"+a.Name+".sql" {
 				return !directory
 			}
 			base := "apps/" + a.Name
@@ -1417,6 +1440,24 @@ func validateFullBackup(m backup.Manifest, stage string) error {
 			}
 		}
 	}
+	if err := validateBackupDestination(m, stage); err != nil {
+		return err
+	}
+	for _, a := range m.Config.Apps {
+		data, err := os.ReadFile(filepath.Join(stage, "state/backups", a.Name+".json"))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var record backupRecord
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&record) != nil || decoder.Decode(new(any)) != io.EOF {
+			return fmt.Errorf("%s: invalid backup schedule record", a.Name)
+		}
+	}
 	if data, err := os.ReadFile(filepath.Join(stage, "state/mysql-admin.json")); err == nil {
 		var c mysqlAdminCredentials
 		decoder := json.NewDecoder(bytes.NewReader(data))
@@ -1429,6 +1470,57 @@ func validateFullBackup(m backup.Manifest, stage string) error {
 		}
 	} else if !os.IsNotExist(err) {
 		return err
+	}
+	return nil
+}
+
+// validateBackupDestination checks the saved backup server settings. Merged
+// app archives may pair a newer password destination with an older key, which
+// stays unused.
+func validateBackupDestination(m backup.Manifest, stage string) error {
+	data, err := os.ReadFile(filepath.Join(stage, "state/backup-destination.json"))
+	if os.IsNotExist(err) {
+		for name := range m.Files {
+			if strings.HasPrefix(name, "state/backup-ssh/") {
+				return fmt.Errorf("backup SSH files saved without a backup destination")
+			}
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var d backup.Destination
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&d) != nil || decoder.Decode(new(any)) != io.EOF {
+		return fmt.Errorf("invalid saved backup destination")
+	}
+	if err := d.Validate(); err != nil {
+		return fmt.Errorf("invalid saved backup destination: %w", err)
+	}
+	for _, name := range []string{"state/backup-ssh/id_ed25519", "state/backup-ssh/id_ed25519.pub", "state/backup-ssh/known_hosts"} {
+		record, ok := m.Files[name]
+		if !ok {
+			if name == "state/backup-ssh/id_ed25519" && d.Auth == "key" {
+				return fmt.Errorf("saved backup destination SSH key missing")
+			}
+			continue
+		}
+		if record.Size == 0 || record.Size > 64<<10 {
+			return fmt.Errorf("saved backup SSH file empty or too large: %s", name)
+		}
+	}
+	if _, ok := m.Files["state/backup-ssh/known_hosts"]; ok {
+		data, err := os.ReadFile(filepath.Join(stage, "state/backup-ssh/known_hosts"))
+		if err != nil {
+			return err
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if fields := strings.Fields(line); len(fields) < 3 || strings.HasPrefix(fields[0], "@") || strings.HasPrefix(fields[0], "#") || line != strings.TrimSpace(line) {
+				return fmt.Errorf("invalid saved backup server host key entry")
+			}
+		}
 	}
 	return nil
 }

@@ -280,6 +280,9 @@ func (h Host) stageSharedBackup(shared string) (backup.Settings, error) {
 			return settings, err
 		}
 	}
+	if err := h.stageBackupDestination(filepath.Join(shared, "state")); err != nil {
+		return settings, err
+	}
 	if err := h.copyBackupTemplates(filepath.Join(shared, "templates")); err != nil {
 		return settings, err
 	}
@@ -401,6 +404,9 @@ func (h Host) captureAppBackup(a config.App, c config.Config, r ports.Registry, 
 		}
 	}
 	if err := copyBackupFile(h.path(filepath.Join(a.Directory, ".env")), filepath.Join(stage, "apps", a.Name, ".env"), a.Type == "nuxt"); err != nil {
+		return "", err
+	}
+	if err := copyBackupFile(h.path(h.backupRecordPath(a.Name)), filepath.Join(stage, "state/backups", a.Name+".json"), true); err != nil {
 		return "", err
 	}
 	live := map[string]*os.Root{}

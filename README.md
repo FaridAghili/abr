@@ -88,7 +88,9 @@ deleted locally and on the backup server, which needs only SSH access and a
 private directory. Archives contain secrets and are **not encrypted**. Keep a protected
 off-server copy and test restores. Restoring a directory uses the newest backup
 of each app in it. On a set-up server, app backups are added as new apps; on a
-fresh server, the saved server settings are provisioned first. When an app with
+fresh server, the saved server settings are provisioned first. Backups carry the
+backup destination, its SSH key and trusted host key, and each app's last backup
+time, so a fresh server keeps backing up on schedule to the same backup server. When an app with
 the same name already exists, `--name` restores one app backup under a new
 name: its project, user, MySQL database and account, services and ports follow
 the new name, `DB_DATABASE`/`DB_USERNAME` in its `.env` are updated, and its
