@@ -741,7 +741,8 @@ abr_ci logs fixture-php scheduler
 sudo cp -R "$fixture_source/laravel" /srv/apps/fixture-octane
 sudo cp /srv/apps/fixture-php/routes/web.php /srv/apps/fixture-octane/routes/web.php
 # This app needs built assets during Composer installation: exercise frontend-first.
-sudo node -e 'const fs=require("node:fs"); const p="/srv/apps/fixture-octane/package.json"; const c=JSON.parse(fs.readFileSync(p)); c.scripts.prebuild="node abr-fixture-privileges.cjs"; fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");'
+# Its frontend build also reads vendor, which a restored project lacks at first.
+sudo node -e 'const fs=require("node:fs"); const p="/srv/apps/fixture-octane/package.json"; const c=JSON.parse(fs.readFileSync(p)); c.scripts.prebuild="node abr-fixture-privileges.cjs && test -f vendor/autoload.php"; fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");'
 sudo tee /srv/apps/fixture-octane/abr-fixture-assets.php >/dev/null <<'PHP'
 <?php
 if (!is_file(__DIR__.'/public/build/manifest.json')) {

@@ -7,8 +7,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -769,5 +772,75 @@ func TestFPMReadyChecksActualSocket(t *testing.T) {
 	defer listener.Close()
 	if err := h.ready(a, ports.Empty(), manifest{FPM: true}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDeploymentInstallsComposerFirstWithoutVendor(t *testing.T) {
+	h, r, _, a := fixture(t)
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh clone or restore has no vendor; frontend builds may import from it.
+	if err := os.RemoveAll(filepath.Join(a.Directory, "vendor")); err != nil {
+		t.Fatal(err)
+	}
+	r.fail = func(c Command) error {
+		if strings.Contains(strings.Join(c.Args, " "), "artisan optimize:clear") {
+			return testExit(9)
+		}
+		return nil
+	}
+	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
+		t.Fatal("expected the simulated cache clear failure")
+	}
+	npmBuild, packages, scripts := -1, -1, -1
+	for i, c := range r.calls {
+		args := strings.Join(c.Args, " ")
+		if strings.Contains(args, "npm run build") {
+			npmBuild = i
+		}
+		if strings.Contains(args, "composer install --no-dev --no-scripts") {
+			packages = i
+		} else if strings.Contains(args, "composer install --no-dev --optimize-autoloader") {
+			scripts = i
+		}
+	}
+	// Packages exist for the build; scripts that may need built assets run after it.
+	if packages < 0 || npmBuild < packages || scripts < npmBuild {
+		t.Fatalf("unsafe build order without vendor: packages=%d build=%d scripts=%d", packages, npmBuild, scripts)
+	}
+	if !strings.Contains(h.Output.(*bytes.Buffer).String(), "No vendor directory yet") {
+		t.Fatal("changed build order was not explained")
+	}
+}
+
+func TestDeploymentCommandErrorShowsHowToReadHiddenOutput(t *testing.T) {
+	a := config.App{Name: "shop", User: "abr-shop", Directory: "/srv/apps/shop"}
+	err := deploymentCommandError(a, "npm", []string{"run", "build"}, errors.New("exit status 1"))
+	if !strings.Contains(err.Error(), "runuser -u abr-shop -- env -i HOME=/var/lib/abr-users/abr-shop PATH=/usr/local/bin:/usr/bin:/bin bash -c 'cd /srv/apps/shop && npm run build'") {
+		t.Fatal("missing rerun command", err)
+	}
+	if err := deploymentCommandError(a, "git", []string{"fetch"}, errors.New("exit status 1")); strings.Contains(err.Error(), "runuser") {
+		t.Fatal("logged command offered a hidden-output rerun", err)
+	}
+}
+
+func TestHealthCheckReachesThisServerForAppHostnames(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "www.shop.example.invalid:"+strings.Split(r.Host, ":")[1] {
+			w.WriteHeader(http.StatusMisdirectedRequest)
+		}
+	}))
+	defer server.Close()
+	port := server.URL[strings.LastIndex(server.URL, ":")+1:]
+	h := Host{Output: &bytes.Buffer{}}
+	// The hostname does not resolve; only this server can answer for it.
+	a := config.App{Domain: "shop.example.invalid", Aliases: []string{"www.shop.example.invalid"}, HealthCheck: "http://www.shop.example.invalid:" + port + "/up"}
+	if err := h.deploymentHealth(a); err != nil {
+		t.Fatal("app hostname was not checked on this server", err)
+	}
+	a.Aliases = nil
+	if err := h.deploymentHealth(a); err == nil {
+		t.Fatal("another site's hostname was sent to this server")
 	}
 }

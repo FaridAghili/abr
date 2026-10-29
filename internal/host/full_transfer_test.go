@@ -3,6 +3,7 @@ package host
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -501,15 +502,20 @@ func TestRestoreApplicationOrderingCredentialsAndBuildFailures(t *testing.T) {
 					if slices.Contains(c.Args, "fetch") || slices.Contains(c.Args, "pull") {
 						t.Fatal("restore fetched newer source")
 					}
-					if slices.Contains(c.Args, "composer") && slices.Contains(c.Args, "install") && !slices.Contains(c.Args, "--download-only") {
+					if slices.Contains(c.Args, "composer") && slices.Contains(c.Args, "install") && !slices.Contains(c.Args, "--download-only") && composerInstall < 0 {
 						composerInstall = i
 					}
 					if slices.Contains(c.Args, "npm") && slices.Contains(c.Args, "build") {
 						frontendBuild = i
 					}
 				}
-				if !failBuild && (composerInstall < 0 || frontendBuild < 0 || (composerInstall < frontendBuild) != (order == config.BuildComposerFirst)) {
-					t.Fatal("saved build ordering ignored", composerInstall, frontendBuild)
+				// A restored project has no vendor directory yet, so Composer packages
+				// are always installed before the frontend build, which may import them.
+				if !failBuild && (composerInstall < 0 || frontendBuild < 0 || composerInstall > frontendBuild) {
+					t.Fatal("frontend built before Composer populated vendor", composerInstall, frontendBuild)
+				}
+				if !failBuild && strings.Contains(h.Output.(*bytes.Buffer).String(), "No vendor directory yet") != (order == config.BuildFrontendFirst) {
+					t.Fatal("missing vendor did not explain the changed build order")
 				}
 				if _, exists, err := h.loadManifest(m.Config.Apps[0]); err != nil || exists {
 					t.Fatal("disabled app was enabled", err)
@@ -937,5 +943,117 @@ func TestBackupDestinationAndScheduleTravelWithBackups(t *testing.T) {
 		if err := validateFullBackup(m, stage); err == nil || !strings.Contains(err.Error(), "SSH key missing") {
 			t.Fatal("accepted a key destination without its key", err)
 		}
+	}
+}
+
+// dirtyRunner reports uncommitted changes in directory, as a restored working
+// tree with captured local edits does.
+type dirtyRunner struct {
+	Runner
+	directory string
+}
+
+func (r dirtyRunner) Run(c Command) ([]byte, error) {
+	if c.Name == "runuser" && c.Dir == r.directory && slices.Contains(c.Args, "status") && slices.Contains(c.Args, "--porcelain") {
+		return []byte(" M saved.txt\n"), nil
+	}
+	return r.Runner.Run(c)
+}
+
+func TestRestoreStartsEachAppBeforeTheNextAndContinuesPastFailures(t *testing.T) {
+	h, runner, _, cleanup := fullFixture(t, true)
+	defer cleanup()
+	addSecondBackupApp(t, h)
+	for _, name := range []string{"package.json", "package-lock.json"} {
+		if err := os.WriteFile(filepath.Join(h.AppsDir, "second", name), []byte("{}\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner.freshRoot = h.root
+	c, r, err := h.Manager.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds, err := h.transferCredentials(c.Apps[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := setEnvValues([]byte("APP_KEY=existing-key\n"), [][2]string{{"DB_CONNECTION", "mysql"}, {"DB_HOST", "127.0.0.1"}, {"DB_PORT", "3306"}, {"DB_DATABASE", creds.Database}, {"DB_USERNAME", creds.User}, {"DB_PASSWORD", creds.Password}})
+	if err := os.WriteFile(filepath.Join(c.Apps[0].Directory, ".env"), env, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The Nuxt app is listed first, but its build calls the Laravel API.
+	app := c.Apps[0]
+	apps := []config.App{c.Apps[1], app}
+	records := []backup.App{{Name: "second", Enabled: true}, {Name: "app", Enabled: true}}
+	var built []string
+	apiRunning, apiDown := false, true
+	runner.onCommand = func(c Command) error {
+		if c.Name == "runuser" && strings.Contains(strings.Join(c.Args, " "), "npm run build") {
+			built = append(built, filepath.Base(c.Dir))
+			if filepath.Base(c.Dir) == "second" {
+				manifest, _, err := h.loadManifest(app)
+				apiRunning = err == nil && manifest.Enabled
+				if apiDown {
+					return errors.New("fixture API unavailable")
+				}
+				output := filepath.Join(c.Dir, ".output/server/index.mjs")
+				if err := os.MkdirAll(filepath.Dir(output), 0700); err != nil {
+					return err
+				}
+				return os.WriteFile(output, []byte("export {}\n"), 0600)
+			}
+		}
+		return nil
+	}
+	h.Runner = dirtyRunner{runner, filepath.Join(h.AppsDir, "second")}
+	var restored []string
+	err = h.restoreEachApp(apps, records, func(a config.App) (ports.Registry, error) {
+		restored = append(restored, a.Name)
+		return r, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "restore incomplete: 1 of 2 apps failed") || !strings.Contains(err.Error(), "abr deploy second --no-pull") {
+		t.Fatal("failed app not reported with its retry command", err)
+	}
+	if !slices.Equal(restored, []string{"app", "second"}) {
+		t.Fatal("Laravel app not restored first", restored)
+	}
+	if !slices.Equal(built, []string{"app", "second"}) || !apiRunning {
+		t.Fatal("Laravel app was not built and started before the frontend build", built, apiRunning)
+	}
+	if manifest, _, err := h.loadManifest(app); err != nil || !manifest.Enabled {
+		t.Fatal("a failure elsewhere stopped the restored Laravel app", err)
+	}
+	if _, err := os.Stat(h.path(h.restorePendingPath("app"))); !os.IsNotExist(err) {
+		t.Fatal("finished restore still pending", err)
+	}
+	// Fixed: deploying the failed app by hand accepts its restored local changes.
+	apiDown = false
+	port, _ := r.Lookup("second", "nuxt-http")
+	var listener net.Listener
+	defer func() {
+		if listener != nil {
+			listener.Close()
+		}
+	}()
+	build := runner.onCommand
+	runner.onCommand = func(c Command) error {
+		// The started Nuxt service listens on its reserved port.
+		if c.Name == "systemctl" && slices.Contains(c.Args, "enable") && listener == nil {
+			var err error
+			if listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port)); err != nil {
+				return err
+			}
+		}
+		return build(c)
+	}
+	if err := h.Deploy([]string{"second"}, DeployOptions{NoPull: true}); err != nil {
+		t.Fatal("restored app could not be deployed again", err)
+	}
+	if _, err := os.Stat(h.path(h.restorePendingPath("second"))); !os.IsNotExist(err) {
+		t.Fatal("deployed app still pending restore", err)
+	}
+	if err := h.Deploy([]string{"second"}, DeployOptions{NoPull: true}); err == nil || !strings.Contains(err.Error(), "working tree is dirty") {
+		t.Fatal("later deployment accepted uncommitted changes", err)
 	}
 }

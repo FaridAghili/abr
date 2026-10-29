@@ -1,10 +1,12 @@
 package host
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -179,8 +181,13 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if err != nil {
 		return err
 	}
-	// Fresh restores preserve captured local changes and deploy without pulling.
-	if len(strings.TrimSpace(string(dirty))) > 0 && !(o.deferEnable && o.NoPull) {
+	// Restores preserve captured local changes and deploy without pulling, also
+	// when a failed restored app is deployed again by hand.
+	_, pendingErr := os.Lstat(h.path(h.restorePendingPath(a.Name)))
+	if pendingErr != nil && !os.IsNotExist(pendingErr) {
+		return pendingErr
+	}
+	if len(strings.TrimSpace(string(dirty))) > 0 && !(o.NoPull && (o.deferEnable || pendingErr == nil)) {
 		return fmt.Errorf("working tree is dirty; commit/stash changes before deployment")
 	}
 	commit, err = h.deploymentTarget(a, plan.Environment, o.NoPull)
@@ -210,7 +217,7 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		if err == nil {
 			return nil
 		}
-		return deploymentCommandError(a.User, name, args, err)
+		return deploymentCommandError(a, name, args, err)
 	}
 	// Frontend-first is the default; apps whose builds invoke Artisan can opt
 	// into installing Composer dependencies before the frontend build.
@@ -229,13 +236,27 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	} else if !os.IsNotExist(packageErr) {
 		return packageErr
 	}
+	composerFirst := a.BuildOrder == config.BuildComposerFirst
+	// A fresh clone or restore has no vendor directory yet, and frontend builds
+	// may import from it. Install the packages without Composer scripts first,
+	// since frontend-first apps' scripts may need the built assets.
+	if a.Type == "laravel" && frontend && !composerFirst {
+		if _, err := os.Stat(h.path(filepath.Join(a.Directory, "vendor/autoload.php"))); os.IsNotExist(err) {
+			h.say("No vendor directory yet; installing Composer packages without scripts before the frontend build")
+			if err := run("composer", "install", "--no-dev", "--no-scripts", "--no-interaction", "--prefer-dist"); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+	}
 	installComposer := func() error {
 		if err := run("composer", "install", "--no-dev", "--optimize-autoloader", "--no-interaction", "--prefer-dist"); err != nil {
 			return err
 		}
 		return run("composer", "check-platform-reqs", "--no-dev")
 	}
-	if a.Type == "laravel" && a.BuildOrder == config.BuildComposerFirst {
+	if a.Type == "laravel" && composerFirst {
 		if err := installComposer(); err != nil {
 			return err
 		}
@@ -249,7 +270,7 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		}
 	}
 	if a.Type == "laravel" {
-		if a.BuildOrder != config.BuildComposerFirst {
+		if !composerFirst {
 			if err := installComposer(); err != nil {
 				return err
 			}
@@ -299,7 +320,7 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		}
 	}
 	if o.deferEnable {
-		h.say("Built %s; services remain stopped until full restore completes", a.Name)
+		h.say("Built %s", a.Name)
 		return nil
 	}
 	if err := h.enable(a, r); err != nil {
@@ -308,12 +329,35 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if err := h.deploymentHealth(a); err != nil {
 		return err
 	}
+	if err := h.finishRestore(a.Name); err != nil {
+		return err
+	}
 	if h.DryRun {
 		h.say("Deployment preview complete for %s; no commands executed or files changed", a.Name)
 	} else {
 		h.say("Deployed %s at %s", a.Name, commit)
 	}
 	return nil
+}
+
+// healthClient sends requests for the app's own hostnames to this server, so
+// a deployment or restore checks this server's app even while DNS still
+// points elsewhere. Other hosts resolve normally.
+func healthClient(a config.App) *http.Client {
+	local := map[string]bool{}
+	for _, name := range append(append([]string{a.Domain}, a.Domains...), a.Aliases...) {
+		local[strings.ToLower(name)] = true
+	}
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if host, port, err := net.SplitHostPort(address); err == nil && local[strings.ToLower(host)] {
+			address = net.JoinHostPort("127.0.0.1", port)
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
+	return &http.Client{Timeout: 10 * time.Second, Transport: transport}
 }
 
 // This reads only selected dotenv values for validation, not a general dotenv parser.
@@ -351,12 +395,19 @@ func (h Host) laravelEnv(a config.App) error {
 	return nil
 }
 
-func deploymentCommandError(user, name string, args []string, err error) error {
+func deploymentCommandError(a config.App, name string, args []string, err error) error {
 	var exit interface{ ExitCode() int }
 	if name == "composer" && errors.As(err, &exit) && exit.ExitCode() == 100 {
 		err = fmt.Errorf("package download failed; for private repositories save credentials with abr composer auth --host HOST: %w", err)
 	}
-	return fmt.Errorf("%s as %s: %w", strings.Join(append([]string{name}, args...), " "), user, err)
+	command := strings.Join(append([]string{name}, args...), " ")
+	err = fmt.Errorf("%s as %s: %w", command, a.User, err)
+	if name == "npm" || name == "composer" || strings.HasPrefix(filepath.Base(name), "php") {
+		// Their output can contain .env secrets, so logs omit it; the owner can
+		// rerun the step in a terminal to read it.
+		err = fmt.Errorf("%w; its output is not logged because it can contain secrets. To see it, run: runuser -u %s -- env -i HOME=/var/lib/abr-users/%s PATH=/usr/local/bin:/usr/bin:/bin bash -c %s", err, a.User, a.User, shellQuote("cd "+a.Directory+" && "+command))
+	}
+	return err
 }
 
 func (h Host) deploymentHealth(a config.App) error {
@@ -364,8 +415,7 @@ func (h Host) deploymentHealth(a config.App) error {
 		if h.DryRun {
 			h.say("Would check application health at %s", a.HealthCheck)
 		} else {
-			client := &http.Client{Timeout: 10 * time.Second}
-			response, err := client.Get(a.HealthCheck)
+			response, err := healthClient(a).Get(a.HealthCheck)
 			if err != nil {
 				return fmt.Errorf("health check failed: %w", err)
 			}

@@ -2,6 +2,7 @@ package host
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -664,7 +665,7 @@ func (h Host) restoreIntoServer(inputs []string, o RestoreOptions, parent string
 		h.say("No host changes")
 		return nil
 	}
-	return h.locked(func() (result error) {
+	return h.locked(func() error {
 		h.lockHeld = true
 		c, _, err := plan(true)
 		if err != nil {
@@ -675,38 +676,39 @@ func (h Host) restoreIntoServer(inputs []string, o RestoreOptions, parent string
 				return err
 			}
 		}
-		var restored []config.App
-		defer h.stopFailedRestore(&restored, &result, "Remove each restored app with abr remove NAME --purge --yes, then retry; other apps were not changed.")
 		for _, x := range archives {
 			if err := h.restoreSharedCredentials(x.stage, true); err != nil {
 				return err
 			}
 		}
-		var r ports.Registry
+		archive := map[string]archive{}
 		for _, x := range archives {
 			for _, a := range x.m.Config.Apps {
-				current, err := ports.Load(h.Manager.RegistryPath())
-				if err != nil {
-					return err
-				}
-				if r, err = h.Manager.Register(a, restoreImports(a, x.m.Ports, current, c.Ports, probe)); err != nil {
-					return err
-				}
-				restored = append(restored, a)
-				if err := h.restoreApplication(a, restoreRecord(records, a.Name), x.stage, x.m); err != nil {
-					return err
-				}
+				archive[a.Name] = x
 			}
 		}
-		if err := h.startRestoredApps(restored, records, r); err != nil {
-			return err
-		}
-		if slices.ContainsFunc(restored, func(a config.App) bool { return a.Backup.Schedule != "" }) {
+		restoreErr := h.restoreEachApp(apps, records, func(a config.App) (ports.Registry, error) {
+			x := archive[a.Name]
+			current, err := ports.Load(h.Manager.RegistryPath())
+			if err != nil {
+				return current, err
+			}
+			r, err := h.Manager.Register(a, restoreImports(a, x.m.Ports, current, c.Ports, probe))
+			if err != nil {
+				return r, err
+			}
+			return r, h.restoreApplication(a, restoreRecord(records, a.Name), x.stage, x.m)
+		})
+		// Restored schedules apply even when another app failed.
+		if slices.ContainsFunc(apps, func(a config.App) bool { return a.Backup.Schedule != "" }) {
 			if err := h.ensureBackupTimer(); err != nil {
-				return err
+				return errors.Join(restoreErr, err)
 			}
 		}
-		h.say("App restore complete: %d apps rebuilt from saved source commits. Point their DNS at this server; keep the old server's workers stopped.", len(restored))
+		if restoreErr != nil {
+			return restoreErr
+		}
+		h.say("App restore complete: %d apps rebuilt from saved source commits. Point their DNS at this server; keep the old server's workers stopped.", len(apps))
 		return nil
 	})
 }
@@ -829,45 +831,101 @@ func restoreRecord(records []backup.App, name string) backup.App {
 }
 
 // Shared runtimes and the empty-target snapshot are installed before this phase.
-func (h Host) restoreApplications(m backup.Manifest, stage string) (result error) {
-	// All new apps stay stopped until every build/import succeeds.
-	apps := m.Config.Apps
-	defer h.stopFailedRestore(&apps, &result, "Partial data is retained for inspection.")
+func (h Host) restoreApplications(m backup.Manifest, stage string) error {
 	if err := h.restoreSharedCredentials(stage, false); err != nil {
 		return err
 	}
-	for _, a := range m.Config.Apps {
-		if err := h.restoreApplication(a, restoreRecord(m.Apps, a.Name), stage, m); err != nil {
-			return err
-		}
-	}
+	// Shared configuration, Redis data and certificates are in place before
+	// any app starts.
 	if err := h.restoreSharedData(stage, m); err != nil {
 		return err
 	}
-	if err := h.startRestoredApps(m.Config.Apps, m.Apps, m.Ports); err != nil {
+	err := h.restoreEachApp(m.Config.Apps, m.Apps, func(a config.App) (ports.Registry, error) {
+		return m.Ports, h.restoreApplication(a, restoreRecord(m.Apps, a.Name), stage, m)
+	})
+	if err != nil {
 		return err
 	}
 	h.say("Full restore complete: %d apps rebuilt from saved source commits. Check app health and point DNS at this server; keep the old server's workers stopped.", len(m.Apps))
 	return nil
 }
 
-// stopFailedRestore stops every restored app after a failure; it runs deferred.
-func (h Host) stopFailedRestore(apps *[]config.App, result *error, retry string) {
-	if *result == nil || len(*apps) == 0 {
-		return
-	}
-	var stopErrors []error
-	for _, a := range *apps {
-		if err := h.disable(a); err != nil {
-			stopErrors = append(stopErrors, err)
+// restoreOrder puts Laravel apps first and keeps each group's order, so the
+// APIs a frontend build may call are running before that build.
+func restoreOrder(apps []config.App) []config.App {
+	ordered := slices.Clone(apps)
+	rank := func(a config.App) int {
+		if a.Type == "laravel" {
+			return 0
 		}
+		return 1
 	}
-	*result = errors.Join(*result, errors.Join(stopErrors...))
-	if len(stopErrors) == 0 {
-		h.say("Restore failed; restored app services are stopped. %s", retry)
-	} else {
-		h.say("Restore failed; some apps could not be stopped. Check service status. %s", retry)
+	slices.SortStableFunc(ordered, func(a, b config.App) int { return cmp.Compare(rank(a), rank(b)) })
+	return ordered
+}
+
+// restoreEachApp restores, builds and starts one app at a time in restore
+// order. Apps that were enabled when backed up start as soon as they are
+// built and keep serving. A failed app is stopped and the others continue;
+// the result lists every failure with its retry command.
+func (h Host) restoreEachApp(apps []config.App, records []backup.App, restore func(config.App) (ports.Registry, error)) error {
+	var failures []error
+	for _, a := range restoreOrder(apps) {
+		record := restoreRecord(records, a.Name)
+		retry := "remove it with abr remove " + a.Name + " --purge --yes, then restore it from an app backup"
+		err := h.write(h.restorePendingPath(a.Name), nil, 0600)
+		var r ports.Registry
+		if err == nil {
+			r, err = restore(a)
+		}
+		if err == nil {
+			retry = "fix the cause, then run abr deploy " + a.Name + " --no-pull"
+			if !record.Enabled {
+				retry += ", then abr disable " + a.Name + " to keep it stopped as it was"
+			}
+			err = h.deploy(a, r, DeployOptions{NoPull: true, deferEnable: true})
+		}
+		if err == nil && record.Enabled {
+			if err = h.enable(a, r); err == nil {
+				err = h.deploymentHealth(a)
+			}
+		}
+		if err == nil {
+			err = h.finishRestore(a.Name)
+		}
+		if err == nil {
+			continue
+		}
+		if stopErr := h.disable(a); stopErr != nil {
+			err = errors.Join(err, fmt.Errorf("stop %s: %w", a.Name, stopErr))
+		}
+		h.say("Restore of %s failed and its services are stopped: %v", a.Name, err)
+		failures = append(failures, fmt.Errorf("%s: %w; %s", a.Name, err, retry))
 	}
+	if len(failures) > 0 {
+		summary := fmt.Sprintf("restore incomplete: %d of %d apps failed", len(failures), len(apps))
+		if len(failures) < len(apps) {
+			summary += "; the other apps are restored as they were backed up"
+		}
+		return fmt.Errorf("%s\n%w", summary, errors.Join(failures...))
+	}
+	return nil
+}
+
+func (h Host) restorePendingPath(name string) string {
+	return filepath.Join(h.Manager.StateDir, "restores", name)
+}
+
+// finishRestore forgets that name's restored working tree awaits its first
+// deployment.
+func (h Host) finishRestore(name string) error {
+	if h.DryRun {
+		return nil
+	}
+	if err := os.Remove(h.path(h.restorePendingPath(name))); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // restoreSharedCredentials installs the saved Git identity, Composer
@@ -986,27 +1044,6 @@ func (h Host) restoreApplication(a config.App, record backup.App, stage string, 
 		return err
 	}
 	return h.importDatabaseFile(dbApp, filepath.Join(stage, "sql", a.Name+".sql"))
-}
-
-// startRestoredApps builds every restored app with its services stopped, then
-// starts only the apps that were enabled when they were backed up.
-func (h Host) startRestoredApps(apps []config.App, records []backup.App, r ports.Registry) error {
-	for _, a := range apps {
-		if err := h.deploy(a, r, DeployOptions{NoPull: true, deferEnable: true}); err != nil {
-			return fmt.Errorf("restore deployment %s: %w", a.Name, err)
-		}
-	}
-	for _, a := range apps {
-		if restoreRecord(records, a.Name).Enabled {
-			if err := h.enable(a, r); err != nil {
-				return err
-			}
-			if err := h.deploymentHealth(a); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func (h Host) freshRestoreTarget(m backup.Manifest, hostChecks bool) error {

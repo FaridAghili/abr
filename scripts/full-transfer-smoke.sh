@@ -71,6 +71,11 @@ INSERT INTO abr_full_backup_probe VALUES (73);
 SQL
 printf '\n; Full backup edited template fixture\n' | sudo tee -a /etc/abr/templates/php-cli.ini.tmpl >/dev/null
 sudo cp /etc/abr/templates/php-cli.ini.tmpl "$abr_binary_directory/full-template-before"
+# fixture-spa's build reads fixture-php's page, as a Nuxt build that prerenders
+# from a Laravel API does: restores must start fixture-php before building it.
+# The captured local change also makes its restored working tree dirty.
+printf '%s\n' 'curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/ | grep -Fq "Laravel fixture database=1"' | sudo runuser -u abr-fixture-spa -- tee /srv/apps/fixture-spa/abr-fixture-api.sh >/dev/null
+sudo runuser -u abr-fixture-spa -- node -e 'const fs=require("node:fs"); const p="/srv/apps/fixture-spa/package.json"; const c=JSON.parse(fs.readFileSync(p)); c.scripts.prebuild+=" && sh abr-fixture-api.sh"; fs.writeFileSync(p,JSON.stringify(c)+"\n");'
 # Disabled applications must remain disabled after a successful round trip.
 abr_ci disable fixture-spa
 source "$abr_smoke_script_directory/app-backup-smoke.sh"
@@ -176,11 +181,15 @@ abr_ci doctor
 # files. Remove only those files before later tests exercise normal deployment,
 # which requires a clean working tree even with --no-pull.
 sudo runuser -u abr-fixture-php -- rm /srv/apps/fixture-php/public/full-saved.txt /srv/apps/fixture-php/full-local.ini
-sudo runuser -u abr-fixture-php -- /usr/bin/git -C /srv/apps/fixture-php status --porcelain > "$abr_binary_directory/full-clean-after"
-if [[ -s $abr_binary_directory/full-clean-after ]]; then
-  cat "$abr_binary_directory/full-clean-after" >&2
-  echo 'Restore fixture cleanup left a dirty working tree' >&2; exit 1
-fi
+sudo runuser -u abr-fixture-spa -- rm /srv/apps/fixture-spa/abr-fixture-api.sh
+sudo runuser -u abr-fixture-spa -- /usr/bin/git -C /srv/apps/fixture-spa checkout -- package.json
+for full_app in fixture-php fixture-spa; do
+  sudo runuser -u "abr-$full_app" -- /usr/bin/git -C "/srv/apps/$full_app" status --porcelain > "$abr_binary_directory/full-clean-after"
+  if [[ -s $abr_binary_directory/full-clean-after ]]; then
+    cat "$abr_binary_directory/full-clean-after" >&2
+    echo "Restore fixture cleanup left a dirty $full_app working tree" >&2; exit 1
+  fi
+done
 sudo rm /usr/local/bin/git
 fixture_git_shim=0
 sudo rm -rf "$full_git_fixture"

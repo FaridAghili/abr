@@ -17,6 +17,8 @@ Abr 1.0.0 is the initial release for fresh Ubuntu 26.04 LTS AMD64 servers.
 - Full-server and per-app archive restore onto a fresh Ubuntu server, including the
   backup destination and schedule, and app restore under a new name beside an
   existing app with the same name.
+- Restores start each app as soon as it is built, Laravel APIs first, and keep
+  going past a failed app with a retry command for it.
 
 Download `abr-linux-amd64` for standalone installation. The
 `abr_1.0.0_linux_amd64.tar.gz` bundle contains the same executable as `abr`, editable

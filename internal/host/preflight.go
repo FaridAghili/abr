@@ -155,7 +155,7 @@ func (h Host) preflight(a config.App, env map[string]string, commit string, noPu
 	candidate.Directory = stage
 	run := func(name string, args ...string) error {
 		if _, err := h.asUser(candidate, env, true, name, args...); err != nil {
-			return fmt.Errorf("preflight: %w", deploymentCommandError(a.User, name, args, err))
+			return fmt.Errorf("preflight: %w", deploymentCommandError(a, name, args, err))
 		}
 		return nil
 	}

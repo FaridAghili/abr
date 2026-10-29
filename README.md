@@ -57,7 +57,10 @@ sudo abr deploy api --no-pull
 Use `--type nuxt` for Nuxt. Laravel defaults to PHP-FPM; Octane, queues and
 scheduled jobs are optional. Set app secrets before deploying.
 Deployments may cause downtime and run Laravel migrations; failed changes are
-not automatically rolled back.
+not automatically rolled back. Laravel builds the frontend before Composer by
+default (`--build-order composer-first` reverses it); while `vendor` is missing,
+Composer packages are installed without scripts before the frontend build.
+Health checks for an app's own domains are sent to this server.
 
 ## Everyday commands
 
@@ -90,7 +93,13 @@ off-server copy and test restores. Restoring a directory uses the newest backup
 of each app in it. On a set-up server, app backups are added as new apps; on a
 fresh server, the saved server settings are provisioned first. Backups carry the
 backup destination, its SSH key and trusted host key, and each app's last backup
-time, so a fresh server keeps backing up on schedule to the same backup server. When an app with
+time, so a fresh server keeps backing up on schedule to the same backup server.
+Apps are restored, built and started one at a time, Laravel apps first, so a
+frontend build that calls their API finds it running. If that build calls the
+API by its public domain before DNS points here, add the domain to this
+server's `/etc/hosts` during the restore. A failed app is stopped while the
+others keep running, and the restore ends with each failure's retry command,
+such as `abr deploy NAME --no-pull`. When an app with
 the same name already exists, `--name` restores one app backup under a new
 name: its project, user, MySQL database and account, services and ports follow
 the new name, `DB_DATABASE`/`DB_USERNAME` in its `.env` are updated, and its
