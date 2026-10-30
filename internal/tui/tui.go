@@ -115,6 +115,8 @@ type model struct {
 	reviewText           string
 	stats                *statsView
 	generation           int // Drops measurements from a monitor that was left.
+	rows, nextRows       map[string][]tableCell
+	choices              map[string]string // Last option opened in each menu, by title.
 }
 
 func newModel(o Options) *model {
@@ -130,9 +132,31 @@ func (m *model) setForm(page, title string, next func() tea.Cmd, groups ...*huh.
 	}
 	m.page, m.title, m.next = page, title, next
 	m.groups = groups
+	m.rows, m.nextRows = m.nextRows, nil
 	m.form = huh.NewForm(groups...).WithTheme(huh.ThemeFunc(func(bool) *huh.Styles { return formTheme(m.dark) })).WithKeyMap(listKeyMap()).WithShowHelp(false)
 	return tea.Batch(m.resizeForm(), m.form.Init())
 }
+
+// remember keeps a menu's opened option, so returning to the menu starts there.
+func (m *model) remember() {
+	switch m.page {
+	case "home", "menu", "apps", "app":
+	default:
+		return
+	}
+	if field, ok := m.form.GetFocusedField().(*huh.Select[string]); ok {
+		if value, _ := field.GetValue().(string); value != "back" {
+			if m.choices == nil {
+				m.choices = map[string]string{}
+			}
+			m.choices[m.title] = value
+		}
+	}
+}
+
+// choice is the option to start a menu on: the one last opened there.
+func (m *model) choice(title string) string { return m.choices[title] }
+
 func (m *model) bodyWidth() int { return max(20, min(m.width-4, 96)) }
 func clean(s string) string {
 	return strings.Map(func(r rune) rune {
@@ -160,7 +184,7 @@ func (m *model) home() tea.Cmd {
 			m.notice = clean(err.Error())
 		}
 	}
-	var selected string
+	selected := m.choice("Main menu")
 	return m.setForm("home", "Main menu", func() tea.Cmd {
 		switch selected {
 		case "apps":
@@ -189,7 +213,7 @@ func (m *model) home() tea.Cmd {
 func (m *model) addMenu() tea.Cmd {
 	m.menu, m.back = m.addMenu, m.home
 	m.notice, m.context = "", ""
-	var selected string
+	selected := m.choice("Add application")
 	return m.setForm("menu", "Add application", func() tea.Cmd {
 		switch selected {
 		case "clone":
@@ -217,14 +241,19 @@ func (m *model) appsMenu() tea.Cmd {
 	}
 	choices := make([]huh.Option[string], 0, len(c.Apps)+1)
 	slices.SortFunc(c.Apps, func(a, b config.App) int { return strings.Compare(a.Name, b.Name) })
-	for _, app := range c.Apps {
-		choices = append(choices, huh.NewOption(appSummary(app), "app:"+app.Name))
+	rows := make([][]tableCell, len(c.Apps))
+	for i, app := range c.Apps {
+		rows[i] = appRow(app)
+	}
+	header, keys := m.tableOptions(m.selectIndent(), []string{"APP", "STACK", "QUEUE", "SCHEDULER", "DOMAIN"}, rows)
+	for i, app := range c.Apps {
+		choices = append(choices, huh.NewOption(keys[i], "app:"+app.Name))
 	}
 	choices = append(choices, huh.NewOption("Back", "back"))
 	if len(c.Apps) == 0 && m.notice == "" {
 		m.notice = "No apps registered. Choose Add application from the main menu."
 	}
-	var selected string
+	selected := m.choice("Apps")
 	return m.setForm("apps", "Apps", func() tea.Cmd {
 		if strings.HasPrefix(selected, "app:") {
 			for _, app := range c.Apps {
@@ -234,13 +263,13 @@ func (m *model) appsMenu() tea.Cmd {
 			}
 		}
 		return m.goBack()
-	}, huh.NewGroup(huh.NewSelect[string]().Title(fmt.Sprintf("%d configured applications", len(c.Apps))).Description("Choose an app to manage.").Options(choices...).Value(&selected)))
+	}, huh.NewGroup(huh.NewSelect[string]().Title(fmt.Sprintf("%d configured applications", len(c.Apps))).Description("Choose an app to manage; type to filter.\n"+header).Options(choices...).Value(&selected)))
 }
 
 func (m *model) serverMenu() tea.Cmd {
 	m.menu, m.back = m.serverMenu, m.home
 	m.notice, m.context = "", ""
-	var selected string
+	selected := m.choice("Server & credentials")
 	return m.setForm("menu", "Server & credentials", func() tea.Cmd {
 		switch selected {
 		case "setup":
@@ -270,7 +299,7 @@ func (m *model) serverMenu() tea.Cmd {
 func (m *model) toolsMenu() tea.Cmd {
 	m.menu, m.back = m.toolsMenu, m.home
 	m.notice, m.context = "", ""
-	var selected string
+	selected := m.choice("Tools")
 	return m.setForm("menu", "Tools", func() tea.Cmd {
 		switch selected {
 		case "deploy":
@@ -320,7 +349,7 @@ func (m *model) appMenu(app config.App) tea.Cmd {
 		choices = append(choices, huh.NewOption("Artisan shell", "artisan-shell"))
 	}
 	choices = append(choices, huh.NewOption("More actions", "more"), huh.NewOption("Back", "back"))
-	var selected string
+	selected := m.choice(app.Name)
 	return m.setForm("app", app.Name, func() tea.Cmd {
 		return m.appAction(app, selected)
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Application actions").Options(choices...).Value(&selected)))
@@ -328,7 +357,7 @@ func (m *model) appMenu(app config.App) tea.Cmd {
 
 func (m *model) databaseMenu(app config.App) tea.Cmd {
 	m.menu, m.back = m.appDestination(app.Name, m.databaseMenu), m.appDestination(app.Name, m.appMenu)
-	var selected string
+	selected := m.choice(app.Name + " / Database")
 	return m.setForm("app", app.Name+" / Database", func() tea.Cmd {
 		if selected == "back" {
 			return m.goBack()
@@ -344,7 +373,7 @@ func (m *model) databaseMenu(app config.App) tea.Cmd {
 
 func (m *model) moreAppMenu(app config.App) tea.Cmd {
 	m.menu, m.back = m.appDestination(app.Name, m.moreAppMenu), m.appDestination(app.Name, m.appMenu)
-	var selected string
+	selected := m.choice(app.Name + " / More actions")
 	return m.setForm("app", app.Name+" / More actions", func() tea.Cmd {
 		if selected == "back" {
 			return m.goBack()
@@ -724,6 +753,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 		updated, cmd := m.form.Update(msg)
 		m.form = updated.(*huh.Form)
 		if m.form.State == huh.StateCompleted {
+			m.remember()
 			return m, m.next()
 		}
 		if m.form.State == huh.StateAborted {
@@ -778,7 +808,7 @@ func (m *model) View() tea.View {
 		}
 		body = m.viewport.View() + "\n\n" + cancel + "    " + run
 	} else {
-		body = m.form.View()
+		body = m.colorRows(m.form.View())
 	}
 	if m.notice != "" {
 		body = palette.info.Render(ansi.Truncate("› "+m.notice, width, "…")) + "\n" + body

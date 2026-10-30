@@ -12,7 +12,7 @@ func isLogView(args []string) bool {
 
 func (m *model) allLogsMenu() tea.Cmd {
 	m.menu, m.back = m.allLogsMenu, m.toolsMenu
-	var selected string
+	selected := m.choice("All applications / Logs")
 	return m.setForm("menu", "All applications / Logs", func() tea.Cmd {
 		switch selected {
 		case "read":

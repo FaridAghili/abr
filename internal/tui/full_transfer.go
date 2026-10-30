@@ -20,7 +20,7 @@ import (
 
 func (m *model) fullTransferMenu() tea.Cmd {
 	m.menu, m.back = m.fullTransferMenu, m.serverMenu
-	var selected string
+	selected := m.choice("Backup & restore")
 	return m.setForm("menu", "Backup & restore", func() tea.Cmd {
 		switch selected {
 		case "backup":
@@ -130,21 +130,34 @@ func (m *model) backupServer() bool {
 	return err == nil
 }
 
-// appChoices lists apps by name with their current backup plan.
-func (m *model) appChoices() ([]huh.Option[string], error) {
+// appChoices lists apps by name as a table of their backup plans, and the
+// table's header for the field description.
+func (m *model) appChoices() ([]huh.Option[string], string, error) {
 	c, err := config.Load(m.options.ConfigPath)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(c.Apps) == 0 {
-		return nil, errors.New("No apps registered. Choose Add application from the main menu.")
+		return nil, "", errors.New("No apps registered. Choose Add application from the main menu.")
 	}
 	slices.SortFunc(c.Apps, func(a, b config.App) int { return strings.Compare(a.Name, b.Name) })
-	choices := make([]huh.Option[string], 0, len(c.Apps))
-	for _, app := range c.Apps {
-		choices = append(choices, huh.NewOption(clean(app.Name+" · "+backupPlan(app.Backup)), app.Name))
+	rows := make([][]tableCell, len(c.Apps))
+	for i, app := range c.Apps {
+		schedule, keep := cellTone(scheduleLabel(app.Backup.Schedule), toneGood), cellText(strconv.Itoa(app.Backup.Keep))
+		if app.Backup.Schedule == "" {
+			schedule.tone = toneMuted
+		}
+		if app.Backup.Keep == 0 {
+			keep = cellTone("all", toneMuted)
+		}
+		rows[i] = []tableCell{cellTone(app.Name, toneName), schedule, keep}
 	}
-	return choices, nil
+	header, keys := m.tableOptions(m.multiSelectIndent(), []string{"APP", "SCHEDULE", "KEEP"}, rows)
+	choices := make([]huh.Option[string], len(c.Apps))
+	for i, app := range c.Apps {
+		choices[i] = huh.NewOption(keys[i], app.Name)
+	}
+	return choices, header, nil
 }
 
 func scheduleLabel(schedule string) string {
@@ -157,16 +170,8 @@ func scheduleLabel(schedule string) string {
 	return "every " + schedule
 }
 
-func backupPlan(b config.Backup) string {
-	plan := scheduleLabel(b.Schedule)
-	if b.Keep > 0 {
-		return plan + ", keep " + strconv.Itoa(b.Keep)
-	}
-	return plan + ", keep all"
-}
-
-func selectApps(title, description string, choices []huh.Option[string], selected *[]string) *huh.MultiSelect[string] {
-	return huh.NewMultiSelect[string]().Height(min(len(choices)+2, 12)).Title(title).Description(description).Options(choices...).Value(selected).Validate(func(v []string) error {
+func selectApps(title, description, header string, choices []huh.Option[string], selected *[]string) *huh.MultiSelect[string] {
+	return huh.NewMultiSelect[string]().Height(min(len(choices)+2, 12)).Title(title).Description(description + "\n" + header).Options(choices...).Value(selected).Validate(func(v []string) error {
 		if len(v) == 0 {
 			return errors.New("Select at least one app with Space")
 		}
@@ -175,7 +180,7 @@ func selectApps(title, description string, choices []huh.Option[string], selecte
 }
 
 func (m *model) appBackupForm() tea.Cmd {
-	choices, err := m.appChoices()
+	choices, header, err := m.appChoices()
 	if err != nil {
 		return m.workflowError("Back up apps", err)
 	}
@@ -196,7 +201,7 @@ func (m *model) appBackupForm() tea.Cmd {
 		}
 		args = append(args, names...)
 		return m.review(action{title: "Back up apps", args: args, note: fmt.Sprintf("Apps: %s\n", strings.Join(names, ", ")) + note + " Redis data is excluded. HTTPS is recreated from saved domains/settings on restore. Avoid schema changes; SQL and files may differ in time."})
-	}, huh.NewGroup(selectApps("Apps", "Space selects an app, Ctrl+A selects all; type to filter.\nExample: select api and portal to back up both.", choices, &names)),
+	}, huh.NewGroup(selectApps("Apps", "Space selects an app, Ctrl+A selects all; type to filter.\nExample: select api and portal to back up both.", header, choices, &names)),
 		huh.NewGroup(huh.NewSelect[bool]().Title("Where to keep the backups?").Description("Send them to your backup server, or keep them on this server.\nExample: this server for a quick copy before a risky change.").Options(huh.NewOption(serverLabel, false), huh.NewOption("This server · private directory", true)).Value(&local)),
 		huh.NewGroup(textInput("Backup directory", "Absolute private directory on this server, outside app and Abr directories.", "/var/backups/abr/apps", &directory).Validate(func(s string) error {
 			if !filepath.IsAbs(s) || strings.ContainsAny(s, "\x00\r\n") {
@@ -210,7 +215,7 @@ func (m *model) appBackupForm() tea.Cmd {
 // next group, so different plans take a few steps each instead of per-app menus.
 func (m *model) backupScheduleForm() tea.Cmd {
 	m.menu, m.back = m.fullTransferMenu, m.fullTransferMenu
-	choices, err := m.appChoices()
+	choices, header, err := m.appChoices()
 	if err != nil {
 		return m.workflowError("Backup schedules", err)
 	}
@@ -236,7 +241,7 @@ func (m *model) backupScheduleForm() tea.Cmd {
 		}
 		note := fmt.Sprintf("Apps: %s\nSchedule: %s\n\n%s\n\n%s An hourly timer backs each app up when due; services keep running and no deploy is needed.\n\nAfter saving, press Enter to set the next group of apps, or Esc to finish.", strings.Join(names, ", "), scheduleLabel(value), where, retention)
 		return m.review(action{title: "Save backup schedules", args: args, note: note, continueWith: m.backupScheduleForm})
-	}, huh.NewGroup(selectApps("Apps with the same plan", "Choose a group sharing one schedule; set the next group after saving. Space selects, Ctrl+A all.\nExample: all small sites now, then busy shops every few hours.", choices, &names)),
+	}, huh.NewGroup(selectApps("Apps with the same plan", "Choose a group sharing one schedule; set the next group after saving. Space selects, Ctrl+A all.\nExample: all small sites now, then busy shops every few hours.", header, choices, &names)),
 		huh.NewGroup(huh.NewSelect[string]().Title("How often?").Description("Automatic backups for the selected apps. Services keep running.\nExample: daily for a small site, every few hours for busy data.").Options(huh.NewOption("Daily", "daily"), huh.NewOption("Every few hours", "hours"), huh.NewOption("Weekly", "weekly"), huh.NewOption("Off (manual only)", "off")).Value(&schedule)),
 		huh.NewGroup(textInput("Hours between backups", "Back up every this many hours, from 1 to 23.", "6", &hours).Validate(func(s string) error {
 			return (config.Backup{Schedule: s + "h"}).Validate()

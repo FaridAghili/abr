@@ -32,7 +32,7 @@ func TestTypingFiltersMenusAndOpensHighlightedApp(t *testing.T) {
 	}
 	typeSearch(m, "MOON")
 	view := viewText(m)
-	if !strings.Contains(view, "moon · laravel") || strings.Contains(view, "alpha · laravel") || strings.Contains(view, "zebra · laravel") {
+	if !strings.Contains(view, "moon.example.com") || strings.Contains(view, "alpha.example.com") || strings.Contains(view, "zebra.example.com") {
 		t.Fatalf("apps search did not filter case-insensitively: %s", view)
 	}
 	press(m, tea.KeyEnter)

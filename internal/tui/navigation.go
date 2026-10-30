@@ -44,29 +44,27 @@ func (m *model) goBack() tea.Cmd {
 	return m.home()
 }
 
-func appSummary(app config.App) string {
-	summary := app.Name + " · " + app.Type + " · " + app.Domain
+// appRow summarizes an app for the apps table.
+func appRow(app config.App) []tableCell {
+	stack, queue, scheduler := "Nuxt", cellTone("—", toneMuted), cellTone("—", toneMuted)
 	if app.Type == "laravel" {
-		web := "FPM"
+		stack = "Laravel FPM"
 		if app.Web.Driver == "octane" {
 			workers := app.Web.Workers
 			if workers == 0 {
 				workers = 2
 			}
-			web = fmt.Sprintf("Octane (%d)", workers)
+			stack = fmt.Sprintf("Laravel Octane ×%d", workers)
 		}
-		summary += fmt.Sprintf("\n  %s · Queue: %d · Scheduler: %s · Nightwatch: %s", web, app.Queue.Workers, onOff(app.Scheduler.Enabled), onOff(app.Nightwatch.Enabled))
-	} else {
-		summary += "\n  Node"
+		queue, scheduler = cellTone("off", toneMuted), cellTone("off", toneMuted)
+		if app.Queue.Workers > 0 {
+			queue = cellTone(fmt.Sprint(app.Queue.Workers), toneGood)
+		}
+		if app.Scheduler.Enabled {
+			scheduler = cellTone("on", toneGood)
+		}
 	}
-	return clean(summary)
-}
-
-func onOff(enabled bool) string {
-	if enabled {
-		return "on"
-	}
-	return "off"
+	return []tableCell{cellTone(app.Name, toneName), cellText(stack), queue, scheduler, cellTone(app.Domain, toneInfo)}
 }
 
 func (m *model) appDetails(app config.App) tea.Cmd {

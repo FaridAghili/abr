@@ -13,7 +13,7 @@ import (
 
 func (m *model) editMenu(app config.App) tea.Cmd {
 	m.menu, m.back = m.appDestination(app.Name, m.editMenu), m.appDestination(app.Name, m.moreAppMenu)
-	var selected string
+	selected := m.choice(app.Name + " / Edit settings")
 	choices := []huh.Option[string]{huh.NewOption("Domains", "domains"), huh.NewOption("Health check", "health")}
 	if app.Type == "laravel" {
 		choices = append(choices, huh.NewOption("Workers", "workers"), huh.NewOption("Components", "components"), huh.NewOption("Build order", "build-order"))

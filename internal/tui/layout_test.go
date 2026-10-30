@@ -61,9 +61,9 @@ func TestAppsListGrowsAfterResizeAndScrollsWithinBody(t *testing.T) {
 	m := newModel(o)
 	m.appsMenu()
 	m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
-	small := strings.Count(viewText(m), "· laravel")
+	small := strings.Count(viewText(m), "Laravel FPM")
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	large := strings.Count(viewText(m), "· laravel")
+	large := strings.Count(viewText(m), "Laravel FPM")
 	if large <= small {
 		t.Fatal("app list did not use the added terminal height")
 	}
@@ -73,7 +73,7 @@ func TestAppsListGrowsAfterResizeAndScrollsWithinBody(t *testing.T) {
 		press(m, tea.KeyDown)
 	}
 	after := strings.Split(ansi.Strip(viewText(m)), "\n")
-	if !strings.Contains(strings.Join(after, "\n"), "app-29") || !strings.Contains(strings.Join(after, "\n"), "Nightwatch: off") {
+	if !strings.Contains(strings.Join(after, "\n"), "app-29") || !strings.Contains(strings.Join(after, "\n"), "Laravel FPM") {
 		t.Fatal("selected app's summary is not visible after scrolling")
 	}
 	for _, row := range []int{1, 3, 13, 14} {

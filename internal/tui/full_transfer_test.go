@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -134,7 +135,7 @@ func TestOnlineAppBackupReviewAndRestoreDirectory(t *testing.T) {
 	m := newModel(o)
 	m.fullTransferMenu()
 	m.appBackupForm()
-	if view := viewText(m); !strings.Contains(view, "Example:") || !strings.Contains(view, "api · manual, keep all") {
+	if view := viewText(m); !strings.Contains(view, "Example:") || !regexp.MustCompile(`APP +SCHEDULE +KEEP`).MatchString(view) || !regexp.MustCompile(`▸ • api +manual +all`).MatchString(view) {
 		t.Fatal("app backup picker lacks description, example or backup plans", view)
 	}
 	press(m, tea.KeySpace) // api, listed first by name
@@ -236,7 +237,7 @@ func TestBackupSchedulesForGroupsOfApps(t *testing.T) {
 	m.fullTransferMenu()
 	press(m, tea.KeyDown) // Backup schedules
 	m.next()
-	if view := viewText(m); !strings.Contains(view, "Apps with the same plan") || !strings.Contains(view, "shop · every 4h, keep 30") || !strings.Contains(view, "Example:") {
+	if view := viewText(m); !strings.Contains(view, "Apps with the same plan") || !regexp.MustCompile(`shop +every 4h +30`).MatchString(view) || !strings.Contains(view, "Example:") {
 		t.Fatal("schedule picker lacks apps, their plans or guidance", view)
 	}
 	press(m, tea.KeySpace) // blog

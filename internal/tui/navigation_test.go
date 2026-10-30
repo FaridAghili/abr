@@ -40,12 +40,16 @@ func TestAppsMenuSortsAppsAndShowsConfiguredSettings(t *testing.T) {
 	m.next() // Main menu → Apps.
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	view := viewText(m)
-	if !strings.Contains(view, "alpha · laravel") || strings.Index(view, "alpha · laravel") >= strings.Index(view, "zebra · laravel") {
+	if !strings.Contains(view, "alpha ") || strings.Index(view, "alpha ") >= strings.Index(view, "zebra ") {
 		t.Fatalf("projects not sorted: %s", view)
 	}
-	for _, settings := range []string{"FPM · Queue: 0 · Scheduler: off · Nightwatch: off", "Octane (4) · Queue: 3 · Scheduler: on · Nightwatch: on"} {
-		if !strings.Contains(view, settings) {
-			t.Fatalf("missing %q: %s", settings, view)
+	for _, row := range []string{
+		"APP    STACK              QUEUE  SCHEDULER  DOMAIN",
+		"alpha  Laravel FPM        off    off        alpha.example.com",
+		"zebra  Laravel Octane ×4  3      on         zebra.example.com",
+	} {
+		if !strings.Contains(view, row) {
+			t.Fatalf("missing aligned row %q: %s", row, view)
 		}
 	}
 	// The first selection must match the displayed order, not config file order.
@@ -62,7 +66,7 @@ func TestAppsMenuSortsAppsAndShowsConfiguredSettings(t *testing.T) {
 		m.appsMenu()
 		m.Update(size)
 		view = viewText(m)
-		for _, label := range []string{"FPM", "Queue: 0", "Scheduler: off", "Nightwatch: off", "Esc back"} {
+		for _, label := range []string{"Laravel FPM", "off", "Esc back"} {
 			if !strings.Contains(view, label) {
 				t.Fatalf("summary clipped at %dx%d: %s", size.Width, size.Height, view)
 			}
