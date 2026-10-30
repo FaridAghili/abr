@@ -94,7 +94,7 @@ func (m *model) editForm(app config.App, section string) tea.Cmd {
 			huh.NewGroup(textInput("Hours between backups", "Back up every this many hours, from 1 to 23.", "6", &hours).Validate(func(s string) error {
 				return (config.Backup{Schedule: s + "h"}).Validate()
 			})).WithHideFunc(func() bool { return schedule != "hours" }),
-			huh.NewGroup(textInput("Backups to keep", "Newest backups kept here and on the backup server; older ones are deleted. 0 keeps all.", "7", &keep).Validate(func(s string) error {
+			huh.NewGroup(textInput("Backups to keep", "Newest backups kept on the backup server, or on this server without one; older ones are deleted. 0 keeps all.", "7", &keep).Validate(func(s string) error {
 				n, err := strconv.Atoi(s)
 				if err != nil {
 					return fmt.Errorf("Enter a number from 0 to 1000")

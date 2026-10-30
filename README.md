@@ -90,9 +90,9 @@ schedules** in the menu sets one schedule for a group of apps at a time, such
 as weekly for most sites and every 4h for busy shops. After a verified transfer no archive stays on the production server: an
 archive kept by a failed transfer is uploaded and removed on the next
 successful run. Schedules are `6h` (every 1-23 hours), `daily` or `weekly`; an hourly
-timer backs up each app when due. Older archives beyond `--backup-keep` are
-deleted locally and on the backup server, which needs only SSH access and a
-private directory. Archives contain secrets and are **not encrypted**. Keep a protected
+timer backs up each app when due. Older archives beyond `--keep` are deleted
+where the backups are kept: on the backup server, which needs only SSH access
+and a private directory, or on this server without one. Archives contain secrets and are **not encrypted**. Keep a protected
 off-server copy and test restores. Restoring a directory uses the newest backup
 of each app in it. On a set-up server, app backups are added as new apps; on a
 fresh server, the saved server settings are provisioned first. Backups carry the

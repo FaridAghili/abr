@@ -250,13 +250,20 @@ func TestBackupSchedulesForGroupsOfApps(t *testing.T) {
 	m.form.NextGroup()
 	m.Update(tea.PasteMsg{Content: "14"})
 	m.next()
-	if m.page != "confirm" || strings.Join(m.current.args, " ") != "backup schedule blog news --schedule 12h --keep 14" || !strings.Contains(m.reviewText, "Schedule: every 12h") {
+	if m.page != "confirm" || strings.Join(m.current.args, " ") != "backup schedule blog news --schedule 12h --keep 14" || !strings.Contains(m.reviewText, "Schedule: every 12h") || !strings.Contains(m.reviewText, "stay on this server in /var/backups/abr/apps") || !strings.Contains(m.reviewText, "newest 14 backups of each app on this server") {
 		t.Fatal("group schedule review inaccurate", m.current.args, m.reviewText)
 	}
 	approve(m)
 	finishStep(t, m)
 	if !strings.Contains(viewText(m), "Enter continue") {
 		t.Fatal("saving a group does not offer the next group", viewText(m))
+	}
+	// With a backup server, nothing is kept on this server after a verified transfer.
+	if err := os.MkdirAll(o.StateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(o.StateDir, "backup-destination.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
 	}
 	press(m, tea.KeyEnter)
 	if m.page != "form" || !strings.Contains(viewText(m), "Apps with the same plan") {
@@ -271,7 +278,7 @@ func TestBackupSchedulesForGroupsOfApps(t *testing.T) {
 	}
 	m.form.NextGroup()
 	m.next() // Blank retention keeps shop's 30.
-	if strings.Join(m.current.args, " ") != "backup schedule shop --schedule weekly" || !strings.Contains(m.reviewText, "keeps its current retention") {
+	if strings.Join(m.current.args, " ") != "backup schedule shop --schedule weekly" || !strings.Contains(m.reviewText, "keeps its current number of backups") || !strings.Contains(m.reviewText, "so none stay here") {
 		t.Fatal("second group review inaccurate", m.current.args)
 	}
 	if len(calls) != 1 {

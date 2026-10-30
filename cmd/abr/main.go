@@ -202,7 +202,7 @@ func run(args []string, out, stderr io.Writer) error {
 	case "backup schedule":
 		fs.BoolVar(&backupAll, "all", false, "apply to all registered apps")
 		fs.StringVar(&backupSchedule, "schedule", "", "automatic backups: 6h (every 1-23 hours), daily, weekly or off")
-		fs.IntVar(&backupKeep, "keep", -1, "newest backups to keep locally and on the backup server (0 keeps all; omitted keeps each app's value)")
+		fs.IntVar(&backupKeep, "keep", -1, "newest backups to keep on the backup server, or locally without one (0 keeps all; omitted keeps each app's value)")
 	case "backup configure":
 		fs.StringVar(&destination.Host, "host", "", "backup server IP or hostname")
 		fs.StringVar(&destination.User, "user", "", "backup server SSH user")
@@ -242,7 +242,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&app.InertiaSSR.Enabled, "inertia-ssr", false, "enable/disable Inertia SSR")
 		fs.BoolVar(&app.Database.Enabled, "database", false, "enable/disable managed database; existing data retained")
 		fs.StringVar(&app.Backup.Schedule, "backup-schedule", "", "automatic backups: 6h (every 1-23 hours), daily, weekly or off")
-		fs.IntVar(&app.Backup.Keep, "backup-keep", 0, "newest backups to keep locally and on the backup server (0 keeps all)")
+		fs.IntVar(&app.Backup.Keep, "backup-keep", 0, "newest backups to keep on the backup server, or locally without one (0 keeps all)")
 		fs.BoolVar(&configOnly, "config-only", false, "save portable config/ports without host operations")
 	case "remove":
 		fs.BoolVar(&purge, "purge", false, "permanently delete project, uploads, managed database/account, home, credentials and history")
