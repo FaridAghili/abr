@@ -96,7 +96,8 @@ PY
   abr_ci backup --due | grep -F 'No scheduled app backups are due'
   # The following restores use the newest archive; save it without a schedule
   # so restored hosts do not start timed backups during this test.
-  abr_ci edit fixture-php --config-only --backup-schedule off
+  # Omitting --keep retains fixture-php's keep 1 for the runs below.
+  abr_ci backup schedule fixture-php --schedule off | grep -E '^fixture-php +manual +newest 1 '
   abr_ci backup fixture-php --transfer --output-dir "$app_backup_local"
   test "$(sudo find "$app_backup_remote" -maxdepth 1 -name 'fixture-php-*.tar.gz' | wc -l)" = 1
   test "$(sudo find "$app_backup_remote" -maxdepth 1 -name '*.tar.gz' | wc -l)" = 4
@@ -116,6 +117,12 @@ PY
   abr_ci backup fixture-php --transfer --output-dir "$app_backup_local" | grep -F 'Deleted older local backup fixture-php-'
   test -z "$(sudo find "$app_backup_local" -maxdepth 1 -name '*.tar.gz')"
   test "$(sudo find "$app_backup_remote" -maxdepth 1 -name 'fixture-php-*.tar.gz' | wc -l)" = 1
+  # --local keeps an archive on this server although a backup server is saved.
+  app_backup_remote_count=$(sudo find "$app_backup_remote" -maxdepth 1 -name '*.tar.gz' | wc -l)
+  abr_ci backup fixture-octane --local --output-dir "$app_backup_local" | grep -F "App backup complete: $app_backup_local/fixture-octane-"
+  test "$(sudo find "$app_backup_local" -maxdepth 1 -name 'fixture-octane-*.tar.gz' | wc -l)" = 1
+  test "$(sudo find "$app_backup_remote" -maxdepth 1 -name '*.tar.gz' | wc -l)" = "$app_backup_remote_count"
+  sudo find "$app_backup_local" -maxdepth 1 -name 'fixture-octane-*.tar.gz' -delete
   # Exercise real password auth on an isolated loopback SSH daemon. The main
   # SSH service retains its key-only authentication settings.
   sudo useradd --no-create-home --shell /bin/sh abr-backup-fixture

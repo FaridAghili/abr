@@ -241,7 +241,7 @@ func (h Host) backupOptions(o BackupOptions) (BackupOptions, error) {
 	if o.OutputDir == "" {
 		o.OutputDir = "/var/backups/abr/apps"
 	}
-	if o.Remote != "" {
+	if o.Remote != "" || o.Local {
 		return o, nil
 	}
 	d, err := h.loadBackupDestination()

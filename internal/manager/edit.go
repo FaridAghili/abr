@@ -2,6 +2,7 @@ package manager
 
 import (
 	"fmt"
+	"slices"
 
 	"abr/internal/config"
 	"abr/internal/ports"
@@ -9,24 +10,24 @@ import (
 )
 
 func (m Manager) Edit(name string, changes config.AppChanges, save bool) error {
+	return m.EditApps([]string{name}, changes, save)
+}
+
+// EditApps applies the same changes to every named app in one configuration write.
+func (m Manager) EditApps(names []string, changes config.AppChanges, save bool) error {
 	fn := func() error {
 		c, err := config.Load(m.ConfigPath)
 		if err != nil {
 			return err
 		}
-		found := false
-		for i, app := range c.Apps {
-			if app.Name == name {
-				c.Apps[i], err = changes.Apply(app)
-				if err != nil {
-					return err
-				}
-				found = true
-				break
+		for _, name := range names {
+			i := slices.IndexFunc(c.Apps, func(a config.App) bool { return a.Name == name })
+			if i < 0 {
+				return fmt.Errorf("unknown application %q", name)
 			}
-		}
-		if !found {
-			return fmt.Errorf("unknown application %q", name)
+			if c.Apps[i], err = changes.Apply(c.Apps[i]); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
 		}
 		data, err := config.Encode(c)
 		if err != nil {

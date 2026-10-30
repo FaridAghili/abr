@@ -96,8 +96,14 @@ func (h Host) BackupStatus() error {
 	scheduled := false
 	now := time.Now()
 	stamp := func(t time.Time) string { return t.Local().Format("2006-01-02 15:04") }
+	destination := "kept on this server in /var/backups/abr/apps"
+	if d, err := h.loadBackupDestination(); err == nil {
+		destination = fmt.Sprintf("sent to %s@%s:%s", d.User, d.Host, d.Directory)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	status := table.Table{
-		Title:   "Backups · times in " + now.Local().Format("MST"),
+		Title:   fmt.Sprintf("Backups %s · times in %s", destination, now.Local().Format("MST")),
 		Headers: []string{"APP", "SCHEDULE", "KEEP", "LAST BACKUP", "NEXT", "RESULT"},
 	}
 	var failures []string

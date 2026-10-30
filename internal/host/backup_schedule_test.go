@@ -211,3 +211,37 @@ func TestBackupReceiverPublishesAndPrunesOnlyThisApp(t *testing.T) {
 		t.Fatal("failed upload pruned an existing backup", err)
 	}
 }
+
+func TestScheduleBackupsForManyApps(t *testing.T) {
+	h, _, _, cleanup := fullFixture(t, false)
+	defer cleanup()
+	addSecondBackupApp(t, h)
+	setBackupSchedule(t, h, "second", "daily", 9)
+	out := h.Output.(*bytes.Buffer)
+	if err := h.ScheduleBackups([]string{"app", "missing"}, false, "6h", 3); err == nil {
+		t.Fatal("unknown app accepted")
+	}
+	if err := h.ScheduleBackups(nil, true, "6h", 3); err != nil {
+		t.Fatal(err)
+	}
+	c, err := config.Load(h.Manager.ConfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range c.Apps {
+		if a.Backup != (config.Backup{Schedule: "6h", Keep: 3}) {
+			t.Fatal("schedule not applied to every app", a.Name, a.Backup)
+		}
+	}
+	if !strings.Contains(out.String(), "Saved every 6h, keep newest 3 for 2 apps: app, second") || !regexp.MustCompile(`(?m)^second +every 6h +newest 3 `).MatchString(out.String()) {
+		t.Fatal("saved plan or status table missing", out.String())
+	}
+	// Omitted retention keeps each app's own value; off returns to manual backups.
+	setBackupSchedule(t, h, "second", "daily", 9)
+	if err := h.ScheduleBackups([]string{"second"}, false, "off", -1); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := config.Load(h.Manager.ConfigPath); c.Apps[1].Backup != (config.Backup{Keep: 9}) || c.Apps[0].Backup.Schedule != "6h" {
+		t.Fatal("off or omitted retention changed the wrong settings", c.Apps)
+	}
+}

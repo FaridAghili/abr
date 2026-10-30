@@ -203,7 +203,7 @@ func TestAppBackupUploadsArchivesLeftByFailedTransfers(t *testing.T) {
 }
 
 func TestBackupDestinationPasswordPrivateAndSSHDescriptor(t *testing.T) {
-	h, runner, _, cleanup := fullFixture(t, false)
+	h, runner, output, cleanup := fullFixture(t, false)
 	defer cleanup()
 	d := backup.Destination{Host: "192.0.2.10", User: "backup", Directory: "/srv/backups/abr", Port: 2222, Auth: "password", Password: "fixture SSH secret"}
 	if err := h.ConfigureBackup(d, ""); err != nil {
@@ -241,6 +241,18 @@ func TestBackupDestinationPasswordPrivateAndSSHDescriptor(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(h.Manager.StateDir, ".ssh-password-*"))
 	if len(files) != 0 {
 		t.Fatal("temporary password retained")
+	}
+	// --local keeps the archive here even though a backup server is saved.
+	called = false
+	local := filepath.Dir(output)
+	if err := (BackupOptions{Local: true, Transfer: true}).Validate([]string{"app"}); err == nil {
+		t.Fatal("--local combined with --transfer")
+	}
+	if err := h.BackupApps([]string{"app"}, BackupOptions{Local: true, OutputDir: local}); err != nil {
+		t.Fatal(err)
+	}
+	if archives, _ := filepath.Glob(filepath.Join(local, "app-*.tar.gz")); called || len(archives) != 1 {
+		t.Fatal("local backup transferred or not kept", called, archives)
 	}
 }
 

@@ -818,7 +818,10 @@ func nextStep(args []string) string {
 			return "Choose Back up apps to transfer one archive at a time to the verified destination."
 		}
 		if len(args) > 1 && args[1] == "status" {
-			return "Change an app's schedule or retention in its Edit settings > Backups."
+			return "Choose Backup schedules to set many apps at once, or an app's Edit settings > Backups."
+		}
+		if slices.Contains(args, "--local") {
+			return "Copy the private archives off this server; a lost server loses them too."
 		}
 		return "Copy the private backup archive to storage outside this VPS."
 	case "restore":

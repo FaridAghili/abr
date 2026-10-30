@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"abr/internal/backup"
+	"abr/internal/config"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -128,15 +129,40 @@ func TestBackupHostIdentityWorkflow(t *testing.T) {
 }
 
 func TestOnlineAppBackupReviewAndRestoreDirectory(t *testing.T) {
-	m := newModel(testOptions(t))
+	o := testOptions(t)
+	saveApps(t, o, navigationApp("portal"), navigationApp("api"))
+	m := newModel(o)
 	m.fullTransferMenu()
 	m.appBackupForm()
-	if len(m.groups) != 1 || !strings.Contains(viewText(m), "Example:") {
-		t.Fatal("app backup field lacks description/example")
+	if view := viewText(m); !strings.Contains(view, "Example:") || !strings.Contains(view, "api · manual, keep all") {
+		t.Fatal("app backup picker lacks description, example or backup plans", view)
 	}
-	m.next()
-	if m.page != "confirm" || m.approved || strings.Join(m.current.args, " ") != "backup --transfer --all" || !strings.Contains(m.reviewText, "Keep all apps running") {
-		t.Fatal("online transfer review inaccurate")
+	press(m, tea.KeySpace) // api, listed first by name
+	m.form.NextGroup()
+	if view := viewText(m); !strings.Contains(view, "Where to keep the backups?") || !strings.Contains(view, "not configured yet") {
+		t.Fatal("destination choice missing or hides the unconfigured server", view)
+	}
+	m.form.NextGroup() // No backup server yet: this server is preselected.
+	m.next() // Default private directory.
+	if m.page != "confirm" || m.approved || strings.Join(m.current.args, " ") != "backup --local --output-dir /var/backups/abr/apps api" || !strings.Contains(m.reviewText, "Directory: /var/backups/abr/apps") {
+		t.Fatal("local backup review inaccurate", m.current.args, m.reviewText)
+	}
+	if hint := nextStep(m.current.args); !strings.Contains(hint, "Copy the private archives off this server") {
+		t.Fatal("local backup lacks its next step", hint)
+	}
+	if err := os.MkdirAll(o.StateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(o.StateDir, "backup-destination.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m.appBackupForm()
+	press(m, tea.KeyDown)
+	press(m, tea.KeySpace) // portal
+	m.form.NextGroup()
+	m.next() // The saved backup server is preselected.
+	if m.page != "confirm" || strings.Join(m.current.args, " ") != "backup --transfer portal" || !strings.Contains(m.reviewText, "transfer to the configured backup server") {
+		t.Fatal("online transfer review inaccurate", m.current.args)
 	}
 	directory := t.TempDir()
 	for _, name := range []string{"api-20261010020000.tar.gz", "portal-20261010020000.tar.gz", "ignored.sql"} {
@@ -192,5 +218,63 @@ func TestRestoreUnderNewName(t *testing.T) {
 	}
 	if !strings.Contains(nextStep([]string{"restore", "/x.tar.gz", "--yes", "--name", "api-old"}), "new name") {
 		t.Fatal("renamed restore lacks next-step guidance")
+	}
+}
+
+func TestBackupSchedulesForGroupsOfApps(t *testing.T) {
+	o := testOptions(t)
+	shop := navigationApp("shop")
+	shop.Backup = config.Backup{Schedule: "4h", Keep: 30}
+	saveApps(t, o, navigationApp("blog"), shop, navigationApp("news"))
+	var calls []string
+	o.RunCommand = func(args []string, out io.Writer) error {
+		calls = append(calls, strings.Join(args, " "))
+		_, err := io.WriteString(out, "Saved\n")
+		return err
+	}
+	m := newModel(o)
+	m.fullTransferMenu()
+	press(m, tea.KeyDown) // Backup schedules
+	m.next()
+	if view := viewText(m); !strings.Contains(view, "Apps with the same plan") || !strings.Contains(view, "shop · every 4h, keep 30") || !strings.Contains(view, "Example:") {
+		t.Fatal("schedule picker lacks apps, their plans or guidance", view)
+	}
+	press(m, tea.KeySpace) // blog
+	press(m, tea.KeyDown)
+	press(m, tea.KeySpace) // news
+	m.form.NextGroup()
+	press(m, tea.KeyDown) // Every few hours
+	m.form.NextGroup()
+	m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	m.Update(tea.PasteMsg{Content: "12"})
+	m.form.NextGroup()
+	m.Update(tea.PasteMsg{Content: "14"})
+	m.next()
+	if m.page != "confirm" || strings.Join(m.current.args, " ") != "backup schedule blog news --schedule 12h --keep 14" || !strings.Contains(m.reviewText, "Schedule: every 12h") {
+		t.Fatal("group schedule review inaccurate", m.current.args, m.reviewText)
+	}
+	approve(m)
+	finishStep(t, m)
+	if !strings.Contains(viewText(m), "Enter continue") {
+		t.Fatal("saving a group does not offer the next group", viewText(m))
+	}
+	press(m, tea.KeyEnter)
+	if m.page != "form" || !strings.Contains(viewText(m), "Apps with the same plan") {
+		t.Fatal("next group form not shown", viewText(m))
+	}
+	press(m, tea.KeyDown)
+	press(m, tea.KeyDown)
+	press(m, tea.KeySpace) // shop
+	m.form.NextGroup()
+	for range 2 {
+		press(m, tea.KeyDown) // Weekly
+	}
+	m.form.NextGroup()
+	m.next() // Blank retention keeps shop's 30.
+	if strings.Join(m.current.args, " ") != "backup schedule shop --schedule weekly" || !strings.Contains(m.reviewText, "keeps its current retention") {
+		t.Fatal("second group review inaccurate", m.current.args)
+	}
+	if len(calls) != 1 {
+		t.Fatal("unexpected commands", calls)
 	}
 }

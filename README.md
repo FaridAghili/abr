@@ -76,14 +76,18 @@ Health checks for an app's own domains are sent to this server.
 | See CPU and memory per app | `sudo abr stats` (live in **Resource monitor**) |
 | Update server tools | `sudo abr update` |
 | Back up apps | `sudo abr backup --all` |
-| Schedule backups, keep newest 7 | `sudo abr edit api --backup-schedule daily --backup-keep 7` |
+| Back up here, not to the backup server | `sudo abr backup api --local` |
+| Schedule backups, keep newest 7 | `sudo abr backup schedule api portal --schedule daily --keep 7` |
 | Check backup schedules | `sudo abr backup status` |
 | Restore app backups or a server | `sudo abr restore /var/backups/abr/restore --yes` |
 | Restore an app under a new name | `sudo abr restore /var/backups/abr/api-20261010020000.tar.gz --name api-old --yes` |
 | Remove an app, keeping its data | `sudo abr remove api` |
 
 Backups use the saved remote destination when configured; otherwise they stay
-local. After a verified transfer no archive stays on the production server: an
+local in `/var/backups/abr/apps`. `--local` (or **This server** in the menu)
+keeps one run here even when a backup server is configured. **Backup
+schedules** in the menu sets one schedule for a group of apps at a time, such
+as weekly for most sites and every 4h for busy shops. After a verified transfer no archive stays on the production server: an
 archive kept by a failed transfer is uploaded and removed on the next
 successful run. Schedules are `6h` (every 1-23 hours), `daily` or `weekly`; an hourly
 timer backs up each app when due. Older archives beyond `--backup-keep` are

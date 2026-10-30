@@ -4,12 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"abr/internal/backup"
+	"abr/internal/config"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
@@ -30,12 +33,15 @@ func (m *model) fullTransferMenu() tea.Cmd {
 			return m.fullBackupForm()
 		case "restore":
 			return m.fullRestoreForm()
+		case "schedules":
+			return m.backupScheduleForm()
 		case "status":
 			return m.start(action{title: "Backup status", args: []string{"backup", "status"}})
 		}
 		return m.serverMenu()
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Backup actions").Description("Preserve source, data and settings; restore apps here, or a whole server onto a fresh one.").Options(
-		huh.NewOption("Back up apps and transfer", "backup"),
+		huh.NewOption("Back up apps now", "backup"),
+		huh.NewOption("Backup schedules · many apps at once", "schedules"),
 		huh.NewOption("Backup status", "status"),
 		huh.NewOption("Configure backup server", "configure"),
 		huh.NewOption("Test backup destination", "test"),
@@ -117,24 +123,131 @@ func restorePaths(input string) ([]string, error) {
 	return backup.LatestArchives(input)
 }
 
-func (m *model) appBackupForm() tea.Cmd {
-	var names string
-	return m.setForm("form", "Back up apps", func() tea.Cmd {
-		args := []string{"backup", "--transfer"}
-		if strings.TrimSpace(names) == "" {
-			args = append(args, "--all")
-		} else {
-			args = append(args, strings.Fields(names)...)
-		}
-		return m.review(action{title: "Back up apps", args: args, note: "Keep all apps running. Capture one app's source and lockfiles, SQL, .env, full Laravel storage/app and recovery settings, compress, transfer to the configured backup server, verify SHA256, then remove its local archive before the next app. Failed transfers retain their archive and stop the run; the next successful backup of that app uploads and removes it, leaving no archive on this server. Redis data is excluded. HTTPS is recreated from saved domains/settings on restore. Avoid schema changes; SQL and files may differ in time."})
-	}, huh.NewGroup(textInput("Apps (optional)", "Space-separated registered app names. Blank backs up every app, one at a time.", "api portal", &names).Validate(func(s string) error {
-		for _, name := range strings.Fields(s) {
-			if err := applicationName(name); err != nil {
-				return err
-			}
+// backupServer reports whether a backup server is saved; it only checks that
+// the private settings file exists, which the backup command then validates.
+func (m *model) backupServer() bool {
+	_, err := os.Stat(filepath.Join(m.options.StateDir, "backup-destination.json"))
+	return err == nil
+}
+
+// appChoices lists apps by name with their current backup plan.
+func (m *model) appChoices() ([]huh.Option[string], error) {
+	c, err := config.Load(m.options.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(c.Apps) == 0 {
+		return nil, errors.New("No apps registered. Choose Add application from the main menu.")
+	}
+	slices.SortFunc(c.Apps, func(a, b config.App) int { return strings.Compare(a.Name, b.Name) })
+	choices := make([]huh.Option[string], 0, len(c.Apps))
+	for _, app := range c.Apps {
+		choices = append(choices, huh.NewOption(clean(app.Name+" · "+backupPlan(app.Backup)), app.Name))
+	}
+	return choices, nil
+}
+
+func scheduleLabel(schedule string) string {
+	switch schedule {
+	case "", "off":
+		return "manual"
+	case "daily", "weekly":
+		return schedule
+	}
+	return "every " + schedule
+}
+
+func backupPlan(b config.Backup) string {
+	plan := scheduleLabel(b.Schedule)
+	if b.Keep > 0 {
+		return plan + ", keep " + strconv.Itoa(b.Keep)
+	}
+	return plan + ", keep all"
+}
+
+func selectApps(title, description string, choices []huh.Option[string], selected *[]string) *huh.MultiSelect[string] {
+	return huh.NewMultiSelect[string]().Height(min(len(choices)+2, 12)).Title(title).Description(description).Options(choices...).Value(selected).Validate(func(v []string) error {
+		if len(v) == 0 {
+			return errors.New("Select at least one app with Space")
 		}
 		return nil
-	})))
+	})
+}
+
+func (m *model) appBackupForm() tea.Cmd {
+	choices, err := m.appChoices()
+	if err != nil {
+		return m.workflowError("Back up apps", err)
+	}
+	var names []string
+	server := m.backupServer()
+	local := !server
+	serverLabel := "Backup server"
+	if !server {
+		serverLabel += " (not configured yet)"
+	}
+	directory := "/var/backups/abr/apps"
+	return m.setForm("form", "Back up apps", func() tea.Cmd {
+		args := []string{"backup", "--transfer"}
+		note := "Keep all apps running. Capture one app's source and lockfiles, SQL, .env, full Laravel storage/app and recovery settings, compress, transfer to the configured backup server, verify SHA256, then remove its local archive before the next app. Failed transfers retain their archive and stop the run; the next successful backup of that app uploads and removes it, leaving no archive on this server."
+		if local {
+			args = []string{"backup", "--local", "--output-dir", directory}
+			note = fmt.Sprintf("Directory: %s\n\nKeep all apps running. Capture one app's source and lockfiles, SQL, .env, full Laravel storage/app and recovery settings into a private archive (0600) in this directory, one app at a time. Older archives beyond each app's retention are deleted. Archives contain secrets and are not encrypted; copy them off this server, since a lost server loses them too.", directory)
+		}
+		args = append(args, names...)
+		return m.review(action{title: "Back up apps", args: args, note: fmt.Sprintf("Apps: %s\n", strings.Join(names, ", ")) + note + " Redis data is excluded. HTTPS is recreated from saved domains/settings on restore. Avoid schema changes; SQL and files may differ in time."})
+	}, huh.NewGroup(selectApps("Apps", "Space selects an app, Ctrl+A selects all; type to filter.\nExample: select api and portal to back up both.", choices, &names)),
+		huh.NewGroup(huh.NewSelect[bool]().Title("Where to keep the backups?").Description("Send them to your backup server, or keep them on this server.\nExample: this server for a quick copy before a risky change.").Options(huh.NewOption(serverLabel, false), huh.NewOption("This server · private directory", true)).Value(&local)),
+		huh.NewGroup(textInput("Backup directory", "Absolute private directory on this server, outside app and Abr directories.", "/var/backups/abr/apps", &directory).Validate(func(s string) error {
+			if !filepath.IsAbs(s) || strings.ContainsAny(s, "\x00\r\n") {
+				return errors.New("Use an absolute directory")
+			}
+			return nil
+		})).WithHideFunc(func() bool { return !local }))
+}
+
+// backupScheduleForm sets one schedule for a group of apps, then offers the
+// next group, so different plans take a few steps each instead of per-app menus.
+func (m *model) backupScheduleForm() tea.Cmd {
+	m.menu, m.back = m.fullTransferMenu, m.fullTransferMenu
+	choices, err := m.appChoices()
+	if err != nil {
+		return m.workflowError("Backup schedules", err)
+	}
+	var names []string
+	schedule, hours, keep := "daily", "6", ""
+	where := "the backup server"
+	if !m.backupServer() {
+		where = "this server (/var/backups/abr/apps) until a backup server is configured"
+	}
+	return m.setForm("form", "Backup schedules", func() tea.Cmd {
+		value := schedule
+		if schedule == "hours" {
+			value = hours + "h"
+		}
+		args := append(append([]string{"backup", "schedule"}, names...), "--schedule", value)
+		retention := "Each app keeps its current retention."
+		if strings.TrimSpace(keep) != "" {
+			args = append(args, "--keep", strings.TrimSpace(keep))
+			retention = "Keep the newest " + strings.TrimSpace(keep) + " backups of each app here and on the backup server; older ones are deleted (0 keeps all)."
+		}
+		note := fmt.Sprintf("Apps: %s\nSchedule: %s\n\n%s Scheduled backups go to %s. An hourly timer backs each app up when due; services keep running and no deploy is needed.\n\nAfter saving, press Enter to set the next group of apps, or Esc to finish.", strings.Join(names, ", "), scheduleLabel(value), retention, where)
+		return m.review(action{title: "Save backup schedules", args: args, note: note, continueWith: m.backupScheduleForm})
+	}, huh.NewGroup(selectApps("Apps with the same plan", "Choose a group sharing one schedule; set the next group after saving. Space selects, Ctrl+A all.\nExample: all small sites now, then busy shops every few hours.", choices, &names)),
+		huh.NewGroup(huh.NewSelect[string]().Title("How often?").Description("Automatic backups for the selected apps. Services keep running.\nExample: daily for a small site, every few hours for busy data.").Options(huh.NewOption("Daily", "daily"), huh.NewOption("Every few hours", "hours"), huh.NewOption("Weekly", "weekly"), huh.NewOption("Off (manual only)", "off")).Value(&schedule)),
+		huh.NewGroup(textInput("Hours between backups", "Back up every this many hours, from 1 to 23.", "6", &hours).Validate(func(s string) error {
+			return (config.Backup{Schedule: s + "h"}).Validate()
+		})).WithHideFunc(func() bool { return schedule != "hours" }),
+		huh.NewGroup(textInput("Backups to keep (optional)", "Newest backups kept per app; older ones are deleted. 0 keeps all; blank keeps each app's current number.", "7", &keep).Validate(func(s string) error {
+			if strings.TrimSpace(s) == "" {
+				return nil
+			}
+			n, err := strconv.Atoi(strings.TrimSpace(s))
+			if err != nil {
+				return errors.New("Enter a number from 0 to 1000, or leave blank")
+			}
+			return (config.Backup{Keep: n}).Validate()
+		})))
 }
 
 func (m *model) backupDestinationForm() tea.Cmd {

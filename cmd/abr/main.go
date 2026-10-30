@@ -63,8 +63,11 @@ Commands:
   backup APP... | --all | --due [--output-dir DIR]
                    Back up apps sequentially online using the saved backup destination;
                    --due backs up apps whose schedule is due and applies retention
-  backup status    Show each app's backup schedule, retention and last result
+                   --local keeps archives here even when a backup server is configured
                    --remote USER@HOST --remote-dir DIR verifies transfer then deletes local archive
+  backup status    Show each app's backup schedule, retention and last result
+  backup schedule APP... | --all --schedule 6h|daily|weekly|off [--keep N]
+                   Set the same schedule and retention for many apps at once
   backup configure --host HOST --user USER --path DIR [--key FILE | --password-stdin]
                    Save backup server settings; generates a dedicated key by default
   backup test      Verify the saved SSH destination and private backup directory
@@ -152,11 +155,11 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "logs" && len(args) > 0 && args[0] == "clear" {
 		command, args = "logs clear", args[1:]
 	}
-	if command == "backup" && len(args) > 0 && (args[0] == "configure" || args[0] == "test" || args[0] == "host-key" || args[0] == "trust" || args[0] == "status") {
+	if command == "backup" && len(args) > 0 && (args[0] == "configure" || args[0] == "test" || args[0] == "host-key" || args[0] == "trust" || args[0] == "status" || args[0] == "schedule") {
 		command, args = "backup "+args[0], args[1:]
 	}
 	switch command {
-	case "backup", "backup configure", "backup test", "backup host-key", "backup trust", "backup status", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "stats", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
+	case "backup", "backup configure", "backup test", "backup host-key", "backup trust", "backup status", "backup schedule", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "stats", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -176,6 +179,8 @@ func run(args []string, out, stderr io.Writer) error {
 	var destination backup.Destination
 	var canonicalHost string
 	var backupAll, importYes, purge, removeYes bool
+	var backupSchedule string
+	var backupKeep int
 	var composerHost, composerUsername string
 	var passwordStdin bool
 	var changes config.AppChanges
@@ -193,6 +198,11 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.IntVar(&appBackup.SSHPort, "ssh-port", 0, "backup server SSH port (default: 22)")
 		fs.BoolVar(&appBackup.Transfer, "transfer", false, "require a remote destination; remove local archive only after verified transfer")
 		fs.BoolVar(&appBackup.Due, "due", false, "back up only apps whose backup schedule is due (run hourly by abr-backup.timer)")
+		fs.BoolVar(&appBackup.Local, "local", false, "keep archives on this server in --output-dir, even when a backup server is configured")
+	case "backup schedule":
+		fs.BoolVar(&backupAll, "all", false, "apply to all registered apps")
+		fs.StringVar(&backupSchedule, "schedule", "", "automatic backups: 6h (every 1-23 hours), daily, weekly or off")
+		fs.IntVar(&backupKeep, "keep", -1, "newest backups to keep locally and on the backup server (0 keeps all; omitted keeps each app's value)")
 	case "backup configure":
 		fs.StringVar(&destination.Host, "host", "", "backup server IP or hostname")
 		fs.StringVar(&destination.User, "user", "", "backup server SSH user")
@@ -339,6 +349,20 @@ func run(args []string, out, stderr io.Writer) error {
 		} else if err := appBackup.Validate(positional); err != nil {
 			return err
 		}
+	case "backup schedule":
+		if backupAll == (len(positional) > 0) || backupSchedule == "" {
+			return fmt.Errorf("use abr backup schedule APP... --schedule 6h|daily|weekly|off [--keep N], or --all instead of APP...")
+		}
+		b := config.Backup{Schedule: backupSchedule, Keep: max(backupKeep, 0)}
+		if b.Schedule == "off" {
+			b.Schedule = ""
+		}
+		if backupKeep < -1 {
+			b.Keep = backupKeep
+		}
+		if err := b.Validate(); err != nil {
+			return err
+		}
 	case "restore":
 		if len(positional) < 1 {
 			return fmt.Errorf("use abr restore /absolute/backup.tar.gz... --yes, or abr restore /absolute/directory --yes")
@@ -439,6 +463,8 @@ func run(args []string, out, stderr io.Writer) error {
 		return h.TestBackupDestination()
 	case "backup status":
 		return h.BackupStatus()
+	case "backup schedule":
+		return h.ScheduleBackups(positional, backupAll, backupSchedule, backupKeep)
 	case "backup host-key":
 		_, err := h.BackupHostKey()
 		return err

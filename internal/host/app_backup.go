@@ -32,6 +32,7 @@ type BackupOptions struct {
 	KeyFile   string
 	Password  string
 	Transfer  bool
+	Local     bool // Keep archives in OutputDir even when a backup server is saved.
 }
 
 func (o BackupOptions) Validate(names []string) error {
@@ -44,6 +45,9 @@ func (o BackupOptions) Validate(names []string) error {
 	}
 	if o.OutputDir != "" && (!filepath.IsAbs(o.OutputDir) || strings.ContainsAny(o.OutputDir, "\x00\r\n")) {
 		return fmt.Errorf("use an absolute --output-dir")
+	}
+	if o.Local && (o.Transfer || o.Remote != "") {
+		return fmt.Errorf("--local keeps backups on this server; do not combine it with --transfer or --remote")
 	}
 	if (o.Remote == "") != (o.RemoteDir == "") {
 		return fmt.Errorf("--remote and --remote-dir must be used together")
@@ -79,7 +83,7 @@ func (h Host) BackupApps(names []string, o BackupOptions) error {
 			return err
 		}
 		if o.Transfer && o.Remote == "" {
-			return fmt.Errorf("configure a backup destination in the menu or with abr backup configure before transferring")
+			return fmt.Errorf("no backup server is configured; configure one in the menu or with abr backup configure, or back up locally with --local")
 		}
 		c, err := config.Load(h.Manager.ConfigPath)
 		if err != nil {
