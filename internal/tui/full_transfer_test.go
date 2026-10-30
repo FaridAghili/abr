@@ -143,7 +143,7 @@ func TestOnlineAppBackupReviewAndRestoreDirectory(t *testing.T) {
 		t.Fatal("destination choice missing or hides the unconfigured server", view)
 	}
 	m.form.NextGroup() // No backup server yet: this server is preselected.
-	m.next() // Default private directory.
+	m.next()           // Default private directory.
 	if m.page != "confirm" || m.approved || strings.Join(m.current.args, " ") != "backup --local --output-dir /var/backups/abr/apps api" || !strings.Contains(m.reviewText, "Directory: /var/backups/abr/apps") {
 		t.Fatal("local backup review inaccurate", m.current.args, m.reviewText)
 	}
