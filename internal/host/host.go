@@ -15,6 +15,7 @@ import (
 
 	"abr/internal/manager"
 	"abr/internal/storage"
+	"abr/internal/table"
 )
 
 type Command struct {
@@ -242,6 +243,22 @@ func (h Host) say(format string, args ...any) {
 	if h.Output != nil {
 		fmt.Fprintf(h.Output, format+"\n", args...)
 	}
+}
+
+// probe runs a read-only check whose command line is not part of the report.
+func (h Host) probe(c Command) ([]byte, error) {
+	r := h.Runner
+	if r == nil {
+		r = ExecRunner{}
+	}
+	return r.Run(c)
+}
+
+func (h Host) writeTable(t table.Table) error {
+	if h.Output == nil {
+		return nil
+	}
+	return table.Write(h.Output, t)
 }
 
 func (h Host) run(label string, c Command) ([]byte, error) {

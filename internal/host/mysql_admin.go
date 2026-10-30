@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"abr/internal/table"
 )
 
 type mysqlAdminCredentials struct {
@@ -170,10 +172,24 @@ func (h Host) MySQLAdmin(show bool) error {
 }
 
 func (h Host) showMySQLAdmin(c mysqlAdminCredentials, show bool) error {
-	h.say("TablePlus · MySQL via SSH\nDatabase host: 127.0.0.1\nDatabase port: 3306\nDatabase user: root\nDatabase: leave blank to browse all databases\nSSH: your VPS address, SSH port, administrator user and SSH key")
+	login := table.Table{
+		Title:   "TablePlus · MySQL via SSH",
+		Headers: []string{"FIELD", "VALUE"},
+		Rows: [][]table.Cell{
+			{table.Styled("Database host", table.Strong), table.Text("127.0.0.1")},
+			{table.Styled("Database port", table.Strong), table.Text("3306")},
+			{table.Styled("Database user", table.Strong), table.Text("root")},
+			{table.Styled("Database", table.Strong), table.Styled("leave blank to browse all databases", table.Muted)},
+		},
+	}
 	if show {
-		h.say("Database password: %s", c.Password)
-	} else {
+		login.Rows = append(login.Rows, []table.Cell{table.Styled("Database password", table.Strong), table.Styled(c.Password, table.Warn)})
+	}
+	login.Rows = append(login.Rows, []table.Cell{table.Styled("SSH", table.Strong), table.Text("your VPS address, SSH port, administrator user and SSH key")})
+	if err := h.writeTable(login); err != nil {
+		return err
+	}
+	if !show {
 		h.say("Admin credentials saved privately in %s; view with abr database --admin --show", h.mysqlAdminPath())
 	}
 	return nil

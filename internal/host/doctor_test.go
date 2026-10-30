@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -130,7 +131,7 @@ func TestDoctorListenerOwnershipAndMissingServices(t *testing.T) {
 				t.Fatalf("missing %q: %s", tc.want, combined)
 			}
 			if strings.Contains(tc.want, "cannot verify listener") || tc.busy || tc.want == "unified cgroup information is unavailable" {
-				if !strings.Contains(out.String(), "UNVERIFIED:") {
+				if !regexp.MustCompile(`(?m)^UNVERIFIED +app `).MatchString(out.String()) || regexp.MustCompile(`(?m)^ERROR `).MatchString(out.String()) {
 					t.Fatal("inconclusive check was presented as a definite error")
 				}
 			}

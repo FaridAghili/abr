@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -99,7 +100,7 @@ func TestScheduledBackupsDueRetentionAndFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := buffer.String()
-	if !strings.Contains(status, "app: every 6h, keep newest 1; last backup: ") || !strings.Contains(status, "second: daily, keep all") || !strings.Contains(status, "last attempt failed") {
+	if !regexp.MustCompile(`(?m)^app +every 6h +newest 1 +\d{4}-`).MatchString(status) || !regexp.MustCompile(`(?m)^second +daily +all +.* failed$`).MatchString(status) || !strings.Contains(status, "second: last attempt failed") {
 		t.Fatal("backup status inaccurate", status)
 	}
 	if err := (BackupOptions{Due: true, All: true}).Validate(nil); err == nil {

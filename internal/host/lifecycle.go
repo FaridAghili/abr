@@ -2,10 +2,12 @@ package host
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,8 +18,10 @@ import (
 	"time"
 
 	"abr/internal/config"
+	"abr/internal/disk"
 	"abr/internal/ports"
 	"abr/internal/services"
+	"abr/internal/table"
 )
 
 type manifest struct {
@@ -742,15 +746,112 @@ func (h Host) Status(name string) error {
 		h.say("%s: registered, no managed services installed", name)
 		return nil
 	}
-	h.say("%s: enabled=%t, user=%s", name, m.Enabled, a.User)
 	units := append([]string{}, m.Units...)
 	if m.FPM {
-		units = append(units, "php"+services.PHPVersion+"-fpm")
+		units = append(units, "php"+services.PHPVersion+"-fpm.service")
+	}
+	state := "disabled"
+	if m.Enabled {
+		state = "enabled"
+	}
+	report := table.Table{
+		Title:   fmt.Sprintf("%s · %s · user %s · times in %s", name, state, a.User, time.Now().Format("MST")),
+		Headers: []string{"SERVICE", "STATE", "BOOT", "SINCE", "MEMORY", "RESTARTS"},
+		Right:   []int{4, 5},
 	}
 	if len(units) == 0 {
+		h.say("%s: %s, user=%s; no services installed", name, state, a.User)
 		return nil
 	}
-	return h.command("systemctl", append([]string{"status", "--no-pager", "--full"}, units...)...)
+	if h.DryRun {
+		h.say("Would check %d services of %s", len(units), name)
+		return nil
+	}
+	data, err := h.probe(Command{Name: "systemctl", Args: append([]string{"show", "--no-pager", "--property=Id,LoadState,ActiveState,SubState,UnitFileState,ActiveEnterTimestamp,MemoryCurrent,NRestarts"}, units...), Private: true})
+	if err != nil {
+		return fmt.Errorf("cannot read service status: %w", err)
+	}
+	states := parseUnitStates(string(data))
+	failed := 0
+	for _, unit := range units {
+		u := states[unit]
+		if u["ActiveState"] == "failed" {
+			failed++
+		}
+		report.Rows = append(report.Rows, serviceRow(a.Name, unit, u))
+	}
+	if err := h.writeTable(report); err != nil {
+		return err
+	}
+	if failed > 0 {
+		return fmt.Errorf("%s: %d failed services; choose Read logs to see why", name, failed)
+	}
+	return nil
+}
+
+// parseUnitStates reads systemctl show blocks, one per unit, keyed by Id.
+func parseUnitStates(data string) map[string]map[string]string {
+	result := map[string]map[string]string{}
+	for _, block := range strings.Split(strings.TrimSpace(data), "\n\n") {
+		values := map[string]string{}
+		for _, line := range strings.Split(block, "\n") {
+			if key, value, ok := strings.Cut(line, "="); ok {
+				values[key] = value
+			}
+		}
+		if values["Id"] != "" {
+			result[values["Id"]] = values
+		}
+	}
+	return result
+}
+
+func serviceRow(app, unit string, u map[string]string) []table.Cell {
+	absent := table.Styled("—", table.Muted)
+	short := strings.TrimSuffix(strings.TrimPrefix(unit, "abr-"+app+"-"), ".service")
+	if strings.HasPrefix(unit, "php") {
+		short += " (shared)"
+	}
+	active := u["ActiveState"]
+	var state table.Cell
+	switch {
+	case u["LoadState"] == "not-found":
+		state = table.Styled("not installed", table.Bad)
+	case active == "active":
+		// running, waiting (timers), exited (oneshot) or listening (sockets)
+		state = table.Styled(cmp.Or(u["SubState"], active), table.Good)
+	case active == "failed":
+		state = table.Styled("failed", table.Bad)
+	case active == "inactive":
+		state = table.Styled("stopped", table.Muted)
+	default:
+		// activating, deactivating, reloading, or unreadable
+		state = table.Styled(cmp.Or(active, "unknown"), table.Warn)
+	}
+	boot := absent
+	if v := u["UnitFileState"]; v != "" {
+		boot = table.Styled(v, table.Muted)
+		if v == "enabled" {
+			boot.Tone = table.Plain
+		}
+	}
+	since := absent
+	// "Thu 2026-10-29 21:00:01 UTC" is shown without its weekday and zone.
+	if fields := strings.Fields(u["ActiveEnterTimestamp"]); len(fields) >= 3 && active == "active" {
+		since = table.Text(fields[1] + " " + strings.Join(strings.Split(fields[2], ":")[:2], ":"))
+	}
+	memory := absent
+	if n, err := strconv.ParseUint(u["MemoryCurrent"], 10, 64); err == nil && n != math.MaxUint64 {
+		memory = table.Text(disk.Bytes(n))
+	}
+	restarts := absent
+	if v := u["NRestarts"]; v != "" {
+		restarts = table.Styled(v, table.Muted)
+		if v != "0" {
+			restarts.Tone = table.Warn
+		}
+	}
+	return []table.Cell{table.Styled(short, table.Strong), state, boot, since, memory, restarts}
 }
 
 func selectedUnits(a config.App, m manifest, service string) ([]string, error) {

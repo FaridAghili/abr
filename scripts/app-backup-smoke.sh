@@ -92,7 +92,7 @@ PY
   app_schedule_after=$(sudo find "$app_backup_remote" -maxdepth 1 -name 'fixture-php-*.tar.gz')
   test "$(printf '%s\n' "$app_schedule_after" | wc -l)" = 1
   test "$app_schedule_after" != "$app_schedule_before"
-  abr_ci backup status | grep -F 'fixture-php: every 6h, keep newest 1; last backup: '
+  abr_ci backup status | grep -E '^fixture-php +every 6h +newest 1 +[0-9]{4}-[0-9]{2}-[0-9]{2} '
   abr_ci backup --due | grep -F 'No scheduled app backups are due'
   # The following restores use the newest archive; save it without a schedule
   # so restored hosts do not start timed backups during this test.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"abr/internal/config"
+	"abr/internal/table"
 )
 
 // A timer tick may start a little before an interval elapses; this slack keeps
@@ -94,50 +95,66 @@ func (h Host) BackupStatus() error {
 	}
 	scheduled := false
 	now := time.Now()
-	stamp := func(t time.Time) string { return t.Local().Format("2006-01-02 15:04 MST") }
+	stamp := func(t time.Time) string { return t.Local().Format("2006-01-02 15:04") }
+	status := table.Table{
+		Title:   "Backups · times in " + now.Local().Format("MST"),
+		Headers: []string{"APP", "SCHEDULE", "KEEP", "LAST BACKUP", "NEXT", "RESULT"},
+	}
+	var failures []string
 	for _, a := range c.Apps {
 		record, err := h.loadBackupRecord(a.Name)
 		if err != nil {
 			return err
 		}
-		schedule := "manual only"
+		schedule := table.Styled("manual", table.Muted)
 		if a.Backup.Schedule != "" {
 			scheduled = true
-			schedule = map[string]string{"daily": "daily", "weekly": "weekly"}[a.Backup.Schedule]
-			if schedule == "" {
-				schedule = "every " + a.Backup.Schedule
+			schedule = table.Text(map[string]string{"daily": "daily", "weekly": "weekly"}[a.Backup.Schedule])
+			if schedule.Text == "" {
+				schedule.Text = "every " + a.Backup.Schedule
 			}
 		}
-		keep := "keep all"
+		keep := table.Styled("all", table.Muted)
 		if a.Backup.Keep > 0 {
-			keep = "keep newest " + strconv.Itoa(a.Backup.Keep)
+			keep = table.Text("newest " + strconv.Itoa(a.Backup.Keep))
 		}
-		line := fmt.Sprintf("%s: %s, %s; last backup: ", a.Name, schedule, keep)
-		if record.LastSuccess.IsZero() {
-			line += "never"
-		} else {
-			line += stamp(record.LastSuccess)
+		last := table.Styled("never", table.Muted)
+		if !record.LastSuccess.IsZero() {
+			last = table.Text(stamp(record.LastSuccess))
+		} else if a.Backup.Schedule != "" {
+			last.Tone = table.Warn
 		}
+		next := table.Styled("—", table.Muted)
 		if a.Backup.Schedule != "" {
 			if backupDue(a, record, now) {
-				line += "; next: due now"
+				next = table.Styled("due now", table.Warn)
 			} else {
 				// The timer fires on local hours, which may be offset from UTC.
 				ready := record.LastSuccess.Add(a.Backup.Interval() - backupSlack).Local()
-				next := time.Date(ready.Year(), ready.Month(), ready.Day(), ready.Hour(), 0, 0, 0, time.Local)
-				if next.Before(ready) {
-					next = next.Add(time.Hour)
+				at := time.Date(ready.Year(), ready.Month(), ready.Day(), ready.Hour(), 0, 0, 0, time.Local)
+				if at.Before(ready) {
+					at = at.Add(time.Hour)
 				}
-				line += "; next: " + stamp(next)
+				next = table.Text(stamp(at))
 			}
 		}
+		result := table.Styled("—", table.Muted)
 		if record.LastError != "" {
-			line += fmt.Sprintf("; last attempt failed at %s: %s", stamp(record.LastAttempt), record.LastError)
+			result = table.Styled("failed", table.Bad)
+			failures = append(failures, fmt.Sprintf("%s: last attempt failed at %s: %s", a.Name, stamp(record.LastAttempt), record.LastError))
+		} else if !record.LastSuccess.IsZero() {
+			result = table.Styled("ok", table.Good)
 		}
-		h.say("%s", line)
+		status.Rows = append(status.Rows, []table.Cell{table.Styled(a.Name, table.Strong), schedule, keep, last, next, result})
+	}
+	if err := h.writeTable(status); err != nil {
+		return err
+	}
+	for _, failure := range failures {
+		h.say("%s", failure)
 	}
 	if scheduled && !h.DryRun {
-		out, err := h.run("Check scheduled backup timer", Command{Name: "systemctl", Args: []string{"is-active", "abr-backup.timer"}, Private: true})
+		out, err := h.probe(Command{Name: "systemctl", Args: []string{"is-active", "abr-backup.timer"}, Private: true})
 		if err != nil || strings.TrimSpace(string(out)) != "active" {
 			h.say("abr-backup.timer is not active; run abr setup to install it")
 		}

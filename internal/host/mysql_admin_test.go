@@ -108,7 +108,7 @@ func TestMySQLAdminPrivateStableAndRecoversPartialSetup(t *testing.T) {
 	if len(files) != 0 {
 		t.Fatal("retained temporary client credentials")
 	}
-	if err := h.MySQLAdmin(true); err != nil || !strings.Contains(out.String(), "Database password: "+after.Password) {
+	if err := h.MySQLAdmin(true); err != nil || !strings.Contains(out.String(), "Database password  "+after.Password) {
 		t.Fatalf("explicit credential display failed: %v", err)
 	}
 	r.granted = false

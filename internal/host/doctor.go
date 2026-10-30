@@ -14,6 +14,7 @@ import (
 	"abr/internal/config"
 	"abr/internal/manager"
 	"abr/internal/ports"
+	"abr/internal/table"
 )
 
 type doctorEndpoint struct {
@@ -103,6 +104,7 @@ func (h Host) Doctor() error {
 	if err != nil {
 		return err
 	}
+	checks := doctorTable()
 	for _, ep := range endpoints {
 		detail, err := h.checkDoctorEndpoint(ep, states[ep.unit], listeners[ep.port])
 		level := "OK"
@@ -115,7 +117,10 @@ func (h Host) Doctor() error {
 			}
 			problems = append(problems, err)
 		}
-		h.say("%s: %s/%s at %d: %s", level, ep.app, ep.purpose, ep.port, detail)
+		checks.Rows = append(checks.Rows, doctorRow(level, ep.app, ep.purpose, ep.port, detail))
+	}
+	if err := h.writeTable(checks); err != nil {
+		return err
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("checks need attention: %d error(s), %d unverified check(s); see details above", len(problems)-unverifiedCount, unverifiedCount)
@@ -259,19 +264,32 @@ func (h Host) portableDoctor(c config.Config, r ports.Registry) error {
 	if probe == nil {
 		probe = ports.CheckAvailable
 	}
+	checks := doctorTable()
 	for _, app := range c.Apps {
 		for _, purpose := range app.Endpoints() {
 			port, _ := r.Lookup(app.Name, purpose)
 			if err := probe(port); err != nil {
-				h.say("UNVERIFIED: %s/%s at %d: %v; listener ownership was not checked", app.Name, purpose, port, err)
+				checks.Rows = append(checks.Rows, doctorRow("UNVERIFIED", app.Name, purpose, port, err.Error()+"; listener ownership was not checked"))
 				problems = append(problems, err)
 			} else {
-				h.say("OK: %s/%s at %d: available on this machine", app.Name, purpose, port)
+				checks.Rows = append(checks.Rows, doctorRow("OK", app.Name, purpose, port, "available on this machine"))
 			}
 		}
+	}
+	if err := h.writeTable(checks); err != nil {
+		return err
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("portable port checks incomplete; verify listener ownership on the Ubuntu host")
 	}
 	return nil
+}
+
+func doctorTable() table.Table {
+	return table.Table{Headers: []string{"STATUS", "APP", "ENDPOINT", "PORT", "DETAIL"}, Right: []int{3}}
+}
+
+func doctorRow(level, app, purpose string, port int, detail string) []table.Cell {
+	tone := map[string]table.Tone{"OK": table.Good, "ERROR": table.Bad, "UNVERIFIED": table.Warn}[level]
+	return []table.Cell{table.Styled(level, tone), table.Styled(app, table.Strong), table.Text(purpose), table.Text(strconv.Itoa(port)), table.Text(detail)}
 }

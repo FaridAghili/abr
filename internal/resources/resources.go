@@ -11,10 +11,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"text/tabwriter"
+
 	"time"
 
 	"abr/internal/disk"
+	"abr/internal/table"
 )
 
 // Process is one measured process owned by a watched account.
@@ -339,28 +340,47 @@ func Write(w io.Writer, r Report, jsonOutput bool) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(r)
 	}
-	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	h := r.Host
-	fmt.Fprintf(table, "Measured %s over %s\n", r.MeasuredAt.Local().Format(time.RFC3339), r.Interval.Round(10*time.Millisecond))
-	fmt.Fprintf(table, "Host CPU %s of %d cores · Load %.2f %.2f %.2f\n", Percent(h.CPUPercent), h.Cores, h.Load[0], h.Load[1], h.Load[2])
-	fmt.Fprintf(table, "Memory %s / %s (%s) · Swap %s / %s\n\n", disk.Bytes(h.MemoryUsed), disk.Bytes(h.MemoryTotal), Percent(h.MemoryPercent), disk.Bytes(h.SwapUsed), disk.Bytes(h.SwapTotal))
-	fmt.Fprintln(table, "NAME\tKIND\tCPU\tMEMORY\tMEM%\tPROCESSES")
+	fmt.Fprintf(w, "Measured %s over %s\n", r.MeasuredAt.Local().Format(time.RFC3339), r.Interval.Round(10*time.Millisecond))
+	fmt.Fprintf(w, "Host CPU %s of %d cores · Load %.2f %.2f %.2f\n", Percent(h.CPUPercent), h.Cores, h.Load[0], h.Load[1], h.Load[2])
+	fmt.Fprintf(w, "Memory %s / %s (%s) · Swap %s / %s\n\n", disk.Bytes(h.MemoryUsed), disk.Bytes(h.MemoryTotal), Percent(h.MemoryPercent), disk.Bytes(h.SwapUsed), disk.Bytes(h.SwapTotal))
+	apps := table.Table{Headers: []string{"NAME", "KIND", "CPU", "MEMORY", "MEM%", "PROCESSES"}, Right: []int{2, 3, 4, 5}}
 	for _, a := range r.Apps {
+		name := table.Styled(a.Name, table.Strong)
 		if !a.Known {
-			fmt.Fprintf(table, "%s\t%s\t—\t—\t—\tuser not created\n", a.Name, a.Kind)
+			absent := table.Styled("—", table.Muted)
+			apps.Rows = append(apps.Rows, []table.Cell{name, table.Text(a.Kind), absent, absent, absent, table.Styled("user not created", table.Muted)})
 			continue
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%d\n", a.Name, a.Kind, Percent(a.CPUPercent), disk.Bytes(a.MemoryBytes), Percent(a.MemoryPercent), a.Processes)
+		apps.Rows = append(apps.Rows, []table.Cell{name, table.Text(a.Kind), load(a.CPUPercent), table.Text(disk.Bytes(a.MemoryBytes)), load(a.MemoryPercent), table.Text(strconv.Itoa(a.Processes))})
+	}
+	if err := table.Write(w, apps); err != nil {
+		return err
 	}
 	if len(r.Apps) == 1 && len(r.Apps[0].Services) > 0 {
-		fmt.Fprintln(table, "\nSERVICE\tCPU\tMEMORY\tPROCESSES")
+		services := table.Table{Headers: []string{"SERVICE", "CPU", "MEMORY", "PROCESSES"}, Right: []int{1, 2, 3}}
 		for _, s := range r.Apps[0].Services {
-			fmt.Fprintf(table, "%s\t%s\t%s\t%d\n", s.Name, Percent(s.CPUPercent), disk.Bytes(s.MemoryBytes), s.Processes)
+			services.Rows = append(services.Rows, []table.Cell{table.Styled(s.Name, table.Strong), load(s.CPUPercent), table.Text(disk.Bytes(s.MemoryBytes)), table.Text(strconv.Itoa(s.Processes))})
+		}
+		fmt.Fprintln(w)
+		if err := table.Write(w, services); err != nil {
+			return err
 		}
 	}
-	fmt.Fprintln(table)
+	fmt.Fprintln(w)
 	for _, note := range r.Notes {
-		fmt.Fprintln(table, note)
+		fmt.Fprintln(w, note)
 	}
-	return table.Flush()
+	return nil
+}
+
+// load colors a share by how heavy it is.
+func load(percent float64) table.Cell {
+	cell := table.Styled(Percent(percent), table.Good)
+	if percent >= 80 {
+		cell.Tone = table.Bad
+	} else if percent >= 50 {
+		cell.Tone = table.Warn
+	}
+	return cell
 }

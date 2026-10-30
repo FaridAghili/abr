@@ -7,8 +7,9 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
+
+	"abr/internal/table"
 )
 
 type App struct {
@@ -66,32 +67,46 @@ func Write(w io.Writer, r Report, jsonOutput bool) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(r)
 	}
-	table := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	if !r.MeasuredAt.IsZero() {
 		label := "fresh scan"
 		if r.Cached {
 			label = "cached; --refresh rescans"
 		}
-		fmt.Fprintf(table, "App sizes measured %s (%s)\n", r.MeasuredAt.Local().Format(time.RFC3339), label)
-		fmt.Fprintln(table, "APP\tPROJECT\tHOME/CACHE\tDEPLOY\tDATABASE~\tTOTAL~")
-		for _, a := range r.Apps {
-			database := "—"
-			if a.DatabaseManaged {
-				database = Bytes(a.DatabaseBytes)
-			}
-			fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%s\t%s\n", a.Name, Bytes(a.ProjectBytes), Bytes(a.HomeBytes), Bytes(a.DeploymentBytes), database, Bytes(a.TotalBytes))
+		apps := table.Table{
+			Title:   fmt.Sprintf("App sizes measured %s (%s)", r.MeasuredAt.Local().Format(time.RFC3339), label),
+			Headers: []string{"APP", "PROJECT", "HOME/CACHE", "DEPLOY", "DATABASE~", "TOTAL~"},
+			Right:   []int{1, 2, 3, 4, 5},
 		}
-		fmt.Fprintf(table, "TOTAL\t\t\t\t%s\t%s\n", Bytes(r.DatabaseBytes), Bytes(r.TotalBytes))
-		fmt.Fprintf(table, "App files: %s; databases (estimate): %s; combined (estimate): %s\n\n", Bytes(r.FilesBytes), Bytes(r.DatabaseBytes), Bytes(r.TotalBytes))
+		for _, a := range r.Apps {
+			database := table.Styled("—", table.Muted)
+			if a.DatabaseManaged {
+				database = table.Text(Bytes(a.DatabaseBytes))
+			}
+			apps.Rows = append(apps.Rows, []table.Cell{table.Styled(a.Name, table.Strong), table.Text(Bytes(a.ProjectBytes)), table.Text(Bytes(a.HomeBytes)), table.Text(Bytes(a.DeploymentBytes)), database, table.Text(Bytes(a.TotalBytes))})
+		}
+		apps.Rows = append(apps.Rows, []table.Cell{table.Styled("TOTAL", table.Strong), {}, {}, {}, table.Styled(Bytes(r.DatabaseBytes), table.Strong), table.Styled(Bytes(r.TotalBytes), table.Strong)})
+		if err := table.Write(w, apps); err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "App files: %s; databases (estimate): %s; combined (estimate): %s\n\n", Bytes(r.FilesBytes), Bytes(r.DatabaseBytes), Bytes(r.TotalBytes))
 	}
-	fmt.Fprintln(table, "FILESYSTEM PATH\tCAPACITY\tUSED\tAVAILABLE\tUSE%")
+	filesystems := table.Table{Headers: []string{"FILESYSTEM PATH", "CAPACITY", "USED", "AVAILABLE", "USE%"}, Right: []int{1, 2, 3, 4}}
 	for _, f := range r.Filesystems {
-		fmt.Fprintf(table, "%s\t%s\t%s\t%s\t%.1f%%\n", f.Path, Bytes(f.CapacityBytes), Bytes(f.UsedBytes), Bytes(f.AvailableBytes), f.UsedPercent)
+		use := table.Styled(fmt.Sprintf("%.1f%%", f.UsedPercent), table.Good)
+		if f.UsedPercent >= 90 {
+			use.Tone = table.Bad
+		} else if f.UsedPercent >= 75 {
+			use.Tone = table.Warn
+		}
+		filesystems.Rows = append(filesystems.Rows, []table.Cell{table.Styled(f.Path, table.Strong), table.Text(Bytes(f.CapacityBytes)), table.Text(Bytes(f.UsedBytes)), table.Text(Bytes(f.AvailableBytes)), use})
+	}
+	if err := table.Write(w, filesystems); err != nil {
+		return err
 	}
 	for _, note := range r.Notes {
-		fmt.Fprintln(table, note)
+		fmt.Fprintln(w, note)
 	}
-	return table.Flush()
+	return nil
 }
 
 // ParseDU accepts GNU du's NUL-delimited, allocated-byte summaries. Requiring

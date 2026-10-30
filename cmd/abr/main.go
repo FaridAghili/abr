@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"golang.org/x/term"
@@ -24,6 +23,7 @@ import (
 	"abr/internal/manager"
 	"abr/internal/ports"
 	"abr/internal/resources"
+	"abr/internal/table"
 	"abr/internal/tui"
 )
 
@@ -563,16 +563,15 @@ func run(args []string, out, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tTYPE\tWEB\tUSER\tDOMAIN\tDIRECTORY")
+		apps := table.Table{Headers: []string{"NAME", "TYPE", "WEB", "USER", "DOMAIN", "DIRECTORY"}}
 		for _, a := range c.Apps {
 			web := a.Web.Driver
 			if a.Type == "nuxt" {
 				web = "node"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", a.Name, a.Type, web, a.User, a.Domain, a.Directory)
+			apps.Rows = append(apps.Rows, append([]table.Cell{table.Styled(a.Name, table.Strong)}, table.Texts(a.Type, web, a.User, a.Domain, a.Directory)...))
 		}
-		return w.Flush()
+		return table.Write(out, apps)
 	case "register":
 		if app.Directory == "" {
 			app.Directory = filepath.Join(h.AppsDir, app.Name)
@@ -831,12 +830,11 @@ func pathFlags(fs *flag.FlagSet, m *manager.Manager, configPath, stateDir string
 }
 
 func printPorts(out io.Writer, assignments []ports.Assignment) error {
-	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "APP\tENDPOINT\tPORT")
+	reservations := table.Table{Headers: []string{"APP", "ENDPOINT", "PORT"}, Right: []int{2}}
 	for _, a := range assignments {
-		fmt.Fprintf(w, "%s\t%s\t%d\n", a.App, a.Purpose, a.Port)
+		reservations.Rows = append(reservations.Rows, []table.Cell{table.Styled(a.App, table.Strong), table.Text(a.Purpose), table.Text(strconv.Itoa(a.Port))})
 	}
-	return w.Flush()
+	return table.Write(out, reservations)
 }
 
 type stringsFlag []string

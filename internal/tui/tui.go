@@ -22,6 +22,7 @@ import (
 	"abr/internal/backup"
 	"abr/internal/config"
 	"abr/internal/resources"
+	"abr/internal/table"
 )
 
 // Options supplies paths and a command runner shared with the noninteractive CLI.
@@ -60,9 +61,10 @@ type action struct {
 	continueWith func() tea.Cmd        // Keep output visible until Enter continues the workflow.
 }
 type event struct {
-	text string
-	err  error
-	done bool
+	text  string
+	table *table.Table
+	err   error
+	done  bool
 }
 type streamWriter struct{ events chan event }
 
@@ -80,6 +82,12 @@ func (w streamWriter) Write(p []byte) (int, error) {
 		start = end
 	}
 	return len(p), nil
+}
+
+// WriteTable lets commands hand over tables to be drawn in the TUI palette.
+func (w streamWriter) WriteTable(t table.Table) error {
+	w.events <- event{table: &t}
+	return nil
 }
 func waitEvent(ch <-chan event) tea.Cmd { return func() tea.Msg { return <-ch } }
 
@@ -609,7 +617,11 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		bottom := m.viewport.AtBottom()
-		m.appendOutput(clean(msg.text))
+		if msg.table != nil {
+			m.appendTable(*msg.table)
+		} else {
+			m.appendOutput(clean(msg.text))
+		}
 		if bottom {
 			m.viewport.GotoBottom()
 		}
@@ -874,12 +886,30 @@ func (m *model) appendOutput(s string) {
 		}
 		text.WriteRune(r)
 	}
-	m.output += text.String()
+	m.addOutput(text.String())
+}
+
+// appendTable draws a table on its own lines; cells are sanitized when drawn.
+func (m *model) appendTable(t table.Table) {
+	if m.lineLength > 0 {
+		m.output += "\n"
+	}
+	m.lineLength = 0
+	m.addOutput(table.Render(t, table.Colors(m.dark), m.bodyWidth()) + "\n")
+}
+
+func (m *model) addOutput(s string) {
+	m.output += s
 	if len(m.output) > outputLimit {
 		const omitted = "[Earlier output omitted]\n"
 		cut := len(m.output) - outputLimit + len(omitted)
-		for cut < len(m.output) && !utf8.RuneStart(m.output[cut]) {
-			cut++
+		// Cut at a line boundary so no colored line loses its escape sequence.
+		if i := strings.IndexByte(m.output[cut:], '\n'); i >= 0 {
+			cut += i + 1
+		} else {
+			for cut < len(m.output) && !utf8.RuneStart(m.output[cut]) {
+				cut++
+			}
 		}
 		m.output = omitted + m.output[cut:]
 	}

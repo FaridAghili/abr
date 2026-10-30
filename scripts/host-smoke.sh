@@ -735,7 +735,10 @@ if grep -Ei '^(server|via|x-powered-by):' "$fixture_source/http-headers"; then e
 abr_ci restart fixture-php web
 abr_ci disable fixture-php
 abr_ci enable fixture-php
-abr_ci status fixture-php
+abr_ci status fixture-php > "$fixture_source/status.log"
+cat "$fixture_source/status.log"
+grep -E '^php8\.5-fpm \(shared\) +running +enabled +[0-9]{4}-' "$fixture_source/status.log"
+grep -E '^scheduler\.timer +waiting +enabled ' "$fixture_source/status.log"
 abr_ci logs fixture-php scheduler
 
 sudo cp -R "$fixture_source/laravel" /srv/apps/fixture-octane
@@ -868,7 +871,7 @@ fixture_refused 'port conflict: listener PID' doctor
 sudo systemctl stop abr-ci-foreign-listener.service
 abr_ci disable fixture-spa
 abr_ci doctor > "$fixture_source/doctor-disabled.log"
-grep -F "fixture-spa/nuxt-http at $doctor_port: available (app disabled)" "$fixture_source/doctor-disabled.log"
+grep -E "^OK +fixture-spa +nuxt-http +$doctor_port +available \(app disabled\)" "$fixture_source/doctor-disabled.log"
 abr_ci enable fixture-spa
 abr_ci doctor
 # File-log maintenance on real app-owned Laravel/Nuxt paths. Clearing retains
