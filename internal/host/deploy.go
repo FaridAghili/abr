@@ -18,16 +18,25 @@ import (
 	"abr/internal/ports"
 	"abr/internal/services"
 	"abr/internal/storage"
+	"abr/internal/table"
 )
 
 type DeployOptions struct {
 	All, NoPull bool
+	// Group deploys a group's apps in its order and stops at the first failure.
+	Group       string
 	deferEnable bool
 }
 
 func (h Host) Deploy(names []string, o DeployOptions) error {
-	if o.All == (len(names) > 0) {
-		return fmt.Errorf("select APP... or --all")
+	selections := 0
+	for _, selected := range []bool{len(names) > 0, o.All, o.Group != ""} {
+		if selected {
+			selections++
+		}
+	}
+	if selections != 1 {
+		return fmt.Errorf("select APP..., --all or --group NAME")
 	}
 	return h.locked(func() error {
 		c, err := config.Load(h.Manager.ConfigPath)
@@ -38,6 +47,16 @@ func (h Host) Deploy(names []string, o DeployOptions) error {
 			for _, a := range c.Apps {
 				names = append(names, a.Name)
 			}
+		}
+		if o.Group != "" {
+			g, err := c.Group(o.Group)
+			if err != nil {
+				return err
+			}
+			if len(g.Apps) == 0 {
+				return fmt.Errorf("group %q has no apps; add apps to it first", o.Group)
+			}
+			names = g.Apps
 		}
 		if len(names) == 0 {
 			return fmt.Errorf("no applications selected")
@@ -52,8 +71,19 @@ func (h Host) Deploy(names []string, o DeployOptions) error {
 				return fmt.Errorf("unknown application %q", name)
 			}
 		}
+		summary := table.Table{Title: "Deployment summary", Headers: []string{"APP", "RESULT", "TIME"}, Right: []int{2}}
+		if o.Group != "" {
+			summary.Title = "Group " + o.Group + " · deployed in order"
+		}
 		var failures []error
+		var skipped []string
 		for _, name := range names {
+			if o.Group != "" && len(failures) > 0 {
+				skipped = append(skipped, name)
+				summary.Rows = append(summary.Rows, []table.Cell{table.Styled(name, table.Strong), table.Styled("skipped", table.Muted), table.Styled("—", table.Muted)})
+				continue
+			}
+			began := time.Now()
 			a, r, err := h.application(name)
 			if err == nil && !h.DryRun {
 				r, err = h.Manager.Allocate()
@@ -61,10 +91,24 @@ func (h Host) Deploy(names []string, o DeployOptions) error {
 			if err == nil {
 				err = h.deploy(a, r, o)
 			}
+			result := table.Styled("deployed", table.Good)
+			if h.DryRun {
+				result = table.Styled("previewed", table.Muted)
+			}
 			if err != nil {
 				h.say("Deployment failed for %s: %v", name, err)
 				failures = append(failures, fmt.Errorf("%s: %w", name, err))
+				result = table.Styled("failed", table.Bad)
 			}
+			summary.Rows = append(summary.Rows, []table.Cell{table.Styled(name, table.Strong), result, table.Text(time.Since(began).Round(time.Second).String())})
+		}
+		if len(names) > 1 {
+			if err := h.writeTable(summary); err != nil {
+				return err
+			}
+		}
+		if len(skipped) > 0 {
+			failures = append(failures, fmt.Errorf("group %s stopped at the first failure; not deployed: %s", o.Group, strings.Join(skipped, ", ")))
 		}
 		return errors.Join(failures...)
 	})

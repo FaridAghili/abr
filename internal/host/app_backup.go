@@ -348,7 +348,8 @@ func (h Host) prepareAppBackupDirectory(c config.Config, directory string) error
 // captureAppBackup publishes output and returns its SHA256, hashed while writing.
 // captureAppBackup publishes output and returns its SHA256, hashed while writing.
 func (h Host) captureAppBackup(a config.App, c config.Config, r ports.Registry, settings backup.Settings, shared, output string) (string, error) {
-	c.Apps = []config.App{a}
+	// This server's groups name other apps; restores keep the target's groups.
+	c.Apps, c.Groups = []config.App{a}, nil
 	appPorts := ports.Empty()
 	for _, assignment := range r.Assignments {
 		if assignment.App == a.Name {

@@ -44,9 +44,9 @@ func TestAppsMenuSortsAppsAndShowsConfiguredSettings(t *testing.T) {
 		t.Fatalf("projects not sorted: %s", view)
 	}
 	for _, row := range []string{
-		"APP    STACK              QUEUE  SCHEDULER  DOMAIN",
-		"alpha  Laravel FPM        off    off        alpha.example.com",
-		"zebra  Laravel Octane ×4  3      on         zebra.example.com",
+		"APP    STACK              QUEUE  SCHEDULER  GROUPS  DOMAIN",
+		"alpha  Laravel FPM        off    off        —       alpha.example.com",
+		"zebra  Laravel Octane ×4  3      on         —       zebra.example.com",
 	} {
 		if !strings.Contains(view, row) {
 			t.Fatalf("missing aligned row %q: %s", row, view)

@@ -14,6 +14,8 @@ Abr 1.0.0 is the initial release for fresh Ubuntu 26.04 LTS AMD64 servers.
 - Online app backups with saved source, managed SQL, secrets and uploads,
   sequential SSH transfer and SHA256 verification, or kept on the server itself.
 - Backup schedules and retention set for groups of apps in one step.
+- App groups that deploy related apps one by one in a set order, from the latest
+  commits or the current code, stopping at a failure with a summary per app.
 - Guided SSH host fingerprint confirmation and clear backup destination errors.
 - Full-server and per-app archive restore onto a fresh Ubuntu server, including the
   backup destination and schedule, and app restore under a new name beside an

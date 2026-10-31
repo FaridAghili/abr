@@ -17,8 +17,9 @@ import (
 )
 
 type Config struct {
-	Ports Range `toml:"ports"`
-	Apps  []App `toml:"apps"`
+	Ports  Range   `toml:"ports"`
+	Apps   []App   `toml:"apps"`
+	Groups []Group `toml:"groups,omitempty"`
 }
 
 type Range struct {
@@ -173,6 +174,9 @@ func (c Config) Validate() error {
 			}
 			domains[d] = a.Name
 		}
+	}
+	if err := c.validateGroups(names); err != nil {
+		return err
 	}
 	// Sorted, separator-terminated paths put a parent immediately before its
 	// first child. Avoid comparing every pair each time a menu loads config.

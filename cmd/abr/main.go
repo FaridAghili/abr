@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -89,12 +90,13 @@ Commands:
   disable APP      Stop services; retain users, databases and ports
   remove APP       Remove managed services/user; retain projects and databases
                    --purge --yes permanently deletes this app and its data
-  status [APP]     Show actual service status
+  status [APP]     Show actual service status (--group NAME for a group's apps)
   disk [APP]       App sizes/totals and live filesystem capacity/used/available space
                    --refresh rescans; --json is scriptable; --filesystem-only skips app scans
   stats [APP]      Live CPU and memory per app and shared service (per service with APP)
                    --interval 1s sets the measurement window; --json is scriptable
   restart APP [SERVICE]  Restart managed services (web, queue, queue@1, etc.)
+  restart --group NAME   Restart every app in a group, in order
   logs APP [SERVICE]     Show journal (--follow streams it)
   logs --all            Read all apps' journals in one timeline
                    --type journal|application|deployment --lines N (default 100)
@@ -102,6 +104,15 @@ Commands:
                    Clear file logs (--type all|application|deployment; default all)
   deploy APP...    Pull, install dependencies, build, migrate, enable
   deploy --all     Deploy sequentially
+  deploy --group NAME [--no-pull]
+                   Deploy a group's apps in its order; stops at the first failure
+  group list       Show groups and their apps in deploy order
+  group create NAME APP...  Group related apps; APP order is the deploy order
+  group apps NAME APP...    Replace a group's apps and their order
+  group rename NAME NEW     Rename a group
+  group delete NAME         Delete a group; its apps are kept
+  group assign APP [GROUP...]
+                   Set the groups APP belongs to; it deploys last in groups it joins
   artisan APP [COMMAND...]  Run Artisan as the Laravel app user (flags pass through)
   shell APP        Open a Laravel app shell; artisan cache:clear; exit to return
 
@@ -152,6 +163,12 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "database" && len(args) > 0 && (args[0] == "backup" || args[0] == "import") {
 		command, args = "database "+args[0], args[1:]
 	}
+	if command == "group" {
+		if len(args) == 0 || !slices.Contains([]string{"list", "create", "apps", "rename", "delete", "assign"}, args[0]) {
+			return fmt.Errorf("use abr group list|create|apps|rename|delete|assign")
+		}
+		command, args = "group "+args[0], args[1:]
+	}
 	if command == "logs" && len(args) > 0 && args[0] == "clear" {
 		command, args = "logs clear", args[1:]
 	}
@@ -159,7 +176,7 @@ func run(args []string, out, stderr io.Writer) error {
 		command, args = "backup "+args[0], args[1:]
 	}
 	switch command {
-	case "backup", "backup configure", "backup test", "backup host-key", "backup trust", "backup status", "backup schedule", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "stats", "restart", "logs", "logs clear", "deploy", "artisan", "shell":
+	case "backup", "backup configure", "backup test", "backup host-key", "backup trust", "backup status", "backup schedule", "restore", "tui", "version", "config validate", "config example", "list", "register", "edit", "ports", "doctor", "setup", "update", "git setup", "composer auth", "clone", "env", "database", "database backup", "database import", "enable", "disable", "remove", "status", "disk", "stats", "restart", "logs", "logs clear", "deploy", "artisan", "shell", "group list", "group create", "group apps", "group rename", "group delete", "group assign":
 	default:
 		return fmt.Errorf("unknown command %q; use abr help", command)
 	}
@@ -188,6 +205,7 @@ func run(args []string, out, stderr io.Writer) error {
 	var readLogs host.ReadLogsOptions
 	var diskUsage host.DiskOptions
 	var resourceUsage host.UsageOptions
+	var group string
 	switch command {
 	case "backup":
 		fs.StringVar(&fullBackupOutput, "output", "", "online full-server backup FILE.tar.gz including shared persistence")
@@ -305,6 +323,9 @@ func run(args []string, out, stderr io.Writer) error {
 	case "deploy":
 		fs.BoolVar(&deploy.All, "all", false, "deploy all apps sequentially")
 		fs.BoolVar(&deploy.NoPull, "no-pull", false, "deploy current checkout without git pull")
+		fs.StringVar(&deploy.Group, "group", "", "deploy this group's apps in order; stop at the first failure")
+	case "restart", "status":
+		fs.StringVar(&group, "group", "", "act on every app in this group, in order")
 	}
 	parseArgs := reorderFlags(args, fs)
 	if command == "artisan" {
@@ -403,8 +424,11 @@ func run(args []string, out, stderr io.Writer) error {
 			return fmt.Errorf("use abr logs APP [SERVICE], or abr logs --all [--type journal|application|deployment]")
 		}
 	case "restart":
-		if len(positional) < 1 || len(positional) > 2 {
-			return fmt.Errorf("use abr %s APP [SERVICE]", command)
+		if group != "" && len(positional) != 0 {
+			return fmt.Errorf("use abr restart --group NAME without APP or SERVICE")
+		}
+		if group == "" && (len(positional) < 1 || len(positional) > 2) {
+			return fmt.Errorf("use abr %s APP [SERVICE], or abr restart --group NAME", command)
 		}
 	case "stats":
 		if resourceUsage.Interval < 100*time.Millisecond || resourceUsage.Interval > time.Minute {
@@ -412,8 +436,24 @@ func run(args []string, out, stderr io.Writer) error {
 		}
 		fallthrough
 	case "status", "disk":
-		if len(positional) > 1 {
+		if len(positional) > 1 || (group != "" && len(positional) != 0) {
 			return fmt.Errorf("use abr %s [APP]", command)
+		}
+	case "group create", "group apps":
+		if len(positional) < 2 {
+			return fmt.Errorf("use abr %s NAME APP... (apps deploy in this order)", command)
+		}
+	case "group rename":
+		if len(positional) != 2 {
+			return fmt.Errorf("use abr group rename NAME NEW")
+		}
+	case "group delete":
+		if len(positional) != 1 {
+			return fmt.Errorf("use abr group delete NAME")
+		}
+	case "group assign":
+		if len(positional) < 1 {
+			return fmt.Errorf("use abr group assign APP [GROUP...]; no GROUP removes APP from all groups")
 		}
 	case "deploy":
 	default:
@@ -698,6 +738,20 @@ func run(args []string, out, stderr io.Writer) error {
 	case "logs clear":
 		return h.ClearLogs(positional, clearLogs)
 	case "restart", "logs":
+		if group != "" {
+			names, err := groupApps(m, group)
+			if err != nil {
+				return err
+			}
+			var failures []error
+			for _, name := range names {
+				if err := h.Restart(name, ""); err != nil {
+					fmt.Fprintf(out, "Restart failed for %s: %v\n", name, err)
+					failures = append(failures, fmt.Errorf("%s: %w", name, err))
+				}
+			}
+			return errors.Join(failures...)
+		}
 		service := ""
 		if len(positional) == 2 {
 			service = positional[1]
@@ -723,13 +777,94 @@ func run(args []string, out, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		var failures []error
+		var names []string
 		for _, a := range c.Apps {
-			if err := h.Status(a.Name); err != nil {
+			names = append(names, a.Name)
+		}
+		if group != "" {
+			if names, err = groupApps(m, group); err != nil {
+				return err
+			}
+		}
+		var failures []error
+		for _, name := range names {
+			if err := h.Status(name); err != nil {
 				failures = append(failures, err)
 			}
 		}
 		return errors.Join(failures...)
+	case "group list":
+		c, err := config.Load(m.ConfigPath)
+		if err != nil {
+			return err
+		}
+		groups := table.Table{Headers: []string{"GROUP", "APPS", "DEPLOY ORDER"}, Right: []int{1}}
+		for _, g := range c.Groups {
+			order := table.Text(strings.Join(g.Apps, " → "))
+			if len(g.Apps) == 0 {
+				order = table.Styled("no apps", table.Muted)
+			}
+			groups.Rows = append(groups.Rows, []table.Cell{table.Styled(g.Name, table.Strong), table.Text(strconv.Itoa(len(g.Apps))), order})
+		}
+		if len(groups.Rows) == 0 {
+			fmt.Fprintln(out, "No groups yet; create one with abr group create NAME APP...")
+			return nil
+		}
+		return table.Write(out, groups)
+	case "group create", "group apps", "group rename", "group delete", "group assign":
+		return editGroup(m, out, command, positional, !h.DryRun)
+	}
+	return nil
+}
+
+// groupApps lists a group's apps in order, for commands acting on each.
+func groupApps(m manager.Manager, name string) ([]string, error) {
+	c, err := config.Load(m.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	g, err := c.Group(name)
+	if err != nil {
+		return nil, err
+	}
+	if len(g.Apps) == 0 {
+		return nil, fmt.Errorf("group %q has no apps; add apps to it first", name)
+	}
+	return g.Apps, nil
+}
+
+// editGroup changes only the configuration, so a preview validates the change
+// without saving it.
+func editGroup(m manager.Manager, out io.Writer, command string, args []string, save bool) error {
+	var err error
+	var verb, done string
+	switch command {
+	case "group create":
+		err = m.CreateGroup(args[0], args[1:], save)
+		verb, done = "Create", fmt.Sprintf("group %s: %s", args[0], strings.Join(args[1:], " → "))
+	case "group apps":
+		err = m.SetGroupApps(args[0], args[1:], save)
+		verb, done = "Save", fmt.Sprintf("group %s: %s", args[0], strings.Join(args[1:], " → "))
+	case "group rename":
+		err = m.RenameGroup(args[0], args[1], save)
+		verb, done = "Rename", fmt.Sprintf("group %s to %s", args[0], args[1])
+	case "group delete":
+		err = m.DeleteGroup(args[0], save)
+		verb, done = "Delete", fmt.Sprintf("group %s; its apps are kept", args[0])
+	case "group assign":
+		err = m.AssignGroups(args[0], args[1:], save)
+		verb, done = "Save", fmt.Sprintf("%s in groups: %s", args[0], strings.Join(args[1:], ", "))
+		if len(args) == 1 {
+			done = args[0] + " in no groups"
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if save {
+		fmt.Fprintf(out, "%sed %s\n", strings.TrimSuffix(verb, "e"), done)
+	} else {
+		fmt.Fprintf(out, "Would %s %s\n", strings.ToLower(verb), done)
 	}
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"abr/internal/config"
@@ -117,6 +118,10 @@ func (m Manager) Remove(name string) error {
 			return fmt.Errorf("unknown application %q", name)
 		}
 		c.Apps = apps
+		// Its groups are kept, without the removed app.
+		for i, g := range c.Groups {
+			c.Groups[i].Apps = slices.DeleteFunc(g.Apps, func(app string) bool { return app == name })
+		}
 		data, err := config.Encode(c)
 		if err != nil {
 			return err

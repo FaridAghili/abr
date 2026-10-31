@@ -66,8 +66,9 @@ func TestResourceMonitorRefreshesSortsAndOpensServices(t *testing.T) {
 	}
 	m := newModel(o)
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	press(m, tea.KeyDown)
-	press(m, tea.KeyDown)
+	for range 3 {
+		press(m, tea.KeyDown) // Resource monitor
+	}
 	deliver(t, m, m.next())
 	view := viewText(m)
 	if m.page != "stats" || !strings.Contains(view, "Live") || !strings.Contains(view, "SHARED") || !strings.Contains(view, "Ubuntu user not created") || !strings.Contains(view, "▲") {

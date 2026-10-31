@@ -536,6 +536,13 @@ test "$(sudo stat -c '%U:%G' /srv/apps/fixture-php/storage/abr-access-check)" = 
 # only this disposable test file so subsequent deploy preflight tests stay clean.
 sudo runuser -u abr-fixture-php -- rm -- /srv/apps/fixture-php/storage/abr-access-check
 abr_ci artisan fixture-php cache:clear --no-interaction
+# A group redeploys, restarts and checks its apps in order; deleting it keeps them.
+abr_ci group create fixture-group fixture-php
+abr_ci deploy --group fixture-group --no-pull
+abr_ci restart --group fixture-group
+abr_ci status --group fixture-group
+abr_ci group delete fixture-group
+abr_ci list | grep -F fixture-php
 fixture_refused 'not defined' artisan fixture-php abr:missing-command
 test -z "$(sudo runuser -u abr-fixture-php -- git -C /srv/apps/fixture-php status --porcelain --untracked-files=all)"
 sudo cp /srv/apps/fixture-php/.env "$abr_binary_directory/prepared-php.env"

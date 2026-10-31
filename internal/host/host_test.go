@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -842,5 +843,41 @@ func TestHealthCheckReachesThisServerForAppHostnames(t *testing.T) {
 	a.Aliases = nil
 	if err := h.deploymentHealth(a); err == nil {
 		t.Fatal("another site's hostname was sent to this server")
+	}
+}
+
+func TestGroupDeploymentStopsAtFirstFailureAndSummarizes(t *testing.T) {
+	h, r, out, a := fixture(t)
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	b := a
+	b.Name, b.User, b.Directory, b.Domain = "zeta", "abr-zeta", filepath.Join(h.AppsDir, "zeta"), "zeta.localhost"
+	if _, err := h.Manager.Register(b, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Manager.CreateGroup("shop", []string{"app", "zeta"}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Deploy([]string{"app"}, DeployOptions{Group: "shop"}); err == nil {
+		t.Fatal("group deploy accepted apps as well")
+	}
+	r.fail = func(c Command) error {
+		if c.Name == "runuser" && strings.Contains(strings.Join(c.Args, " "), "composer install") {
+			return testExit(7)
+		}
+		return nil
+	}
+	err := h.Deploy(nil, DeployOptions{Group: "shop", NoPull: true})
+	if err == nil || !strings.Contains(err.Error(), "composer install") || !strings.Contains(err.Error(), "not deployed: zeta") {
+		t.Fatalf("group did not stop at the failed app: %v", err)
+	}
+	for _, c := range r.calls {
+		if c.Dir == b.Directory {
+			t.Fatal("app after the failure was deployed", c)
+		}
+	}
+	if !regexp.MustCompile(`app\s+failed`).MatchString(out.String()) || !regexp.MustCompile(`zeta\s+skipped`).MatchString(out.String()) {
+		t.Fatal("summary lacks each app's result", out.String())
 	}
 }

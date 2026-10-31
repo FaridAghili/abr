@@ -62,3 +62,9 @@ type = "nuxt"
 domain = "www.example.com"
 # Canonical preference is stored as the domain and its explicit redirect aliases.
 aliases = ["example.com"]
+
+# Groups deploy related apps one at a time in this order and stop at the first
+# failure: abr deploy --group site. Deleting a group keeps its apps.
+[[groups]]
+name = "site"
+apps = ["api", "frontend"]

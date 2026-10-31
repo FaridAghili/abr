@@ -46,7 +46,7 @@ func TestEscReturnsToTheOpenedMenuItem(t *testing.T) {
 		value, _ := m.form.GetFocusedField().(*huh.Select[string]).Hovered()
 		return value
 	}
-	for range 3 {
+	for range 4 {
 		press(m, tea.KeyDown) // Server & credentials
 	}
 	submit(m, tea.KeyEnter)
@@ -57,9 +57,9 @@ func TestEscReturnsToTheOpenedMenuItem(t *testing.T) {
 	if m.page != "home" || hovered() != "server" {
 		t.Fatal("main menu forgot the opened item", hovered())
 	}
-	press(m, tea.KeyUp)
-	press(m, tea.KeyUp)
-	press(m, tea.KeyUp)
+	for range 4 {
+		press(m, tea.KeyUp)
+	}
 	submit(m, tea.KeyEnter) // Apps
 	press(m, tea.KeyDown)
 	submit(m, tea.KeyEnter) // moon

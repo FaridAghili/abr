@@ -45,7 +45,7 @@ func (m *model) goBack() tea.Cmd {
 }
 
 // appRow summarizes an app for the apps table.
-func appRow(app config.App) []tableCell {
+func appRow(app config.App, groups tableCell) []tableCell {
 	stack, queue, scheduler := "Nuxt", cellTone("—", toneMuted), cellTone("—", toneMuted)
 	if app.Type == "laravel" {
 		stack = "Laravel FPM"
@@ -64,7 +64,7 @@ func appRow(app config.App) []tableCell {
 			scheduler = cellTone("on", toneGood)
 		}
 	}
-	return []tableCell{cellTone(app.Name, toneName), cellText(stack), queue, scheduler, cellTone(app.Domain, toneInfo)}
+	return []tableCell{cellTone(app.Name, toneName), cellText(stack), queue, scheduler, groups, cellTone(app.Domain, toneInfo)}
 }
 
 func (m *model) appDetails(app config.App) tea.Cmd {

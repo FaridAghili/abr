@@ -298,6 +298,10 @@ func TestRestoreUsesNewestSharedFilesFromAppBackups(t *testing.T) {
 	h, _, output, cleanup := fullFixture(t, false)
 	defer cleanup()
 	addSecondBackupApp(t, h)
+	// Groups name other apps, so app backups leave them to the target server.
+	if err := h.Manager.CreateGroup("shop", []string{"second", "app"}, true); err != nil {
+		t.Fatal(err)
+	}
 	directory := filepath.Dir(output)
 	if err := h.BackupApps([]string{"app"}, BackupOptions{OutputDir: directory}); err != nil {
 		t.Fatal(err)

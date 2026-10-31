@@ -82,6 +82,8 @@ Health checks for an app's own domains are sent to this server.
 | Restore app backups or a server | `sudo abr restore /var/backups/abr/restore --yes` |
 | Restore an app under a new name | `sudo abr restore /var/backups/abr/api-20261010020000.tar.gz --name api-old --yes` |
 | Remove an app, keeping its data | `sudo abr remove api` |
+| Group related apps in deploy order | `sudo abr group create site api frontend` |
+| Deploy a group, stopping at a failure | `sudo abr deploy --group site` (`--no-pull` redeploys the current code) |
 
 Backups use the saved remote destination when configured; otherwise they stay
 local in `/var/backups/abr/apps`. `--local` (or **This server** in the menu)
@@ -109,6 +111,13 @@ name: its project, user, MySQL database and account, services and ports follow
 the new name, `DB_DATABASE`/`DB_USERNAME` in its `.env` are updated, and its
 domains are kept. Permanent
 removal requires `--purge --yes`.
+
+**Groups** in the menu name related apps, such as an API and the frontends
+that call it, and deploy them one at a time in the order you set, pulling the
+latest commits or redeploying the current code. If one app fails, the rest are
+skipped and listed, and a summary shows each app's result. Groups can also
+restart or check all of their apps. Deleting a group or removing an app from it
+keeps the app; removing an app also takes it out of its groups.
 
 In menus, type to filter, Enter to continue, Shift+Tab to revisit a field,
 and Esc to go back. Advanced settings are optional.

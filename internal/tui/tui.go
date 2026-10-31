@@ -189,6 +189,8 @@ func (m *model) home() tea.Cmd {
 		switch selected {
 		case "apps":
 			return m.appsMenu()
+		case "groups":
+			return m.groupsMenu()
 		case "add":
 			return m.addMenu()
 		case "monitor":
@@ -203,6 +205,7 @@ func (m *model) home() tea.Cmd {
 		return m.home()
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Choose a section").Description("Manage apps, watch their load, or maintain the server.").Options(
 		huh.NewOption(fmt.Sprintf("Apps (%d)", len(c.Apps)), "apps"),
+		huh.NewOption(fmt.Sprintf("Groups (%d) · deploy related apps in order", len(c.Groups)), "groups"),
 		huh.NewOption("Add application", "add"),
 		huh.NewOption("Resource monitor · live CPU & memory", "monitor"),
 		huh.NewOption("Server & credentials", "server"),
@@ -243,9 +246,9 @@ func (m *model) appsMenu() tea.Cmd {
 	slices.SortFunc(c.Apps, func(a, b config.App) int { return strings.Compare(a.Name, b.Name) })
 	rows := make([][]tableCell, len(c.Apps))
 	for i, app := range c.Apps {
-		rows[i] = appRow(app)
+		rows[i] = appRow(app, appGroups(c, app.Name))
 	}
-	header, keys := m.tableOptions(m.selectIndent(), []string{"APP", "STACK", "QUEUE", "SCHEDULER", "DOMAIN"}, rows)
+	header, keys := m.tableOptions(m.selectIndent(), []string{"APP", "STACK", "QUEUE", "SCHEDULER", "GROUPS", "DOMAIN"}, rows)
 	for i, app := range c.Apps {
 		choices = append(choices, huh.NewOption(keys[i], "app:"+app.Name))
 	}
@@ -382,6 +385,7 @@ func (m *model) moreAppMenu(app config.App) tea.Cmd {
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Manage application").Options(
 		huh.NewOption("Ubuntu user & paths", "user"),
 		huh.NewOption("Edit settings", "edit"),
+		huh.NewOption("Groups", "groups"),
 		huh.NewOption("Clear logs", "clear-logs"),
 		huh.NewOption("Disk usage", "disk"),
 		huh.NewOption("Enable services", "enable"),
@@ -397,6 +401,8 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 		return m.appDetails(app)
 	case "edit":
 		return m.editMenu(app)
+	case "groups":
+		return m.appGroupsForm(app)
 	case "edit-env":
 		return m.openEnvironment(app.Name, false)
 	case "clear-logs":
@@ -834,6 +840,12 @@ func nextStep(args []string) string {
 		return ""
 	}
 	switch args[0] {
+	case "deploy":
+		if slices.Contains(args, "--group") {
+			return "Choose the group's Service status to check every app in it."
+		}
+	case "group":
+		return "Choose Groups from the main menu to reorder apps or deploy a group."
 	case "backup":
 		if slices.Contains(args, "--transfer") {
 			return "Check the archives on your backup server and test a restore on a disposable server."
