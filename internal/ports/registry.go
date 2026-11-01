@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 
 	"abr/internal/config"
@@ -20,10 +21,26 @@ type Assignment struct {
 	Port    int    `json:"port"`
 }
 
-type Registry struct {
-	Version     int          `json:"version"`
-	Assignments []Assignment `json:"assignments"`
+// RedisDatabases reserves a Laravel app's pair of Redis databases: Database
+// for sessions, queues and locks, and Database+1 for its cache, so
+// cache:clear flushes only that app's cache.
+type RedisDatabases struct {
+	App      string `json:"app"`
+	Database int    `json:"database"`
 }
+
+type Registry struct {
+	Version     int              `json:"version"`
+	Assignments []Assignment     `json:"assignments"`
+	Redis       []RedisDatabases `json:"redis,omitempty"`
+}
+
+// Redis databases below FirstRedisDatabase stay unassigned for tools that use
+// the defaults; the managed Redis configuration provides RedisDatabaseCount.
+const (
+	FirstRedisDatabase = 10
+	RedisDatabaseCount = 1000
+)
 
 var ErrOccupied = errors.New("port is occupied")
 
@@ -80,6 +97,19 @@ func (r Registry) Validate() error {
 		}
 		keys[key], used[a.Port] = true, true
 	}
+	apps, databases := map[string]bool{}, map[int]bool{}
+	for _, a := range r.Redis {
+		if !config.ValidName(a.App) || a.Database < FirstRedisDatabase || a.Database+1 >= RedisDatabaseCount || a.Database%2 != 0 {
+			return fmt.Errorf("invalid Redis databases %+v", a)
+		}
+		if apps[a.App] {
+			return fmt.Errorf("duplicate Redis databases for %s", a.App)
+		}
+		if databases[a.Database] {
+			return fmt.Errorf("duplicate Redis database %d", a.Database)
+		}
+		apps[a.App], databases[a.Database] = true, true
+	}
 	return nil
 }
 
@@ -103,6 +133,17 @@ func (r *Registry) Sort() {
 		}
 		return a.Purpose < b.Purpose
 	})
+	sort.Slice(r.Redis, func(i, j int) bool { return r.Redis[i].App < r.Redis[j].App })
+}
+
+// RedisDatabase returns the first of the app's two reserved Redis databases.
+func (r Registry) RedisDatabase(app string) (int, bool) {
+	for _, a := range r.Redis {
+		if a.App == app {
+			return a.Database, true
+		}
+	}
+	return 0, false
 }
 
 func (r Registry) Lookup(app, purpose string) (int, bool) {
@@ -114,7 +155,8 @@ func (r Registry) Lookup(app, purpose string) (int, bool) {
 	return 0, false
 }
 
-// Ensure retains every saved assignment, including disabled components.
+// Ensure retains every saved assignment, including disabled components, and
+// reserves the lowest free Redis database pair for a Laravel app without one.
 // Imports are explicit requested ports, which must be free at registration time.
 // On error the receiver stays unchanged.
 func (r *Registry) Ensure(app config.App, pool config.Range, imports map[string]int, probe Probe) error {
@@ -127,7 +169,7 @@ func (r *Registry) Ensure(app config.App, pool config.Range, imports map[string]
 	if pool.First < 1024 || pool.Last > 65535 || pool.Last < pool.First {
 		return fmt.Errorf("invalid port range")
 	}
-	next := Registry{Version: 1, Assignments: append([]Assignment{}, r.Assignments...)}
+	next := Registry{Version: 1, Assignments: append([]Assignment{}, r.Assignments...), Redis: slices.Clone(r.Redis)}
 	required := map[string]bool{}
 	for _, p := range app.Endpoints() {
 		required[p] = true
@@ -189,6 +231,23 @@ func (r *Registry) Ensure(app config.App, pool config.Range, imports map[string]
 		}
 		next.Assignments = append(next.Assignments, Assignment{app.Name, p, selected})
 		used[selected] = app.Name + "/" + p
+	}
+	if _, ok := next.RedisDatabase(app.Name); app.Type == "laravel" && !ok {
+		taken := map[int]bool{}
+		for _, a := range next.Redis {
+			taken[a.Database] = true
+		}
+		selected := 0
+		for database := FirstRedisDatabase; database+1 < RedisDatabaseCount; database += 2 {
+			if !taken[database] {
+				selected = database
+				break
+			}
+		}
+		if selected == 0 {
+			return fmt.Errorf("app %s: no free Redis databases in %d-%d", app.Name, FirstRedisDatabase, RedisDatabaseCount-1)
+		}
+		next.Redis = append(next.Redis, RedisDatabases{app.Name, selected})
 	}
 	next.Sort()
 	*r = next

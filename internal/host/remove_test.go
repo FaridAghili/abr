@@ -113,6 +113,9 @@ func TestPurgeDeletesOnlySelectedAppAndRecordedDatabase(t *testing.T) {
 	r.groups = map[string]string{a.User: a.User + ":x:991:"}
 	// Give getent passwd a surviving account unrelated to this app's group.
 	r.users["other"] = "other:x:992:992:Other:/home/other:/bin/bash"
+	if err := h.write("/etc/redis/abr.conf", []byte("# Managed by abr\n"), 0640); err != nil {
+		t.Fatal(err)
+	}
 	r.calls = nil
 	if err := h.Purge(a.Name, true); err != nil {
 		t.Fatal(err)
@@ -139,6 +142,18 @@ func TestPurgeDeletesOnlySelectedAppAndRecordedDatabase(t *testing.T) {
 		if assignment.App == a.Name {
 			t.Fatal("purged app reservation remains")
 		}
+	}
+	if _, ok := registry.RedisDatabase(a.Name); ok {
+		t.Fatal("purged app Redis reservation remains")
+	}
+	var flushed []string
+	for _, cmd := range r.calls {
+		if cmd.Name == "redis-cli" {
+			flushed = append(flushed, strings.Join(cmd.Args, " "))
+		}
+	}
+	if !slices.Equal(flushed, []string{"-n 10 FLUSHDB", "-n 11 FLUSHDB"}) {
+		t.Fatalf("purge emptied the wrong Redis databases: %q", flushed)
 	}
 	drop, userdel, stop := -1, -1, -1
 	forgotAccess := false

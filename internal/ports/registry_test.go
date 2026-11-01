@@ -2,11 +2,13 @@ package ports
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -68,7 +70,7 @@ func TestImportsAndAllocationFailure(t *testing.T) {
 	if p, _ := r.Lookup("app", "octane-http"); p != 10001 {
 		t.Fatalf("automatic allocation stole import: %d", p)
 	}
-	before := Registry{Version: 1, Assignments: append([]Assignment{}, r.Assignments...)}
+	before := Registry{Version: 1, Assignments: append([]Assignment{}, r.Assignments...), Redis: append([]RedisDatabases{}, r.Redis...)}
 	b := a
 	b.Name = "other"
 	for _, imports := range []map[string]int{{"octane-http": 10000}, {"octane-http": 80}, {"nuxt-http": 20000}, {"octane-http": 20000, "roadrunner-rpc": 20000}} {
@@ -93,6 +95,59 @@ func TestImportsAndAllocationFailure(t *testing.T) {
 	}
 }
 
+func TestRedisDatabasePairs(t *testing.T) {
+	r := Empty()
+	pool := config.Range{First: 10000, Last: 19999}
+	nuxt := config.App{Name: "web", Directory: "/srv/web", User: "web", Type: "nuxt", Domain: "web.test"}
+	if err := r.Ensure(nuxt, pool, nil, free); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.RedisDatabase("web"); ok {
+		t.Fatal("Nuxt app got Redis databases")
+	}
+	for _, name := range []string{"one", "two", "three"} {
+		a := app()
+		a.Name, a.Directory, a.User = name, "/srv/"+name, name
+		if err := r.Ensure(a, pool, nil, free); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, want := range map[string]int{"one": 10, "two": 12, "three": 14} {
+		if got, _ := r.RedisDatabase(name); got != want {
+			t.Fatalf("%s: got Redis database %d, want %d", name, got, want)
+		}
+	}
+	// A released pair is reused; saved pairs never move.
+	r.Redis = slices.DeleteFunc(r.Redis, func(a RedisDatabases) bool { return a.App == "two" })
+	a := app()
+	a.Name, a.Directory, a.User = "four", "/srv/four", "four"
+	if err := r.Ensure(a, pool, nil, free); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.RedisDatabase("four"); got != 12 {
+		t.Fatalf("released pair not reused: %d", got)
+	}
+	path := filepath.Join(t.TempDir(), "ports.json")
+	if err := r.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := Load(path)
+	if err != nil || !reflect.DeepEqual(saved, r) {
+		t.Fatalf("saved registry differs: %+v %v", saved, err)
+	}
+	full := Empty()
+	for database := FirstRedisDatabase; database+1 < RedisDatabaseCount; database += 2 {
+		full.Redis = append(full.Redis, RedisDatabases{App: fmt.Sprintf("app%d", database), Database: database})
+	}
+	before := slices.Clone(full.Redis)
+	if err := full.Ensure(app(), pool, nil, free); err == nil {
+		t.Fatal("accepted exhausted Redis databases")
+	}
+	if !slices.Equal(full.Redis, before) {
+		t.Fatal("failed allocation changed Redis reservations")
+	}
+}
+
 func TestCorruptRegistryRefused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ports.json")
 	for _, bad := range []string{
@@ -100,6 +155,11 @@ func TestCorruptRegistryRefused(t *testing.T) {
 		`{"version":1,"assignments":[{"app":"a","purpose":"octane-http","port":10000},{"app":"b","purpose":"nuxt-http","port":10000}]}`,
 		`{"version":1,"assignments":[{"app":"a","purpose":"octane-http","port":10000},{"app":"a","purpose":"octane-http","port":10001}]}`,
 		`{"version":1,"assignments":[{"app":"a","purpose":"fpm","port":10000}]}`,
+		`{"version":1,"assignments":[],"redis":[{"app":"a","database":0}]}`,
+		`{"version":1,"assignments":[],"redis":[{"app":"a","database":11}]}`,
+		`{"version":1,"assignments":[],"redis":[{"app":"a","database":1000}]}`,
+		`{"version":1,"assignments":[],"redis":[{"app":"a","database":10},{"app":"b","database":10}]}`,
+		`{"version":1,"assignments":[],"redis":[{"app":"a","database":10},{"app":"a","database":12}]}`,
 	} {
 		if err := os.WriteFile(path, []byte(bad), 0600); err != nil {
 			t.Fatal(err)

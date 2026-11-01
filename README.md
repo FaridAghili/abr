@@ -56,6 +56,12 @@ sudo abr deploy api --no-pull
 
 Use `--type nuxt` for Nuxt. Laravel defaults to PHP-FPM; Octane, queues and
 scheduled jobs are optional. Set app secrets before deploying.
+Each Laravel app gets its own pair of Redis databases, from 10 upwards: `abr env`
+and every deployment set `REDIS_DB` (sessions, queues and locks),
+`REDIS_CACHE_DB` and `REDIS_PREFIX` in its `.env`, so `cache:clear` empties only
+that app's cache. Databases 0–9 stay unassigned for tools that use the defaults.
+Redis may use 20% of the server's RAM (at least 256 MB) and never evicts keys.
+Removing an app keeps its Redis databases reserved; `--purge` empties them.
 Deployments may cause downtime and run Laravel migrations; failed changes are
 not automatically rolled back. Laravel builds the frontend before Composer by
 default (`--build-order composer-first` reverses it); while `vendor` is missing,

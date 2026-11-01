@@ -388,7 +388,7 @@ func TestRestoreApplicationOrderingCredentialsAndBuildFailures(t *testing.T) {
 				if err := source.ComposerAuth("packages.example.invalid", "fixture", "fixture-token"); err != nil {
 					t.Fatal(err)
 				}
-				a, _, err := source.application("app")
+				a, r, err := source.application("app")
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -396,7 +396,12 @@ func TestRestoreApplicationOrderingCredentialsAndBuildFailures(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				env := setEnvValues([]byte("APP_KEY=existing-key\n"), [][2]string{{"DB_CONNECTION", "mysql"}, {"DB_HOST", "127.0.0.1"}, {"DB_PORT", "3306"}, {"DB_DATABASE", creds.Database}, {"DB_USERNAME", creds.User}, {"DB_PASSWORD", creds.Password}})
+				// A full restore keeps the saved Redis databases, so .env stays exact.
+				redis, err := source.redisValues(a, r)
+				if err != nil {
+					t.Fatal(err)
+				}
+				env := setEnvValues([]byte("APP_KEY=existing-key\n"), append([][2]string{{"DB_CONNECTION", "mysql"}, {"DB_HOST", "127.0.0.1"}, {"DB_PORT", "3306"}, {"DB_DATABASE", creds.Database}, {"DB_USERNAME", creds.User}, {"DB_PASSWORD", creds.Password}}, redis...))
 				if err := os.WriteFile(filepath.Join(a.Directory, ".env"), env, 0600); err != nil {
 					t.Fatal(err)
 				}

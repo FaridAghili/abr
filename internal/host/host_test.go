@@ -39,6 +39,7 @@ type fakeRunner struct {
 	unitState        string
 	fail             func(Command) error
 	dirty, processes bool
+	redisDatabases   string
 }
 
 func (r *fakeRunner) Run(c Command) ([]byte, error) {
@@ -87,6 +88,13 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 		delete(r.users, c.Args[0])
 	case "groupdel":
 		delete(r.groups, c.Args[0])
+	case "redis-cli":
+		if slices.Equal(c.Args, []string{"CONFIG", "GET", "databases"}) {
+			if r.redisDatabases == "" {
+				return []byte("databases\n1000\n"), nil // As managed setup configures it.
+			}
+			return []byte("databases\n" + r.redisDatabases + "\n"), nil
+		}
 	case "pgrep":
 		if r.processes {
 			return []byte("999\n"), nil
@@ -196,6 +204,9 @@ func fixture(t *testing.T) (Host, *fakeRunner, *bytes.Buffer, config.App) {
 	h := Host{Manager: manager.Manager{ConfigPath: filepath.Join(root, "state/config.toml"), StateDir: filepath.Join(root, "state"), Probe: func(int) error { return nil }}, TemplatesDir: "../../templates", AppsDir: filepath.Join(root, "apps"), Output: &out, Runner: runner, root: root, check: func() error { return nil }}
 	a := config.App{Name: "app", User: "abr-app", Directory: filepath.Join(h.AppsDir, "app"), Type: "laravel", Domain: "app.localhost", Web: config.Web{Driver: "fpm"}}
 	if err := h.write("/etc/hostname", []byte("my-vps\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.write("/proc/meminfo", []byte("MemTotal:        8135000 kB\nMemAvailable:    6000000 kB\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	// Disposable hosts provide /var/tmp, where restores extract archives.
@@ -539,6 +550,83 @@ func TestComposerFirstFailureStopsBeforeBuild(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "Deployed app") {
 		t.Fatal("false success printed")
+	}
+}
+
+func TestDeploymentGivesLaravelAppsTheirOwnRedisDatabases(t *testing.T) {
+	h, r, out, a := fixture(t)
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	// An app registered without a pair gets one on its next deployment, and
+	// values edited by hand are set back.
+	registry, err := ports.Load(h.Manager.RegistryPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.Redis = nil
+	if err := registry.Save(h.Manager.RegistryPath()); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(a.Directory, ".env")
+	if err := os.WriteFile(path, []byte("APP_KEY=existing\nREDIS_DB=0\nSESSION_DRIVER=redis\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r.fail = func(c Command) error {
+		if args := strings.Join(c.Args, " "); strings.Contains(args, "npm ci") && !strings.Contains(args, "--dry-run") {
+			return testExit(9)
+		}
+		return nil
+	}
+	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil || !strings.Contains(err.Error(), "npm ci") {
+		t.Fatalf("expected the simulated npm failure: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "APP_KEY=existing\nREDIS_DB=10\nSESSION_DRIVER=redis\nREDIS_CACHE_DB=11\nREDIS_PREFIX=app-\n" {
+		t.Fatalf("Redis values not set: %q %v", data, err)
+	}
+	if registry, err = ports.Load(h.Manager.RegistryPath()); err != nil {
+		t.Fatal(err)
+	}
+	if database, ok := registry.RedisDatabase(a.Name); !ok || database != 10 {
+		t.Fatalf("Redis databases not reserved: %d", database)
+	}
+	if !strings.Contains(out.String(), "REDIS_DB=10 REDIS_CACHE_DB=11 REDIS_PREFIX=app-") {
+		t.Fatal("Redis change not reported")
+	}
+	r.calls = nil
+	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
+		t.Fatal("expected the simulated npm failure")
+	}
+	for _, c := range r.calls {
+		if slices.Contains(c.Args, "tee") {
+			t.Fatal("unchanged .env rewritten")
+		}
+	}
+	// Redis still configured with its default 16 databases stops the deployment.
+	if err := h.write("/etc/redis/abr.conf", []byte("# Managed by abr\n"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	r.redisDatabases = "16"
+	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil || !strings.Contains(err.Error(), "npm ci") {
+		t.Fatal("app within 16 Redis databases refused:", err)
+	}
+	registry.Redis = []ports.RedisDatabases{{App: a.Name, Database: 16}}
+	if err := registry.Save(h.Manager.RegistryPath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil || !strings.Contains(err.Error(), "run abr setup") {
+		t.Fatalf("deployed beyond Redis databases: %v", err)
+	}
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), "REDIS_DB=10\n") {
+		t.Fatal(".env changed for databases Redis lacks")
+	}
+	r.redisDatabases = "1000"
+	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil || !strings.Contains(err.Error(), "npm ci") {
+		t.Fatalf("expected the simulated npm failure: %v", err)
+	}
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), "REDIS_DB=16\nSESSION_DRIVER=redis\nREDIS_CACHE_DB=17\n") {
+		t.Fatalf("Redis values not updated: %q", data)
 	}
 }
 

@@ -120,22 +120,28 @@ func (h Host) managedSwapFile() (exists, managed bool, err error) {
 	return true, strings.TrimSpace(string(label)) == swapLabel, nil
 }
 
-// Build the file under a temporary name; only a complete, labeled swap area
-// ever appears at /swapfile, so an interrupted setup can be retried.
-func (h Host) createSwapFile() (created bool, result error) {
+// totalMemory returns the server's RAM in bytes.
+func (h Host) totalMemory() (uint64, error) {
 	meminfo, err := os.ReadFile(h.path("/proc/meminfo"))
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	match := regexp.MustCompile(`(?m)^MemTotal:\s+([0-9]+) kB$`).FindSubmatch(meminfo)
 	if match == nil {
-		return false, fmt.Errorf("cannot read total memory from /proc/meminfo")
+		return 0, fmt.Errorf("cannot read total memory from /proc/meminfo")
 	}
 	kib, err := strconv.ParseUint(string(match[1]), 10, 64)
+	return kib << 10, err
+}
+
+// Build the file under a temporary name; only a complete, labeled swap area
+// ever appears at /swapfile, so an interrupted setup can be retried.
+func (h Host) createSwapFile() (created bool, result error) {
+	memory, err := h.totalMemory()
 	if err != nil {
 		return false, err
 	}
-	size := swapSize(kib << 10)
+	size := swapSize(memory)
 	var disk syscall.Statfs_t
 	if err := syscall.Statfs(h.path("/"), &disk); err != nil {
 		return false, err

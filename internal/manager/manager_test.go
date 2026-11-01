@@ -74,6 +74,48 @@ func TestConcurrentRegistrations(t *testing.T) {
 	}
 }
 
+func TestRemoveReleasesRedisDatabases(t *testing.T) {
+	m := testManager(t)
+	for _, name := range []string{"one", "two"} {
+		if _, err := m.Register(testApp(name), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An ordinary removal keeps the pair, which may still hold the app's data.
+	if err := m.Remove("one", false); err != nil {
+		t.Fatal(err)
+	}
+	r, err := m.Register(testApp("three"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.RedisDatabase("three"); got != 14 {
+		t.Fatalf("reused a removed app's Redis databases: %d", got)
+	}
+	r, err = m.Register(testApp("one"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.RedisDatabase("one"); got != 10 {
+		t.Fatalf("re-added app did not get its Redis databases back: %d", got)
+	}
+	if err := m.Remove("one", true); err != nil {
+		t.Fatal(err)
+	}
+	r, err = m.Register(testApp("four"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]int{"two": 12, "three": 14, "four": 10} {
+		if got, ok := r.RedisDatabase(name); !ok || got != want {
+			t.Fatalf("%s: Redis database %d, want %d", name, got, want)
+		}
+	}
+	if _, ok := r.RedisDatabase("one"); ok {
+		t.Fatal("removed app kept its Redis databases")
+	}
+}
+
 func TestConfigurationEditsRetainPorts(t *testing.T) {
 	m := testManager(t)
 	a := testApp("app")

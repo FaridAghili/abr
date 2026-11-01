@@ -381,6 +381,9 @@ sudo runuser -u redis -- head -c 1 /etc/redis/abr.conf >/dev/null
 fixture_denied redis touch /etc/redis/.abr-ci-write-probe
 sudo redis-cli CONFIG GET appendonly | grep -Fx yes
 sudo redis-cli CONFIG GET maxmemory-policy | grep -Fx noeviction
+sudo redis-cli CONFIG GET databases | grep -Fx 1000
+# 20% of RAM, at least 256 MiB.
+test "$(sudo redis-cli CONFIG GET maxmemory | sed -n 2p)" -ge $((256 << 20))
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \
   -e 'SELECT @@innodb_buffer_pool_size, @@max_connections, @@log_bin, @@performance_schema;' | grep -Fx $'268435456\t200\t0\t0'
 # Shared identity tests remain offline: no GitHub account or private repository.
@@ -528,6 +531,11 @@ abr_ci env fixture-php
 sudo test "$(sudo stat -c '%U:%a' /srv/apps/fixture-php/.env)" = abr-fixture-php:600
 sudo grep -Fx 'APP_ENV=production' /srv/apps/fixture-php/.env
 sudo grep -Fx 'APP_DEBUG=false' /srv/apps/fixture-php/.env
+# Laravel apps get their own Redis databases above the defaults 0-9.
+fixture_redis_db=$(sudo sed -n 's/^REDIS_DB=//p' /srv/apps/fixture-php/.env)
+test "$fixture_redis_db" -ge 10
+sudo grep -Fx "REDIS_CACHE_DB=$((fixture_redis_db + 1))" /srv/apps/fixture-php/.env
+sudo grep -Fx 'REDIS_PREFIX=fixture-php-' /srv/apps/fixture-php/.env
 sudo test ! -f /srv/apps/fixture-php/vendor/autoload.php
 abr_ci deploy fixture-php --no-pull
 printf 'stdin works\n' | abr_ci artisan fixture-php abr:access-check 'literal $(id) value'
@@ -536,6 +544,16 @@ test "$(sudo stat -c '%U:%G' /srv/apps/fixture-php/storage/abr-access-check)" = 
 # only this disposable test file so subsequent deploy preflight tests stay clean.
 sudo runuser -u abr-fixture-php -- rm -- /srv/apps/fixture-php/storage/abr-access-check
 abr_ci artisan fixture-php cache:clear --no-interaction
+# Clearing the app's Redis cache empties only its own cache database.
+for db in 0 1 "$fixture_redis_db" "$((fixture_redis_db + 1))"; do
+  sudo redis-cli -n "$db" SET abr-ci-isolation kept >/dev/null
+done
+abr_ci artisan fixture-php cache:clear redis --no-interaction
+for db in 0 1 "$fixture_redis_db"; do
+  sudo redis-cli -n "$db" GET abr-ci-isolation | grep -Fx kept
+  sudo redis-cli -n "$db" DEL abr-ci-isolation >/dev/null
+done
+test -z "$(sudo redis-cli -n "$((fixture_redis_db + 1))" GET abr-ci-isolation)"
 # A group redeploys, restarts and checks its apps in order; deleting it keeps them.
 abr_ci group create fixture-group fixture-php
 abr_ci deploy --group fixture-group --no-pull

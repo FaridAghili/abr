@@ -95,7 +95,9 @@ func (m Manager) register(app config.App, imports map[string]int, save bool) (po
 
 // Remove must only be called after host services are confirmed stopped.
 // Config is saved first; interruption can leave conservative orphan reservations.
-func (m Manager) Remove(name string) error {
+// The app's Redis databases stay reserved while they may hold its data, so no
+// other app inherits its sessions or queued jobs; purged releases them.
+func (m Manager) Remove(name string, purged bool) error {
 	return m.locked(func() error {
 		c, err := config.Load(m.ConfigPath)
 		if err != nil {
@@ -136,6 +138,9 @@ func (m Manager) Remove(name string) error {
 			}
 		}
 		r.Assignments = assignments
+		if purged {
+			r.Redis = slices.DeleteFunc(r.Redis, func(a ports.RedisDatabases) bool { return a.App == name })
+		}
 		return r.Save(m.RegistryPath())
 	})
 }
@@ -264,7 +269,7 @@ func (m Manager) RestoreSnapshot(c config.Config, r ports.Registry) error {
 		if err != nil {
 			return err
 		}
-		if len(existing.Assignments) != 0 {
+		if len(existing.Assignments) != 0 || len(existing.Redis) != 0 {
 			return fmt.Errorf("restore requires an empty port registry")
 		}
 		for _, assignment := range r.Assignments {

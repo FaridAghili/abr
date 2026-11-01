@@ -356,6 +356,11 @@ func (h Host) captureAppBackup(a config.App, c config.Config, r ports.Registry, 
 			appPorts.Assignments = append(appPorts.Assignments, assignment)
 		}
 	}
+	for _, redis := range r.Redis {
+		if redis.App == a.Name {
+			appPorts.Redis = append(appPorts.Redis, redis)
+		}
+	}
 	records, err := h.backupRepositories(c)
 	if err != nil {
 		return "", err

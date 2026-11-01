@@ -148,7 +148,7 @@ func TestDiskUsageCacheExpiryAndConfigurationChanges(t *testing.T) {
 	if r := diskReport(t, h, out, "", false); r.Cached || len(runner.calls) != 4 {
 		t.Fatal("expired cache was served")
 	}
-	if err := h.Manager.Remove("web"); err != nil {
+	if err := h.Manager.Remove("web", false); err != nil {
 		t.Fatal(err)
 	}
 	if r := diskReport(t, h, out, "", false); r.Cached || len(r.Apps) != 1 || len(runner.calls) != 6 {

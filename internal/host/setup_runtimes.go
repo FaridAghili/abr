@@ -88,6 +88,12 @@ func (h Host) verifyNode() error {
 	return nil
 }
 
+// redisMaxMemory leaves most RAM to MySQL, PHP and Node: 20% of the server's
+// memory, and never less than 256 MiB.
+func redisMaxMemory(memory uint64) uint64 {
+	return max(memory/5, 256<<20)
+}
+
 const redisServiceDropIn = "/etc/systemd/system/redis-server.service.d/abr-supervised.conf"
 
 func (h Host) configureRedis() (result error) {
@@ -157,7 +163,15 @@ func (h Host) configureRedis() (result error) {
 			result = errors.Join(result, h.write(path, old, 0640), h.command("chown", "root:redis", path), h.command("systemctl", "restart", "redis-server"))
 		}
 	}()
-	return h.setupConfig("redis-hardening.conf.tmpl", "/etc/redis/abr.conf", func() error {
+	values := map[string]string{}
+	if !h.DryRun {
+		memory, err := h.totalMemory()
+		if err != nil {
+			return err
+		}
+		values["MaxMemory"] = fmt.Sprintf("%dmb", redisMaxMemory(memory)>>20)
+	}
+	return h.setupTemplate("redis-hardening.conf.tmpl", "/etc/redis/abr.conf", values, func() error {
 		if !hasDirective(old, include) {
 			if err := h.write(path, append(append([]byte(nil), old...), []byte("\n# Abr local Redis configuration\n"+include+"\n")...), 0640); err != nil {
 				return err

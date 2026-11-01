@@ -10,17 +10,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"abr/internal/config"
+	"abr/internal/ports"
 	"abr/internal/project"
 )
 
 // PrepareEnv skips projects without an example. Otherwise it copies the example
-// only when .env is absent, then applies recorded database credentials.
+// only when .env is absent, then applies recorded database credentials and a
+// Laravel app's own Redis databases.
 func (h Host) PrepareEnv(name string) error {
 	return h.locked(func() error {
-		a, _, err := h.application(name)
+		a, r, err := h.application(name)
 		if err != nil {
 			return err
 		}
@@ -28,7 +31,7 @@ func (h Host) PrepareEnv(name string) error {
 			return err
 		}
 		if h.DryRun {
-			h.say("Would copy .env.example to .env if absent for %s when the example exists, preserve existing settings and fill managed MySQL values when enabled; skip preparation if no example exists", name)
+			h.say("Would copy .env.example to .env if absent for %s when the example exists, preserve existing settings and fill managed MySQL values when enabled and a Laravel app's own Redis databases; skip preparation if no example exists", name)
 			return nil
 		}
 		exists, err := project.HasEnvExample(h.path(a.Directory))
@@ -64,6 +67,13 @@ func (h Host) PrepareEnv(name string) error {
 			}
 			data = setEnvValues(data, [][2]string{{"DB_CONNECTION", "mysql"}, {"DB_HOST", "127.0.0.1"}, {"DB_PORT", "3306"}, {"DB_DATABASE", c.Database}, {"DB_USERNAME", c.User}, {"DB_PASSWORD", c.Password}})
 		}
+		var redis [][2]string
+		if a.Type == "laravel" {
+			if redis, err = h.redisValues(a, r); err != nil {
+				return err
+			}
+			data = setEnvValues(data, redis)
+		}
 		if err := h.writeEnvironment(a, data); err != nil {
 			return err
 		}
@@ -75,9 +85,92 @@ func (h Host) PrepareEnv(name string) error {
 		if a.Database.Enabled {
 			h.say("Set managed MySQL values in .env; password remains private")
 		}
+		if redis != nil {
+			h.say("Set this app's own Redis databases in .env: %s", formatEnvValues(redis))
+		}
 		h.say("Review .env for app secrets before deployment")
 		return nil
 	})
+}
+
+// redisValues points a Laravel app at its own pair of Redis databases, so
+// cache:clear flushes only its cache, and prefixes its keys and broadcast
+// channels, which Redis shares across databases. An app without a reserved
+// pair, such as one registered before pairs existed, gets one here.
+func (h Host) redisValues(a config.App, r ports.Registry) ([][2]string, error) {
+	database, ok := r.RedisDatabase(a.Name)
+	if !ok {
+		var err error
+		if r, err = h.Manager.Allocate(); err != nil {
+			return nil, err
+		}
+		if database, ok = r.RedisDatabase(a.Name); !ok {
+			return nil, fmt.Errorf("%s has no Redis databases reserved", a.Name)
+		}
+	}
+	return [][2]string{{"REDIS_DB", strconv.Itoa(database)}, {"REDIS_CACHE_DB", strconv.Itoa(database + 1)}, {"REDIS_PREFIX", a.Name + "-"}}, nil
+}
+
+// useOwnRedis writes the app's Redis values into .env only when they differ.
+func (h Host) useOwnRedis(a config.App, r ports.Registry) error {
+	if h.DryRun {
+		h.say("Would set REDIS_DB, REDIS_CACHE_DB and REDIS_PREFIX in .env to this app's own Redis databases")
+		return nil
+	}
+	values, err := h.redisValues(a, r)
+	if err != nil {
+		return err
+	}
+	if err := h.checkRedisDatabases(a, values); err != nil {
+		return err
+	}
+	data, err := readProjectEnv(h.path(filepath.Join(a.Directory, ".env")))
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(values, func(pair [2]string) bool { return dotenvValue(data, pair[0]) != pair[1] }) {
+		return nil
+	}
+	if err := h.writeEnvironment(a, setEnvValues(data, values)); err != nil {
+		return err
+	}
+	h.say("Set this app's own Redis databases in .env: %s", formatEnvValues(values))
+	return nil
+}
+
+// checkRedisDatabases makes sure the running Redis has the app's databases;
+// a server set up before they were reserved needs setup to apply them.
+func (h Host) checkRedisDatabases(a config.App, values [][2]string) error {
+	if _, err := os.Lstat(h.path("/etc/redis/abr.conf")); os.IsNotExist(err) {
+		return nil // Set up without Redis.
+	} else if err != nil {
+		return err
+	}
+	out, err := h.run("Check Redis databases", Command{Name: "redis-cli", Args: []string{"CONFIG", "GET", "databases"}, Private: true})
+	if err != nil {
+		return err
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 2 || fields[0] != "databases" {
+		return fmt.Errorf("cannot read the number of Redis databases")
+	}
+	available, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return fmt.Errorf("cannot read the number of Redis databases: %w", err)
+	}
+	cache, _ := strconv.Atoi(values[1][1])
+	if cache >= available {
+		return fmt.Errorf("%s uses Redis databases %s and %d, but Redis has %d; run abr setup to apply the managed Redis configuration, then deploy again", a.Name, values[0][1], cache, available)
+	}
+	return nil
+}
+
+func formatEnvValues(values [][2]string) string {
+	pairs := make([]string, len(values))
+	for i, pair := range values {
+		pairs[i] = pair[0] + "=" + pair[1]
+	}
+	return strings.Join(pairs, " ")
 }
 
 func setEnvValues(data []byte, values [][2]string) []byte {

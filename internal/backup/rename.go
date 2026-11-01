@@ -78,6 +78,12 @@ func RenameApp(m *Manifest, stage, name string) error {
 			m.Ports.Assignments[i].App = name
 		}
 	}
+	m.Ports.Redis = slices.Clone(m.Ports.Redis)
+	for i := range m.Ports.Redis {
+		if m.Ports.Redis[i].App == old {
+			m.Ports.Redis[i].App = name
+		}
+	}
 	return m.Validate()
 }
 

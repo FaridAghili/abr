@@ -58,7 +58,7 @@ Commands:
   composer auth    Save shared private-package credentials; prompts for email/token
                    --host HOST --username USER --password-stdin is scriptable
   clone URL NAME   Clone a GitHub SSH repository into /srv/apps/NAME
-  env APP          Prepare .env when its example exists; fill managed Laravel MySQL values
+  env APP          Prepare .env when its example exists; fill managed Laravel MySQL and Redis values
   database APP     Create/verify MySQL database (--show prints credentials)
   database --admin TablePlus root connection details (--show prints password)
   backup APP... | --all | --due [--output-dir DIR]
@@ -88,7 +88,7 @@ Commands:
                    Import SQL using the selected database’s scoped account
   enable APP       Render, validate and start services
   disable APP      Stop services; retain users, databases and ports
-  remove APP       Remove managed services/user; retain projects and databases
+  remove APP       Remove managed services/user; retain projects, databases and Redis data
                    --purge --yes permanently deletes this app and its data
   status [APP]     Show actual service status (--group NAME for a group's apps)
   disk [APP]       App sizes/totals and live filesystem capacity/used/available space

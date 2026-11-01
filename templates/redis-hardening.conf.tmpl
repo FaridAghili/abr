@@ -1,8 +1,12 @@
 # Managed by abr; edit the source template instead.
 bind 127.0.0.1 -::1
 protected-mode yes
+# Each Laravel app gets its own pair of databases from 10 upwards, so
+# cache:clear empties only its cache. 0-9 stay free for tools using defaults.
+databases 1000
+# Setup fills in 20% of this server's RAM, at least 256 MB.
+maxmemory {{.MaxMemory}}
 # Redis also holds queues/sessions: never evict jobs to make room for cache keys.
-maxmemory 256mb
 maxmemory-policy noeviction
 # Keep queued work across restarts; a crash can lose about one second of writes.
 appendonly yes

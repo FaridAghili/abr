@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 
 	"abr/internal/config"
@@ -18,6 +19,7 @@ import (
 
 type purgePlan struct {
 	database *credentials
+	redis    int // First of the app's reserved Redis database pair; 0 when none.
 	trees    []string
 	files    []string
 }
@@ -138,6 +140,11 @@ func (h Host) purgeData(a config.App, p purgePlan) error {
 			}
 		}
 	}
+	if p.redis != 0 {
+		if err := h.flushRedis(p.redis); err != nil {
+			return err
+		}
+	}
 	for _, path := range p.trees {
 		if err := h.checkPurgeTree(path); err != nil {
 			return err
@@ -150,6 +157,26 @@ func (h Host) purgeData(a config.App, p purgePlan) error {
 	}
 	for _, path := range p.files {
 		if err := h.removeFile(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// flushRedis empties an app's reserved pair of Redis databases. A server set
+// up without Redis has no data to delete.
+func (h Host) flushRedis(database int) error {
+	if h.DryRun {
+		h.say("Would empty the app's Redis databases %d and %d", database, database+1)
+		return nil
+	}
+	if _, err := os.Lstat(h.path("/etc/redis/abr.conf")); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	for _, n := range []int{database, database + 1} {
+		if _, err := h.run(fmt.Sprintf("Empty Redis database %d", n), Command{Name: "redis-cli", Args: []string{"-n", strconv.Itoa(n), "FLUSHDB"}, Private: true}); err != nil {
 			return err
 		}
 	}

@@ -1,6 +1,7 @@
 package host
 
 import (
+	"abr/internal/ports"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -265,6 +266,34 @@ func TestRedisValidationFailureRestoresOriginalConfigs(t *testing.T) {
 	}
 	if _, err := os.Stat(h.path("/etc/redis/abr.conf")); !os.IsNotExist(err) {
 		t.Fatal("failed Redis drop-in remained")
+	}
+}
+
+func TestRedisMemoryAndDatabasesFollowTheServer(t *testing.T) {
+	for memory, want := range map[uint64]uint64{512 << 20: 256 << 20, 1 << 30: 256 << 20, 8 << 30: 8 << 30 / 5} {
+		if got := redisMaxMemory(memory); got != want {
+			t.Fatalf("%d bytes of RAM: maxmemory %d, want %d", memory, got, want)
+		}
+	}
+	h, _ := setupFixture(t)
+	if err := h.write("/etc/redis/redis.conf", []byte("bind 127.0.0.1\n"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.configureRedis(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := h.read("/etc/redis/abr.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixture has 8135000 kB of RAM.
+	for _, directive := range []string{"maxmemory 1588mb", "maxmemory-policy noeviction", "databases 1000"} {
+		if !hasDirective(data, directive) {
+			t.Fatalf("missing %q in:\n%s", directive, data)
+		}
+	}
+	if ports.FirstRedisDatabase < 10 || !hasDirective(data, fmt.Sprintf("databases %d", ports.RedisDatabaseCount)) {
+		t.Fatal("Redis configuration and reserved databases disagree")
 	}
 }
 

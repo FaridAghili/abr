@@ -84,9 +84,10 @@ func TestPrepareEnvPreservesExistingSecretsAndFailedWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := os.ReadFile(path)
-	if !bytes.Equal(got, data) {
-		t.Fatal("existing environment overwritten")
+	if want := string(data) + "REDIS_DB=10\nREDIS_CACHE_DB=11\nREDIS_PREFIX=app-\n"; string(got) != want {
+		t.Fatalf("existing environment overwritten: %q", got)
 	}
+	data = got
 	runner.fail = func(c Command) error {
 		if slices.Contains(c.Args, "tee") {
 			return fmt.Errorf("write failed")

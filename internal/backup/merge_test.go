@@ -59,9 +59,26 @@ func TestMergeAcceptsDistinctAppsAndRejectsMixedScopes(t *testing.T) {
 	if len(combined.Apps) != 2 || len(combined.Ports.Assignments) != 2 {
 		t.Fatal("lost app settings")
 	}
+	// Apps from different servers often used the same Redis databases.
 	third, data := mergeFixture(t, "third", 10003)
-	third.Scope = ""
-	if err := Merge(&combined, third, data, filepath.Join(target, "mixed")); err == nil {
+	fourth, more := mergeFixture(t, "fourth", 10004)
+	third.Ports.Redis = []ports.RedisDatabases{{App: "third", Database: 10}}
+	fourth.Ports.Redis = []ports.RedisDatabases{{App: "fourth", Database: 10}}
+	if err := Merge(&combined, third, data, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := Merge(&combined, fourth, more, target); err != nil {
+		t.Fatal(err)
+	}
+	if database, ok := combined.Ports.RedisDatabase("third"); !ok || database != 10 {
+		t.Fatal("lost Redis databases")
+	}
+	if _, ok := combined.Ports.RedisDatabase("fourth"); ok {
+		t.Fatal("kept clashing Redis databases")
+	}
+	fifth, mixed := mergeFixture(t, "fifth", 10005)
+	fifth.Scope = ""
+	if err := Merge(&combined, fifth, mixed, filepath.Join(target, "mixed")); err == nil {
 		t.Fatal("full-server archive mixed with app archives")
 	}
 }

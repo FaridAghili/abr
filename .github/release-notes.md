@@ -10,6 +10,8 @@ Abr 1.0.0 is the initial release for fresh Ubuntu 26.04 LTS AMD64 servers.
   the TablePlus MySQL login.
 - Clone-to-deploy workflow with framework detection, optional advanced settings,
   automatic `.env` database values and an app-user editor.
+- A separate pair of Redis databases for each Laravel app, set in its `.env` on
+  every deployment, so `cache:clear` in one app leaves other apps alone.
 - Server updates for apt packages, Caddy, Composer, shared global npm tools and Oh My Zsh.
 - Online app backups with saved source, managed SQL, secrets and uploads,
   sequential SSH transfer and SHA256 verification, or kept on the server itself.

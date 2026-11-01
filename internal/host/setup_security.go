@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"text/template"
 
 	"abr/internal/config"
 )
@@ -108,10 +109,27 @@ func (h Host) sshPreflight(name string) (sshAdmin, error) {
 
 // A setup template is trusted root configuration. Refuse unrelated destination
 // files; preserve both old files and absence if validation/reload fails.
-func (h Host) setupConfig(source, target string, apply func() error) (result error) {
+func (h Host) setupConfig(source, target string, apply func() error) error {
+	return h.setupTemplate(source, target, nil, apply)
+}
+
+// setupTemplate fills in values computed for this server, when given, with
+// Go template syntax before installing the result like setupConfig.
+func (h Host) setupTemplate(source, target string, values any, apply func() error) (result error) {
 	data, err := os.ReadFile(filepath.Join(h.TemplatesDir, source))
 	if err != nil && !h.DryRun {
 		return err
+	}
+	if values != nil && !h.DryRun {
+		t, err := template.New(source).Option("missingkey=error").Parse(string(data))
+		if err != nil {
+			return err
+		}
+		var rendered bytes.Buffer
+		if err := t.Execute(&rendered, values); err != nil {
+			return err
+		}
+		data = rendered.Bytes()
 	}
 	if h.DryRun {
 		h.say("Would apply %s to %s and validate it", source, target)

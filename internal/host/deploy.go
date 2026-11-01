@@ -253,6 +253,11 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if err := h.permissions(a); err != nil {
 		return err
 	}
+	if a.Type == "laravel" {
+		if err := h.useOwnRedis(a, r); err != nil {
+			return err
+		}
+	}
 	php := "/usr/bin/php" + services.PHPVersion
 	run := func(name string, args ...string) error {
 		// PHP and npm scripts can read .env and include SQL bindings/passwords in

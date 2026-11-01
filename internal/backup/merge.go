@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"syscall"
+
+	"abr/internal/ports"
 )
 
 // Merge joins checked app archives. App entries never overlap, so differing
@@ -30,6 +32,14 @@ func Merge(target *Manifest, incoming Manifest, source, destination string) erro
 		combined.Config.Apps = append(append(target.Config.Apps[:0:0], target.Config.Apps...), incoming.Config.Apps...)
 		combined.Apps = append(append(target.Apps[:0:0], target.Apps...), incoming.Apps...)
 		combined.Ports.Assignments = append(append(target.Ports.Assignments[:0:0], target.Ports.Assignments...), incoming.Ports.Assignments...)
+		// App backups hold no Redis data, so an app whose databases another
+		// server also used gets a free pair when it is deployed.
+		combined.Ports.Redis = slices.Clone(target.Ports.Redis)
+		for _, redis := range incoming.Ports.Redis {
+			if !slices.ContainsFunc(combined.Ports.Redis, func(other ports.RedisDatabases) bool { return other.Database == redis.Database }) {
+				combined.Ports.Redis = append(combined.Ports.Redis, redis)
+			}
+		}
 		combined.Files = make(map[string]File, len(target.Files)+len(incoming.Files))
 		for name, record := range target.Files {
 			combined.Files[name] = record

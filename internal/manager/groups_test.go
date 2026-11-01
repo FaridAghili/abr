@@ -69,7 +69,7 @@ func TestGroupsKeepAppsAndOrder(t *testing.T) {
 		t.Fatal("rename lost apps", err)
 	}
 	// Removing an app keeps its groups; deleting a group keeps its apps.
-	if err := m.Remove("api"); err != nil {
+	if err := m.Remove("api", false); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(apps("shopfront"), []string{"shop"}) || !reflect.DeepEqual(apps("backend"), []string{"admin"}) {

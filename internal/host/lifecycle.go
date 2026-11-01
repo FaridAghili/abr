@@ -550,6 +550,7 @@ func (h Host) remove(name string, purge bool) error {
 		var cleanup purgePlan
 		if purge {
 			cleanup, err = h.planPurge(a)
+			cleanup.redis, _ = r.RedisDatabase(a.Name)
 		} else {
 			err = h.project(a)
 		}
@@ -610,7 +611,7 @@ func (h Host) remove(name string, purge bool) error {
 			}
 		}
 		if !h.DryRun {
-			if err := h.Manager.Remove(a.Name); err != nil {
+			if err := h.Manager.Remove(a.Name, purge); err != nil {
 				return err
 			}
 		}
@@ -627,9 +628,12 @@ func (h Host) remove(name string, purge bool) error {
 		if h.DryRun {
 			h.say("Would unregister %s and release its ports after verifying services stopped", a.Name)
 		} else if purge {
-			h.say("Fully removed %s: project, uploads, managed database/account, home, credentials, history, services and port reservations deleted", a.Name)
+			h.say("Fully removed %s: project, uploads, managed database/account, Redis data, home, credentials, history, services and port reservations deleted", a.Name)
 		} else {
-			h.say("Removed %s; project files, home directory, database and credentials retained", a.Name)
+			h.say("Removed %s; project files, home directory, database, Redis data and credentials retained", a.Name)
+			if database, ok := r.RedisDatabase(a.Name); ok {
+				h.say("Redis databases %d and %d stay reserved for %s; adding an app with this name again reuses them", database, database+1, a.Name)
+			}
 		}
 		return nil
 	})

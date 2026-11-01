@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"abr/internal/ports"
 )
 
 func renameFixture(t *testing.T) (Manifest, string) {
@@ -46,10 +48,11 @@ func renameFixture(t *testing.T) (Manifest, string) {
 
 func TestRenameAppMovesEveryEntryAndRecord(t *testing.T) {
 	m, stage := renameFixture(t)
+	m.Ports.Redis = []ports.RedisDatabases{{App: "demo", Database: 10}}
 	if err := RenameApp(&m, stage, "demo-old"); err != nil {
 		t.Fatal(err)
 	}
-	if m.Config.Apps[0].Name != "demo-old" || m.Apps[0].Name != "demo-old" || m.Ports.Assignments[0].App != "demo-old" {
+	if m.Config.Apps[0].Name != "demo-old" || m.Apps[0].Name != "demo-old" || m.Ports.Assignments[0].App != "demo-old" || m.Ports.Redis[0].App != "demo-old" {
 		t.Fatal("app records kept the old name", m.Config.Apps, m.Apps, m.Ports)
 	}
 	for name := range m.Files {
