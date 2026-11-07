@@ -887,6 +887,12 @@ func (h Host) restoreEachApp(apps []config.App, records []backup.App, restore fu
 		}
 		if err == nil && record.Enabled {
 			if err = h.enable(a, r); err == nil {
+				var plan services.Plan
+				if plan, err = services.Render(a, r, h.TemplatesDir, h.Manager.StateDir); err == nil {
+					err = h.clearReleasedCache(a, plan.Environment)
+				}
+			}
+			if err == nil {
 				err = h.deploymentHealth(a)
 			}
 		}

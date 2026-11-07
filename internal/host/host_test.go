@@ -969,3 +969,21 @@ func TestGroupDeploymentStopsAtFirstFailureAndSummarizes(t *testing.T) {
 		t.Fatal("summary lacks each app's result", out.String())
 	}
 }
+
+func TestDeploymentClearsLaravelCacheAfterRestart(t *testing.T) {
+	h, _, out, a := fixture(t)
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.DryRun = true
+	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err != nil {
+		t.Fatal(err)
+	}
+	log := out.String()
+	restart := strings.LastIndex(log, "systemctl ")
+	clear := strings.LastIndex(log, "artisan cache:clear")
+	done := strings.Index(log, "Deployment preview complete")
+	if restart < 0 || clear < restart || done < clear {
+		t.Fatalf("cache not cleared after the new release started: restart=%d clear=%d done=%d\n%s", restart, clear, done, log)
+	}
+}

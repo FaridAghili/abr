@@ -375,6 +375,9 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if err := h.enable(a, r); err != nil {
 		return err
 	}
+	if err := h.clearReleasedCache(a, plan.Environment); err != nil {
+		return err
+	}
 	if err := h.deploymentHealth(a); err != nil {
 		return err
 	}
@@ -457,6 +460,21 @@ func deploymentCommandError(a config.App, name string, args []string, err error)
 		err = fmt.Errorf("%w; its output is not logged because it can contain secrets. To see it, run: runuser -u %s -- env -i HOME=/var/lib/abr-users/%s PATH=/usr/local/bin:/usr/bin:/bin bash -c %s", err, a.User, a.User, shellQuote("cd "+a.Directory+" && "+command))
 	}
 	return err
+}
+
+// clearReleasedCache empties a Laravel app's application cache once the new
+// release serves requests, so entries that the previous release's PHP workers
+// wrote during deployment do not outlive it.
+func (h Host) clearReleasedCache(a config.App, environment map[string]string) error {
+	if a.Type != "laravel" {
+		return nil
+	}
+	php := "/usr/bin/php" + services.PHPVersion
+	args := []string{"artisan", "cache:clear", "--no-interaction"}
+	if _, err := h.asUser(a, environment, true, php, args...); err != nil {
+		return deploymentCommandError(a, php, args, err)
+	}
+	return nil
 }
 
 func (h Host) deploymentHealth(a config.App) error {
