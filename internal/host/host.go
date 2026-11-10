@@ -137,7 +137,9 @@ func (r ExecRunner) Run(c Command) ([]byte, error) {
 
 type Host struct {
 	// Set only on the local copy used while full restore owns host.lock.
-	lockHeld     bool
+	lockHeld bool
+	// Set while a deployment writes details to its log; see note.
+	progress     io.Writer
 	Manager      manager.Manager
 	TemplatesDir string
 	AppsDir      string
@@ -242,6 +244,15 @@ func (h Host) path(path string) string {
 func (h Host) say(format string, args ...any) {
 	if h.Output != nil {
 		fmt.Fprintf(h.Output, format+"\n", args...)
+	}
+}
+
+// note says something the owner needs to see. While a deployment sends its
+// details to the log only, notes also reach the terminal.
+func (h Host) note(format string, args ...any) {
+	h.say(format, args...)
+	if h.progress != nil {
+		fmt.Fprintf(h.progress, format+"\n", args...)
 	}
 }
 

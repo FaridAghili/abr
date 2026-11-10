@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -96,7 +95,10 @@ func (h Host) Deploy(names []string, o DeployOptions) error {
 				result = table.Styled("previewed", table.Muted)
 			}
 			if err != nil {
-				h.say("Deployment failed for %s: %v", name, err)
+				// A single app's error is reported once, by the caller.
+				if len(names) > 1 {
+					h.say("Deployment failed for %s: %v", name, err)
+				}
 				failures = append(failures, fmt.Errorf("%s: %w", name, err))
 				result = table.Styled("failed", table.Bad)
 			}
@@ -176,18 +178,29 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if err != nil {
 		return err
 	}
-	if err := h.project(a); err != nil {
-		return err
-	}
-	if err := h.ensureUser(a); err != nil {
-		return err
-	}
-	if err := h.permissions(a); err != nil {
-		return err
-	}
 	started := time.Now().UTC()
 	commit := ""
+	// Each step's duration goes to the log and history to show where time goes.
+	// The terminal gets one line per step that matters to the owner.
+	var steps []deployStep
+	timed := func(step string, fn func() error) error {
+		began := time.Now()
+		err := fn()
+		if h.DryRun {
+			return err
+		}
+		elapsed := time.Since(began).Seconds()
+		steps = append(steps, deployStep{Step: step, Seconds: elapsed})
+		label := stepLabels[step]
+		if err != nil {
+			h.note("  ✗ %s failed", step)
+		} else if label != "" {
+			h.note("  ✓ %-28s %s", label, formatSeconds(elapsed))
+		}
+		return err
+	}
 	// Every deployment has a private log and result, including failed commands.
+	// Commands and their output go only to the log.
 	if !h.DryRun {
 		logPath := filepath.Join(h.Manager.StateDir, "deployments", a.Name, started.Format("20060102T150405.000000000Z"))
 		if err := os.MkdirAll(filepath.Dir(h.path(logPath)), 0700); err != nil {
@@ -198,28 +211,42 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 			return err
 		}
 		defer f.Close()
-		if h.Output == nil {
-			h.Output = f
-		} else {
-			h.Output = io.MultiWriter(h.Output, f)
-		}
+		h.progress, h.Output = h.Output, f
 		if h.Runner == nil {
-			h.Runner = ExecRunner{h.Output}
+			h.Runner = ExecRunner{f}
 		}
-		h.say("Deployment log: %s.log", logPath)
+		h.note("Deploying %s", a.Name)
 		defer func() {
 			record := struct {
 				App, Commit, Started, Finished, Error string
 				Success                               bool
-			}{App: a.Name, Commit: commit, Started: started.Format(time.RFC3339Nano), Finished: time.Now().UTC().Format(time.RFC3339Nano), Success: result == nil}
+				Steps                                 []deployStep
+			}{App: a.Name, Commit: commit, Started: started.Format(time.RFC3339Nano), Finished: time.Now().UTC().Format(time.RFC3339Nano), Success: result == nil, Steps: steps}
 			if result != nil {
 				record.Error = result.Error()
+			}
+			if len(steps) > 0 {
+				if err := h.writeTable(stepTable(a.Name, steps)); err != nil {
+					result = errors.Join(result, err)
+				}
 			}
 			data, _ := json.MarshalIndent(record, "", "  ")
 			if err := storage.AtomicWrite(h.path(logPath+".json"), data); err != nil {
 				result = errors.Join(result, fmt.Errorf("save deployment history: %w", err))
 			}
+			if result != nil {
+				result = fmt.Errorf("%w\nFull log: %s.log", result, logPath)
+			}
 		}()
+	}
+	if err := h.project(a); err != nil {
+		return err
+	}
+	if err := h.ensureUser(a); err != nil {
+		return err
+	}
+	if err := h.permissions(a); err != nil {
+		return err
 	}
 	dirty, err := h.asUser(a, plan.Environment, true, "git", "status", "--porcelain")
 	if err != nil {
@@ -234,24 +261,28 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if len(strings.TrimSpace(string(dirty))) > 0 && !(o.NoPull && (o.deferEnable || pendingErr == nil)) {
 		return fmt.Errorf("working tree is dirty; commit/stash changes before deployment")
 	}
-	commit, err = h.deploymentTarget(a, plan.Environment, o.NoPull)
-	if err != nil {
+	if err := timed("fetch", func() (err error) {
+		commit, err = h.deploymentTarget(a, plan.Environment, o.NoPull)
+		return err
+	}); err != nil {
 		return err
 	}
-	if err := h.preflight(a, plan.Environment, commit, o.NoPull); err != nil {
+	if err := timed("preflight", func() error { return h.preflight(a, plan.Environment, commit, o.NoPull) }); err != nil {
 		return fmt.Errorf("preflight failed; app services were not stopped: %w", err)
 	}
 	// In-place deployment deliberately has downtime after preflight succeeds.
-	if err := h.disable(a); err != nil {
+	if err := timed("stop app", func() error { return h.disable(a) }); err != nil {
 		return err
 	}
 	if !o.NoPull {
-		if _, err := h.asUser(a, plan.Environment, true, "git", "merge", "--ff-only", commit); err != nil {
+		// Git runs as the app user, so the files it writes already belong to it;
+		// enable secures ownership and web access again after the build.
+		if err := timed("git merge", func() error {
+			_, err := h.asUser(a, plan.Environment, true, "git", "merge", "--ff-only", commit)
+			return err
+		}); err != nil {
 			return err
 		}
-	}
-	if err := h.permissions(a); err != nil {
-		return err
 	}
 	if a.Type == "laravel" {
 		if err := h.useOwnRedis(a, r); err != nil {
@@ -262,7 +293,10 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	run := func(name string, args ...string) error {
 		// PHP and npm scripts can read .env and include SQL bindings/passwords in
 		// exception output. Keep their output out of terminal/deployment logs.
-		_, err := h.asUser(a, plan.Environment, name == php || name == "composer" || name == "npm", name, args...)
+		err := timed(stepName(name, args), func() error {
+			_, err := h.asUser(a, plan.Environment, name == php || name == "composer" || name == "npm", name, args...)
+			return err
+		})
 		if err == nil {
 			return nil
 		}
@@ -278,20 +312,30 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 				return fmt.Errorf("commit package-lock.json before deployment: %w", err)
 			}
 		}
-		// Build tools are often dev dependencies even for production builds.
-		if err := run("npm", "ci", "--include=dev"); err != nil {
+		if err := h.installAppPackages(a, run); err != nil {
 			return err
 		}
 	} else if !os.IsNotExist(packageErr) {
 		return packageErr
 	}
 	composerFirst := a.BuildOrder == config.BuildComposerFirst
+	var composerKey string
+	if a.Type == "laravel" && !h.DryRun {
+		files, err := h.projectInputs(a, composerInputs)
+		if err != nil {
+			return err
+		}
+		composerKey = dependencyKey(h.composerRuntime(), files)
+		if err := h.forgetInstall(a, "composer"); err != nil {
+			return err
+		}
+	}
 	// A fresh clone or restore has no vendor directory yet, and frontend builds
 	// may import from it. Install the packages without Composer scripts first,
 	// since frontend-first apps' scripts may need the built assets.
 	if a.Type == "laravel" && frontend && !composerFirst {
 		if _, err := os.Stat(h.path(filepath.Join(a.Directory, "vendor/autoload.php"))); os.IsNotExist(err) {
-			h.say("No vendor directory yet; installing Composer packages without scripts before the frontend build")
+			h.note("  No vendor directory yet; installing Composer packages without scripts before the frontend build")
 			if err := run("composer", "install", "--no-dev", "--no-scripts", "--no-interaction", "--prefer-dist"); err != nil {
 				return err
 			}
@@ -303,7 +347,14 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		if err := run("composer", "install", "--no-dev", "--optimize-autoloader", "--no-interaction", "--prefer-dist"); err != nil {
 			return err
 		}
-		return run("composer", "check-platform-reqs", "--no-dev")
+		if err := run("composer", "check-platform-reqs", "--no-dev"); err != nil {
+			return err
+		}
+		// Lets the next preflight skip downloading packages this lock already has.
+		if h.DryRun {
+			return nil
+		}
+		return h.rememberInstall(a, "composer", composerKey)
 	}
 	if a.Type == "laravel" && composerFirst {
 		if err := installComposer(); err != nil {
@@ -314,7 +365,7 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		if err := run("npm", "run", "build"); err != nil {
 			return err
 		}
-		if err := h.compressAssets(a, plan.Environment); err != nil {
+		if err := timed("brotli", func() error { return h.compressAssets(a, plan.Environment) }); err != nil {
 			return err
 		}
 	}
@@ -361,24 +412,23 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		if err := run(php, "artisan", "migrate", "--force", "--no-interaction"); err != nil {
 			return err
 		}
-		if err := run(php, "artisan", "optimize:clear", "--no-interaction"); err != nil {
-			return err
-		}
+		// optimize clears each cache it rebuilds (config, events, routes, views),
+		// and the application cache is cleared once the new release serves.
 		if err := run(php, "artisan", "optimize", "--no-interaction"); err != nil {
 			return err
 		}
 	}
 	if o.deferEnable {
-		h.say("Built %s", a.Name)
+		h.note("Built %s in %s", a.Name, formatSeconds(time.Since(started).Seconds()))
 		return nil
 	}
-	if err := h.enable(a, r); err != nil {
+	if err := timed("start app", func() error { return h.enable(a, r) }); err != nil {
 		return err
 	}
-	if err := h.clearReleasedCache(a, plan.Environment); err != nil {
+	if err := timed("cache:clear", func() error { return h.clearReleasedCache(a, plan.Environment) }); err != nil {
 		return err
 	}
-	if err := h.deploymentHealth(a); err != nil {
+	if err := timed("health check", func() error { return h.deploymentHealth(a) }); err != nil {
 		return err
 	}
 	if err := h.finishRestore(a.Name); err != nil {
@@ -387,7 +437,7 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if h.DryRun {
 		h.say("Deployment preview complete for %s; no commands executed or files changed", a.Name)
 	} else {
-		h.say("Deployed %s at %s", a.Name, commit)
+		h.note("Deployed %s at %.12s in %s", a.Name, commit, formatSeconds(time.Since(started).Seconds()))
 	}
 	return nil
 }
@@ -457,7 +507,7 @@ func deploymentCommandError(a config.App, name string, args []string, err error)
 	if name == "npm" || name == "composer" || strings.HasPrefix(filepath.Base(name), "php") {
 		// Their output can contain .env secrets, so logs omit it; the owner can
 		// rerun the step in a terminal to read it.
-		err = fmt.Errorf("%w; its output is not logged because it can contain secrets. To see it, run: runuser -u %s -- env -i HOME=/var/lib/abr-users/%s PATH=/usr/local/bin:/usr/bin:/bin bash -c %s", err, a.User, a.User, shellQuote("cd "+a.Directory+" && "+command))
+		err = fmt.Errorf("%w\nIts output is hidden because it can contain secrets. To see it, run:\n  runuser -u %s -- env -i HOME=/var/lib/abr-users/%s PATH=/usr/local/bin:/usr/bin:/bin bash -c %s", err, a.User, a.User, shellQuote("cd "+a.Directory+" && "+command))
 	}
 	return err
 }
@@ -493,4 +543,59 @@ func (h Host) deploymentHealth(a config.App) error {
 		}
 	}
 	return nil
+}
+
+// stepLabels names the deployment steps shown in the terminal. Other steps,
+// such as clearing caches, appear only in the log and history.
+var stepLabels = map[string]string{
+	"fetch":            "Fetched code",
+	"preflight":        "Checked before stopping",
+	"stop app":         "Stopped app",
+	"git merge":        "Updated code",
+	"npm ci":           "Installed Node packages",
+	"npm run build":    "Built frontend",
+	"composer install": "Installed Composer packages",
+	"artisan migrate":  "Ran migrations",
+	"artisan optimize": "Cached config, routes and views",
+	"start app":        "Started app",
+	"health check":     "Passed health check",
+}
+
+type deployStep struct {
+	Step    string
+	Seconds float64
+}
+
+// stepName shortens a command to what identifies the step, such as
+// "npm run build" or "artisan migrate", without options or paths.
+func stepName(name string, args []string) string {
+	words := []string{filepath.Base(name)}
+	if strings.HasPrefix(words[0], "php") && len(args) > 0 && args[0] == "artisan" {
+		words = nil
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") || len(words) == 3 {
+			break
+		}
+		words = append(words, arg)
+	}
+	return strings.Join(words, " ")
+}
+
+func stepTable(app string, steps []deployStep) table.Table {
+	t := table.Table{Title: "Step times · " + app, Headers: []string{"STEP", "TIME"}, Right: []int{1}}
+	total := 0.0
+	for _, s := range steps {
+		total += s.Seconds
+		t.Rows = append(t.Rows, []table.Cell{table.Text(s.Step), table.Text(formatSeconds(s.Seconds))})
+	}
+	t.Rows = append(t.Rows, []table.Cell{table.Styled("total", table.Strong), table.Styled(formatSeconds(total), table.Strong)})
+	return t
+}
+
+func formatSeconds(seconds float64) string {
+	if seconds < 10 {
+		return fmt.Sprintf("%.1fs", seconds)
+	}
+	return (time.Duration(seconds) * time.Second).Round(time.Second).String()
 }

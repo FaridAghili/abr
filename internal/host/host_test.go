@@ -639,9 +639,9 @@ func TestDeploymentMigratesBeforeClearingDatabaseCache(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Stop at cache clearing to inspect the first-deployment sequence without
-			// simulating an active FPM socket. A missing cache table would fail here.
+			// simulating an active FPM socket.
 			r.fail = func(c Command) error {
-				if strings.Contains(strings.Join(c.Args, " "), "artisan optimize:clear") {
+				if strings.Contains(strings.Join(c.Args, " "), "artisan optimize ") {
 					return testExit(9)
 				}
 				return nil
@@ -667,7 +667,7 @@ func TestDeploymentMigratesBeforeClearingDatabaseCache(t *testing.T) {
 				if strings.Contains(args, "artisan migrate") {
 					migrate = i
 				}
-				if strings.Contains(args, "artisan optimize:clear") {
+				if strings.Contains(args, "artisan optimize ") {
 					cacheClear = i
 				}
 			}
@@ -874,7 +874,7 @@ func TestDeploymentInstallsComposerFirstWithoutVendor(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.fail = func(c Command) error {
-		if strings.Contains(strings.Join(c.Args, " "), "artisan optimize:clear") {
+		if strings.Contains(strings.Join(c.Args, " "), "artisan optimize ") {
 			return testExit(9)
 		}
 		return nil

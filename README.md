@@ -66,6 +66,11 @@ Deployments may cause downtime and run Laravel migrations; failed changes are
 not automatically rolled back. Laravel builds the frontend before Composer by
 default (`--build-order composer-first` reverses it); while `vendor` is missing,
 Composer packages are installed without scripts before the frontend build.
+`npm ci` is skipped while `package.json`, `package-lock.json`, `.npmrc` and Node
+are unchanged since the last successful install; the package's own install
+scripts and the build still run. A deployment shows one line per main step with
+its time; every command, its output and all step times are in the deployment
+log, whose path is shown when a deployment fails.
 Health checks for an app's own domains are sent to this server.
 
 ## Everyday commands

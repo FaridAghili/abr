@@ -134,7 +134,7 @@ func (h Host) useOwnRedis(a config.App, r ports.Registry) error {
 	if err := h.writeEnvironment(a, setEnvValues(data, values)); err != nil {
 		return err
 	}
-	h.say("Set this app's own Redis databases in .env: %s", formatEnvValues(values))
+	h.note("Set this app's own Redis databases in .env: %s", formatEnvValues(values))
 	return nil
 }
 

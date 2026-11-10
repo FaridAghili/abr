@@ -86,7 +86,21 @@ func (h Host) preflight(a config.App, env map[string]string, commit string, noPu
 		}
 		return h.asUser(a, env, true, "git", "show", commit+":"+name)
 	}
-	copyFile := func(name string, data []byte) error { return os.WriteFile(filepath.Join(stage, name), data, 0600) }
+	staged := map[string][]byte{}
+	copyFile := func(name string, data []byte) error {
+		staged[name] = data
+		return os.WriteFile(filepath.Join(stage, name), data, 0600)
+	}
+	// Packages this exact lock already installed need no download check.
+	alreadyInstalled := func(tool, runtime string, names []string) bool {
+		files := map[string][]byte{}
+		for _, name := range names {
+			if data, ok := staged[name]; ok {
+				files[name] = data
+			}
+		}
+		return h.installed(a, tool, dependencyKey(runtime, files))
+	}
 	for _, name := range []string{"composer.json", "composer.lock"} {
 		if a.Type != "laravel" {
 			break
@@ -169,7 +183,9 @@ func (h Host) preflight(a config.App, env map[string]string, commit string, noPu
 		if err := run("composer", "--no-plugins", "check-platform-reqs", "--lock", "--no-dev", "--no-interaction"); err != nil {
 			return err
 		}
-		if err := run("composer", "--no-plugins", "install", "--download-only", "--no-dev", "--no-scripts", "--no-interaction", "--prefer-dist"); err != nil {
+		if alreadyInstalled("composer", h.composerRuntime(), composerInputs) {
+			h.say("Composer packages unchanged since the last install; skipping the download check")
+		} else if err := run("composer", "--no-plugins", "install", "--download-only", "--no-dev", "--no-scripts", "--no-interaction", "--prefer-dist"); err != nil {
 			return err
 		}
 	}
@@ -177,7 +193,9 @@ func (h Host) preflight(a config.App, env map[string]string, commit string, noPu
 		if err := run("node", "--version"); err != nil {
 			return err
 		}
-		if err := run("npm", "ci", "--dry-run", "--ignore-scripts", "--include=dev", "--engine-strict", "--no-audit", "--no-fund"); err != nil {
+		if alreadyInstalled("npm", h.nodeRuntime(), npmInputs) {
+			h.say("Node packages unchanged since the last install; skipping the npm ci check")
+		} else if err := run("npm", "ci", "--dry-run", "--ignore-scripts", "--include=dev", "--engine-strict", "--no-audit", "--no-fund"); err != nil {
 			return err
 		}
 	}
