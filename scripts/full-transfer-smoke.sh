@@ -72,8 +72,8 @@ sudo mysql --protocol=socket --user=root fixture_php <<'SQL'
 CREATE TABLE abr_full_backup_probe (id INT PRIMARY KEY);
 INSERT INTO abr_full_backup_probe VALUES (73);
 SQL
+# Templates come only from the executable: a local edit must not survive restore.
 printf '\n; Full backup edited template fixture\n' | sudo tee -a /etc/abr/templates/php-cli.ini.tmpl >/dev/null
-sudo cp /etc/abr/templates/php-cli.ini.tmpl "$abr_binary_directory/full-template-before"
 # fixture-spa's build reads fixture-php's page, as a Nuxt build that prerenders
 # from a Laravel API does: restores must start fixture-php before building it.
 # The captured local change also makes its restored working tree dirty.
@@ -144,7 +144,7 @@ PY
 sudo cmp /srv/apps/fixture-php/.env "$abr_binary_directory/full-env-before"
 sudo cmp /var/lib/abr-ci/databases/fixture-php.json "$abr_binary_directory/full-db-before"
 sudo cmp /var/lib/abr-ci/git/id_ed25519 "$abr_binary_directory/full-git-before"
-sudo cmp /etc/abr/templates/php-cli.ini.tmpl "$abr_binary_directory/full-template-before"
+sudo cmp /etc/abr/templates/php-cli.ini.tmpl "$abr_smoke_script_directory/../templates/php-cli.ini.tmpl"
 sudo cmp /var/lib/abr-ci/backup-destination.json "$abr_binary_directory/full-destination-before"
 sudo cmp /var/lib/abr-ci/backup-ssh/id_ed25519 "$abr_binary_directory/full-backup-key-before"
 sudo cmp /var/lib/abr-ci/backups/fixture-php.json "$abr_binary_directory/full-backup-record-before"
