@@ -425,9 +425,13 @@ func verifiedRoadRunner(archive []byte, digest string) ([]byte, error) {
 	return binary, nil
 }
 
+// installTemplates makes the installed templates identical to the bundled
+// ones. The executable is the only source of templates: a new release brings
+// new templates to every server on its next host operation, and edits to the
+// installed copies are replaced.
 func (h Host) installTemplates(source fs.FS) error {
 	if h.DryRun {
-		h.say("Would install embedded templates into %s, preserving edits", h.TemplatesDir)
+		h.say("Would refresh the templates in %s from this executable", h.TemplatesDir)
 		return nil
 	}
 	entries, err := fs.ReadDir(source, ".")
@@ -438,19 +442,32 @@ func (h Host) installTemplates(source fs.FS) error {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tmpl") {
 			continue
 		}
-		target := filepath.Join(h.TemplatesDir, entry.Name())
-		if _, err := h.read(target); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return err
-		}
 		data, err := fs.ReadFile(source, entry.Name())
 		if err != nil {
 			return err
+		}
+		target := filepath.Join(h.TemplatesDir, entry.Name())
+		current, err := h.read(target)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err == nil && bytes.Equal(current, data) {
+			if info, err := os.Lstat(h.path(target)); err == nil && info.Mode().Perm() == 0644 {
+				continue
+			}
 		}
 		if err := h.write(target, data, 0644); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// syncTemplates installs this executable's templates before they are rendered.
+func (h Host) syncTemplates() error {
+	templates, err := abr.TemplateFS()
+	if err != nil {
+		return err
+	}
+	return h.installTemplates(templates)
 }

@@ -5,8 +5,9 @@ mysqlx-bind-address = 127.0.0.1
 local-infile = 0
 # Keep password-based loopback root separate from root's auth_socket account.
 skip-name-resolve = ON
-# Modest shared-host defaults; size for measured workload and available RAM.
-innodb_buffer_pool_size = 256M
+# Setup fills in 25% of this server's RAM (at least 256 MB), leaving the rest to
+# Redis, PHP and Node. Raise it on a database-heavy server with spare memory.
+innodb_buffer_pool_size = {{.BufferPool}}
 # Instrumentation reserves hundreds of MB that a single app host rarely reads.
 performance_schema = OFF
 # Octane and queue workers hold connections for their whole lifetime.

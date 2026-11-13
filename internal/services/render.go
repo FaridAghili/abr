@@ -40,8 +40,67 @@ type data struct {
 	AssetRoot, AssetPath, HTTPDomains                                     string
 	PHPBinary, NodeBinary, ManagedEnvironmentFile, FPMSocket              string
 	OctaneHTTPPort, RoadRunnerRPCPort, NuxtHTTPPort, NightwatchIngestPort int
-	OctaneWorkers, QueueWorkers                                           int
+	OctaneWorkers, FPMChildren, QueueWorkers                              int
 	FPMEnvironment                                                        string
+}
+
+// SitePath is the Caddy site file of an app, shared by its live and maintenance configurations.
+func SitePath(a config.App) string { return "/etc/caddy/abr.d/abr-" + a.Name + ".caddy" }
+
+// render fills one template with the managed marker in front, so every
+// generated file identifies itself as abr's.
+func render(templates, source string, d data) ([]byte, error) {
+	t, err := template.New(source).Option("missingkey=error").Funcs(template.FuncMap{
+		"quote": strconv.Quote,
+		"unit":  func(s string) string { return strconv.Quote(strings.ReplaceAll(s, "%", "%%")) },
+		"unitPath": func(s string) (string, error) {
+			// WorkingDirectory/EnvironmentFile are literal paths, not shell
+			// words. Quotes are part of the filename for these directives.
+			if strings.TrimSpace(s) != s || strings.ContainsAny(s, "\\\x00\r\n") {
+				return "", fmt.Errorf("unsupported characters in systemd path")
+			}
+			return strings.ReplaceAll(s, "%", "%%"), nil
+		},
+	}).ParseFiles(filepath.Join(templates, source))
+	if err != nil {
+		return nil, fmt.Errorf("template %s: %w", source, err)
+	}
+	var b bytes.Buffer
+	marker := Marker
+	if source == "php-fpm-pool.conf.tmpl" {
+		marker = strings.Replace(marker, "#", ";", 1)
+	}
+	b.WriteString(marker)
+	if err := t.Execute(&b, d); err != nil {
+		return nil, fmt.Errorf("render %s: %w", source, err)
+	}
+	return b.Bytes(), nil
+}
+
+// RenderMaintenance renders the Caddy site that answers 503 for every domain
+// of a stopped app, so visitors get a page and a Retry-After instead of a
+// failed TLS handshake while the app is deployed or disabled.
+func RenderMaintenance(a config.App, templates string) (File, error) {
+	if err := a.Validate(); err != nil {
+		return File{}, err
+	}
+	d := siteData(a)
+	data, err := render(templates, "caddy-maintenance.caddy.tmpl", d)
+	if err != nil {
+		return File{}, err
+	}
+	return File{SitePath(a), data, 0644}, nil
+}
+
+// siteData has the domain fields the Caddy templates use.
+func siteData(a config.App) data {
+	d := data{Name: a.Name, Domain: a.Domain, SiteDomains: strings.Join(append([]string{a.Domain}, a.Domains...), ", "), Aliases: a.Aliases}
+	httpDomains := []string{}
+	for _, domain := range append([]string{a.Domain}, a.Domains...) {
+		httpDomains = append(httpDomains, "http://"+domain)
+	}
+	d.HTTPDomains = strings.Join(httpDomains, ", ")
+	return d
 }
 
 func Render(a config.App, r ports.Registry, templates, state string) (Plan, error) {
@@ -73,8 +132,14 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 		httpDomains = append(httpDomains, "http://"+domain)
 	}
 	d.HTTPDomains = strings.Join(httpDomains, ", ")
+	// Octane runs its workers permanently; FPM starts children on demand, so a
+	// higher ceiling costs memory only while an app is busy.
+	d.FPMChildren = a.Web.Workers
 	if d.OctaneWorkers == 0 {
 		d.OctaneWorkers = 2
+	}
+	if d.FPMChildren == 0 {
+		d.FPMChildren = 8
 	}
 	for _, purpose := range a.Endpoints() {
 		port, ok := r.Lookup(a.Name, purpose)
@@ -110,31 +175,11 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 	}
 	p.Files = append(p.Files, File{d.ManagedEnvironmentFile, []byte(Marker + env.String()), 0600})
 	add := func(source, target string) error {
-		t, err := template.New(source).Option("missingkey=error").Funcs(template.FuncMap{
-			"quote": strconv.Quote,
-			"unit":  func(s string) string { return strconv.Quote(strings.ReplaceAll(s, "%", "%%")) },
-			"unitPath": func(s string) (string, error) {
-				// WorkingDirectory/EnvironmentFile are literal paths, not shell
-				// words. Quotes are part of the filename for these directives.
-				if strings.TrimSpace(s) != s || strings.ContainsAny(s, "\\\x00\r\n") {
-					return "", fmt.Errorf("unsupported characters in systemd path")
-				}
-				return strings.ReplaceAll(s, "%", "%%"), nil
-			},
-		}).ParseFiles(filepath.Join(templates, source))
+		data, err := render(templates, source, d)
 		if err != nil {
-			return fmt.Errorf("template %s: %w", source, err)
+			return err
 		}
-		var b bytes.Buffer
-		marker := Marker
-		if source == "php-fpm-pool.conf.tmpl" {
-			marker = strings.Replace(marker, "#", ";", 1)
-		}
-		b.WriteString(marker)
-		if err := t.Execute(&b, d); err != nil {
-			return fmt.Errorf("render %s: %w", source, err)
-		}
-		p.Files = append(p.Files, File{target, b.Bytes(), 0644})
+		p.Files = append(p.Files, File{target, data, 0644})
 		return nil
 	}
 	unit := func(source, suffix string, enable bool) error {
@@ -147,7 +192,7 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 		}
 		return nil
 	}
-	if err := add("caddy-site.caddy.tmpl", "/etc/caddy/abr.d/abr-"+a.Name+".caddy"); err != nil {
+	if err := add("caddy-site.caddy.tmpl", SitePath(a)); err != nil {
 		return Plan{}, err
 	}
 	if p.FPM {

@@ -5,6 +5,9 @@
     echo 'Refusing app restore test outside a disposable Ubuntu host.' >&2; exit 1
   fi
   set -euo pipefail
+fixture_redis() {
+  sudo env "REDISCLI_AUTH=$(sudo sed -n 's/.*"password": *"\([a-f0-9]*\)".*/\1/p' /var/lib/abr-ci/redis-admin.json)" redis-cli "$@"
+}
   mapfile -t app_restore_archives < <(sudo find /var/backups/abr-ci-app-remote -maxdepth 1 -name '*.tar.gz' | sort)
   test "${#app_restore_archives[@]}" = 4
   # Validate the combined archives only after the disposable target is fresh.
@@ -27,7 +30,7 @@
   sudo mysql --protocol=socket --user=root --batch --skip-column-names fixture_php <<'SQL' | grep -Fx 73
 SELECT id FROM abr_full_backup_probe;
 SQL
-  test -z "$(sudo redis-cli -n 5 GET abr-full-state)"
+  test -z "$(fixture_redis -n 5 GET abr-full-state)"
   fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
   curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/full-saved.txt | grep -F 'saved working source'
   fixture_https api.fixture-octane.localhost | grep -F 'Abr Nuxt fixture'

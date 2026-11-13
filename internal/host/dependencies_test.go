@@ -55,7 +55,7 @@ func TestDeploymentSkipsUnchangedPackageInstalls(t *testing.T) {
 	write("vendor/composer/installed.json", "{}")
 
 	commands, _ := deployUntilOptimize(t, h, r, nil)
-	if !ran(commands, "npm ci --include=dev --no-audit --no-fund --prefer-offline") || !ran(commands, "npm ci --dry-run") || !ran(commands, "--download-only") {
+	if !ran(commands, "npm ci --include=dev --no-audit --no-fund --prefer-offline") || !ran(commands, "npm ci --ignore-scripts") || !ran(commands, "--download-only") {
 		t.Fatalf("first deployment did not install and check packages: %q", commands)
 	}
 	if ran(commands, "npm run postinstall") {
@@ -78,7 +78,7 @@ func TestDeploymentSkipsUnchangedPackageInstalls(t *testing.T) {
 	commands, err := deployUntilOptimize(t, h, r, func(args string) bool {
 		return strings.Contains(args, "npm ci --include=dev")
 	})
-	if err == nil || !ran(commands, "npm ci --dry-run") {
+	if err == nil || !ran(commands, "npm ci --ignore-scripts") {
 		t.Fatalf("changed lock not checked and installed: %v %q", err, commands)
 	}
 	write("package-lock.json", "{}\n")

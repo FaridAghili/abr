@@ -51,7 +51,8 @@ func (m *model) readLogsForm(app *config.App) tea.Cmd {
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Which logs?").Description("Choose the log source; all-app file logs are labeled by app and file.\nExample: application files for Laravel's storage/logs/laravel.log.").Options(
 		huh.NewOption("Service journals", "journal"),
 		huh.NewOption("Application file logs", "application"),
-		huh.NewOption("Deployment file logs", "deployment")).Value(&kind)))
+		huh.NewOption("Deployment file logs", "deployment"),
+		huh.NewOption("Deployment history · results and times", "history")).Value(&kind)))
 }
 
 func (m *model) clearLogsForm(name string) tea.Cmd {

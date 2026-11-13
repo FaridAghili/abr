@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -217,11 +219,7 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		}
 		h.note("Deploying %s", a.Name)
 		defer func() {
-			record := struct {
-				App, Commit, Started, Finished, Error string
-				Success                               bool
-				Steps                                 []deployStep
-			}{App: a.Name, Commit: commit, Started: started.Format(time.RFC3339Nano), Finished: time.Now().UTC().Format(time.RFC3339Nano), Success: result == nil, Steps: steps}
+			record := deploymentRecord{App: a.Name, Commit: commit, Started: started.Format(time.RFC3339Nano), Finished: time.Now().UTC().Format(time.RFC3339Nano), Success: result == nil, Steps: steps}
 			if result != nil {
 				record.Error = result.Error()
 			}
@@ -233,6 +231,9 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 			data, _ := json.MarshalIndent(record, "", "  ")
 			if err := storage.AtomicWrite(h.path(logPath+".json"), data); err != nil {
 				result = errors.Join(result, fmt.Errorf("save deployment history: %w", err))
+			}
+			if err := h.pruneDeploymentHistory(a.Name); err != nil {
+				result = errors.Join(result, fmt.Errorf("prune deployment history: %w", err))
 			}
 			if result != nil {
 				result = fmt.Errorf("%w\nFull log: %s.log", result, logPath)
@@ -270,31 +271,24 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if err := timed("preflight", func() error { return h.preflight(a, plan.Environment, commit, o.NoPull) }); err != nil {
 		return fmt.Errorf("preflight failed; app services were not stopped: %w", err)
 	}
-	// In-place deployment deliberately has downtime after preflight succeeds.
-	if err := timed("stop app", func() error { return h.disable(a) }); err != nil {
-		return err
-	}
-	if !o.NoPull {
-		// Git runs as the app user, so the files it writes already belong to it;
-		// enable secures ownership and web access again after the build.
-		if err := timed("git merge", func() error {
+	// Git runs as the app user, so the files it writes already belong to it;
+	// enable secures ownership and web access again after the build.
+	merge := func() error {
+		if o.NoPull {
+			return nil
+		}
+		return timed("git merge", func() error {
 			_, err := h.asUser(a, plan.Environment, true, "git", "merge", "--ff-only", commit)
 			return err
-		}); err != nil {
-			return err
-		}
-	}
-	if a.Type == "laravel" {
-		if err := h.useOwnRedis(a, r); err != nil {
-			return err
-		}
+		})
 	}
 	php := "/usr/bin/php" + services.PHPVersion
 	run := func(name string, args ...string) error {
-		// PHP and npm scripts can read .env and include SQL bindings/passwords in
-		// exception output. Keep their output out of terminal/deployment logs.
+		// Command output goes to the root-only deployment log, never to the
+		// terminal, so a failed build can be read while .env secrets that
+		// PHP or npm may print stay as private as .env itself.
 		err := timed(stepName(name, args), func() error {
-			_, err := h.asUser(a, plan.Environment, name == php || name == "composer" || name == "npm", name, args...)
+			_, err := h.asUser(a, plan.Environment, false, name, args...)
 			return err
 		})
 		if err == nil {
@@ -302,21 +296,47 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		}
 		return deploymentCommandError(a, name, args, err)
 	}
-	// Frontend-first is the default; apps whose builds invoke Artisan can opt
-	// into installing Composer dependencies before the frontend build.
-	_, packageErr := os.Stat(h.path(filepath.Join(a.Directory, "package.json")))
-	frontend := a.Type == "nuxt" || packageErr == nil || h.DryRun
-	if frontend {
+	installPackages := func() error {
 		if !h.DryRun {
 			if _, err := os.Stat(h.path(filepath.Join(a.Directory, "package-lock.json"))); err != nil {
 				return fmt.Errorf("commit package-lock.json before deployment: %w", err)
 			}
 		}
-		if err := h.installAppPackages(a, run); err != nil {
+		return h.installAppPackages(a, run)
+	}
+	if a.Type == "nuxt" {
+		// The running Nuxt server uses only .output, so the new code and its
+		// Node packages arrive while the old release keeps serving.
+		if err := merge(); err != nil {
 			return err
 		}
-	} else if !os.IsNotExist(packageErr) {
-		return packageErr
+		if err := installPackages(); err != nil {
+			return err
+		}
+	}
+	// In-place deployment deliberately has downtime after preflight succeeds;
+	// visitors see a 503 maintenance page until the new release serves.
+	if err := timed("stop app", func() error { return h.disable(a) }); err != nil {
+		return err
+	}
+	// Frontend-first is the default; apps whose builds invoke Artisan can opt
+	// into installing Composer dependencies before the frontend build.
+	_, packageErr := os.Stat(h.path(filepath.Join(a.Directory, "package.json")))
+	frontend := a.Type == "nuxt" || packageErr == nil || h.DryRun
+	if a.Type == "laravel" {
+		if err := merge(); err != nil {
+			return err
+		}
+		if err := h.useOwnRedis(a, r); err != nil {
+			return err
+		}
+		if frontend {
+			if err := installPackages(); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(packageErr) {
+			return packageErr
+		}
 	}
 	composerFirst := a.BuildOrder == config.BuildComposerFirst
 	var composerKey string
@@ -363,9 +383,6 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	}
 	if frontend {
 		if err := run("npm", "run", "build"); err != nil {
-			return err
-		}
-		if err := timed("brotli", func() error { return h.compressAssets(a, plan.Environment) }); err != nil {
 			return err
 		}
 	}
@@ -431,6 +448,11 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 	if err := timed("health check", func() error { return h.deploymentHealth(a) }); err != nil {
 		return err
 	}
+	if frontend {
+		if err := timed("brotli", func() error { return h.compressAssets(a, plan.Environment) }); err != nil {
+			return fmt.Errorf("the app is serving, but compressing its assets failed: %w", err)
+		}
+	}
 	if err := h.finishRestore(a.Name); err != nil {
 		return err
 	}
@@ -438,6 +460,38 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		h.say("Deployment preview complete for %s; no commands executed or files changed", a.Name)
 	} else {
 		h.note("Deployed %s at %.12s in %s", a.Name, commit, formatSeconds(time.Since(started).Seconds()))
+	}
+	return nil
+}
+
+// deploymentHistoryKeep is how many deployments keep their log and record per
+// app. Logs hold every command's output, so an app deployed several times a
+// day would otherwise fill the disk and the log view over time.
+const deploymentHistoryKeep = 50
+
+var deploymentRecordName = regexp.MustCompile(`^([0-9]{8}T[0-9]{6}\.[0-9]{9}Z)\.(log|json)$`)
+
+// pruneDeploymentHistory deletes the app's oldest deployment logs and records
+// beyond deploymentHistoryKeep. Dependency stamps in the same directory stay.
+func (h Host) pruneDeploymentHistory(app string) error {
+	directory := h.path(filepath.Join(h.Manager.StateDir, "deployments", app))
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	stamps := map[string]bool{}
+	for _, entry := range entries {
+		if match := deploymentRecordName.FindStringSubmatch(entry.Name()); match != nil && entry.Type().IsRegular() {
+			stamps[match[1]] = true
+		}
+	}
+	ordered := slices.Sorted(maps.Keys(stamps))
+	for _, stamp := range ordered[:max(len(ordered)-deploymentHistoryKeep, 0)] {
+		for _, suffix := range []string{".log", ".json"} {
+			if err := os.Remove(filepath.Join(directory, stamp+suffix)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -503,13 +557,7 @@ func deploymentCommandError(a config.App, name string, args []string, err error)
 		err = fmt.Errorf("package download failed; for private repositories save credentials with abr composer auth --host HOST: %w", err)
 	}
 	command := strings.Join(append([]string{name}, args...), " ")
-	err = fmt.Errorf("%s as %s: %w", command, a.User, err)
-	if name == "npm" || name == "composer" || strings.HasPrefix(filepath.Base(name), "php") {
-		// Their output can contain .env secrets, so logs omit it; the owner can
-		// rerun the step in a terminal to read it.
-		err = fmt.Errorf("%w\nIts output is hidden because it can contain secrets. To see it, run:\n  runuser -u %s -- env -i HOME=/var/lib/abr-users/%s PATH=/usr/local/bin:/usr/bin:/bin bash -c %s", err, a.User, a.User, shellQuote("cd "+a.Directory+" && "+command))
-	}
-	return err
+	return fmt.Errorf("%s as %s: %w (its output is in the deployment log)", command, a.User, err)
 }
 
 // clearReleasedCache empties a Laravel app's application cache once the new
@@ -521,7 +569,8 @@ func (h Host) clearReleasedCache(a config.App, environment map[string]string) er
 	}
 	php := "/usr/bin/php" + services.PHPVersion
 	args := []string{"artisan", "cache:clear", "--no-interaction"}
-	if _, err := h.asUser(a, environment, true, php, args...); err != nil {
+	// Output is private unless it goes to a deployment log.
+	if _, err := h.asUser(a, environment, h.progress == nil, php, args...); err != nil {
 		return deploymentCommandError(a, php, args, err)
 	}
 	return nil
@@ -564,6 +613,13 @@ var stepLabels = map[string]string{
 type deployStep struct {
 	Step    string
 	Seconds float64
+}
+
+// deploymentRecord is one deployment's saved outcome, shown by abr logs --type history.
+type deploymentRecord struct {
+	App, Commit, Started, Finished, Error string
+	Success                               bool
+	Steps                                 []deployStep
 }
 
 // stepName shortens a command to what identifies the step, such as

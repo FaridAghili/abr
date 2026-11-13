@@ -80,7 +80,7 @@ func TestPreflightFailuresLeaveRunningAppAndCheckoutUntouched(t *testing.T) {
 				if failure == "composer-auth" && slices.Contains(cmd.Args, "--download-only") {
 					return testExit(100)
 				}
-				if failure == "npm" && strings.Contains(args, "npm ci --dry-run") {
+				if failure == "npm" && strings.Contains(args, "npm ci --ignore-scripts") {
 					return testExit(1)
 				}
 				if failure == "fetch" && slices.Contains(cmd.Args, "fetch") {
@@ -139,9 +139,9 @@ func TestPreflightChecksFetchedFilesAndMergesOnlyCheckedCommit(t *testing.T) {
 		if cmd.Name == "runuser" && slices.Contains(cmd.Args, "show") && strings.HasSuffix(cmd.Args[len(cmd.Args)-1], ":package.json") {
 			return []byte(`{"name":"incoming"}`), nil
 		}
-		if cmd.Name == "runuser" && slices.Contains(cmd.Args, "npm") && slices.Contains(cmd.Args, "--dry-run") {
+		if cmd.Name == "runuser" && slices.Contains(cmd.Args, "npm") && slices.Contains(cmd.Args, "ci") && slices.Contains(cmd.Args, "--ignore-scripts") {
 			data, err := os.ReadFile(filepath.Join(cmd.Dir, "package.json"))
-			if err != nil || !bytes.Contains(data, []byte("incoming")) || cmd.Dir == a.Directory || !cmd.Private || !slices.Contains(cmd.Args, "--ignore-scripts") {
+			if err != nil || !bytes.Contains(data, []byte("incoming")) || cmd.Dir == a.Directory || cmd.Private || !slices.Contains(cmd.Args, "--engine-strict") {
 				t.Fatal("preflight did not isolate fetched dependencies")
 			}
 		}

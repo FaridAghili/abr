@@ -125,22 +125,27 @@ func (m *model) editForm(app config.App, section string) tea.Cmd {
 		if driver == "" {
 			driver = "fpm"
 		}
-		workers := strconv.Itoa(app.Web.Workers)
-		if app.Web.Workers == 0 {
-			workers = "2"
+		workers, fpmWorkers := "2", "8"
+		if app.Web.Workers != 0 {
+			if driver == "octane" {
+				workers = strconv.Itoa(app.Web.Workers)
+			} else {
+				fpmWorkers = strconv.Itoa(app.Web.Workers)
+			}
 		}
 		queue := strconv.Itoa(app.Queue.Workers)
 		groups = []*huh.Group{
 			huh.NewGroup(huh.NewSelect[string]().Title("Laravel web server").Description("Choose the server your project supports.\nExample: PHP-FPM for a standard Laravel app.").Options(huh.NewOption("PHP-FPM", "fpm"), huh.NewOption("Octane / RoadRunner", "octane")).Value(&driver)),
 			huh.NewGroup(textInput("Octane workers", "Processes serving web requests. Start with 2.", "2", &workers).Validate(workerCount)).WithHideFunc(func() bool { return driver != "octane" }),
+			huh.NewGroup(textInput("PHP-FPM workers", "Most PHP processes serving this app at once; they start on demand. Start with 8.", "8", &fpmWorkers).Validate(workerCount)).WithHideFunc(func() bool { return driver != "fpm" }),
 			huh.NewGroup(textInput("Queue workers", "Processes for background jobs. Use 0 to disable the queue.", "1", &queue).Validate(workerCount)),
 		}
 		flags = func() []string {
-			args := []string{"--web-driver", driver, "--queue-workers", queue}
-			if driver == "octane" {
-				args = append(args, "--octane-workers", workers)
+			web := workers
+			if driver == "fpm" {
+				web = fpmWorkers
 			}
-			return args
+			return []string{"--web-driver", driver, "--web-workers", web, "--queue-workers", queue}
 		}
 	case "components":
 		var selected []string

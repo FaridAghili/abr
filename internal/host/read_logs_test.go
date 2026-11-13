@@ -222,3 +222,39 @@ func TestReadLogsValidationAndMissingSources(t *testing.T) {
 		t.Fatal("unmanaged service was accepted")
 	}
 }
+
+func TestDeploymentHistoryListsRecentResults(t *testing.T) {
+	h, _, out, a := fixture(t)
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	directory := h.path(filepath.Join(h.Manager.StateDir, "deployments", a.Name))
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	records := []string{
+		`{"App":"app","Commit":"` + strings.Repeat("a", 40) + `","Started":"2026-11-01T10:00:00Z","Finished":"2026-11-01T10:02:30Z","Success":true,"Steps":[{"Step":"fetch","Seconds":1},{"Step":"npm run build","Seconds":90}]}`,
+		`{"App":"app","Commit":"` + strings.Repeat("b", 40) + `","Started":"2026-11-02T10:00:00Z","Finished":"2026-11-02T10:00:40Z","Success":false,"Error":"npm run build as abr-app: exit 1\nFull log: x","Steps":[{"Step":"fetch","Seconds":1},{"Step":"npm run build","Seconds":30}]}`,
+	}
+	for i, record := range records {
+		name := time.Date(2026, 11, 1+i, 10, 0, 0, 0, time.UTC).Format("20060102T150405.000000000Z") + ".json"
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(record), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.ReadLogs(a.Name, "", ReadLogsOptions{Type: "history", Lines: 10}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"deployed", "failed", "aaaaaaaaaaaa", "bbbbbbbbbbbb", "longest npm run build 1m30s", "failed at npm run build: npm run build as abr-app: exit 1", "2m30s"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("history lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Index(text, "bbbbbbbbbbbb") > strings.Index(text, "aaaaaaaaaaaa") {
+		t.Fatal("history is not newest first")
+	}
+	if err := h.ReadLogs(a.Name, "", ReadLogsOptions{Type: "nonsense"}); err == nil {
+		t.Fatal("accepted an unknown log type")
+	}
+}

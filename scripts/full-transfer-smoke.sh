@@ -4,6 +4,9 @@ if [[ ${GITHUB_ACTIONS:-false} != true && ${ABR_HOST_TEST:-0} != 1 ]]; then
  echo "Refusing full transfer test outside a disposable Ubuntu host." >&2; exit 1
 fi
 set -euo pipefail
+fixture_redis() {
+  sudo env "REDISCLI_AUTH=$(sudo sed -n 's/.*"password": *"\([a-f0-9]*\)".*/\1/p' /var/lib/abr-ci/redis-admin.json)" redis-cli "$@"
+}
 full_backup_fixture=/var/backups/abr-ci-full.tar.gz
 full_git_fixture=/srv/abr-full-git
 sudo install -d -m 755 "$full_git_fixture"
@@ -64,7 +67,7 @@ sudo cp /var/lib/abr-ci/databases/fixture-php.json "$abr_binary_directory/full-d
 sudo cp /var/lib/abr-ci/git/id_ed25519 "$abr_binary_directory/full-git-before"
 abr_ci ports > "$abr_binary_directory/full-ports-before"
 # A non-cache Redis DB proves session/queue state survives normal cache clearing.
-sudo redis-cli -n 5 SET abr-full-state saved-redis-state >/dev/null
+fixture_redis -n 5 SET abr-full-state saved-redis-state >/dev/null
 sudo mysql --protocol=socket --user=root fixture_php <<'SQL'
 CREATE TABLE abr_full_backup_probe (id INT PRIMARY KEY);
 INSERT INTO abr_full_backup_probe VALUES (73);
@@ -120,7 +123,7 @@ sudo mv /etc/abr-ci/config.toml "$abr_binary_directory/full-old-config.toml"
 sudo mysql --protocol=socket --user=root <<'SQL'
 DROP USER 'root'@'127.0.0.1';
 SQL
-sudo redis-cli -n 5 DEL abr-full-state >/dev/null
+fixture_redis -n 5 DEL abr-full-state >/dev/null
 sudo systemctl stop caddy
 sudo rm -rf /var/lib/caddy/.local
 source "$abr_smoke_script_directory/app-restore-smoke.sh"
@@ -161,7 +164,7 @@ fixture_denied nobody cat /srv/apps/fixture-php/storage/app/private/full-private
 sudo mysql --protocol=socket --user=root --batch --skip-column-names fixture_php <<'SQL' | grep -Fx 73
 SELECT id FROM abr_full_backup_probe;
 SQL
-sudo redis-cli -n 5 GET abr-full-state | grep -Fx saved-redis-state
+fixture_redis -n 5 GET abr-full-state | grep -Fx saved-redis-state
 fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
 curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/full-saved.txt | grep -F 'saved working source'
 fixture_https www.fixture-octane.localhost | grep -F 'Laravel fixture database=1'

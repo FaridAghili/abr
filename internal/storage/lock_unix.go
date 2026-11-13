@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-func lock(f *os.File) error {
-	deadline := time.Now().Add(10 * time.Second)
+func lock(f *os.File, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
 	for {
 		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
@@ -24,7 +24,7 @@ func lock(f *os.File) error {
 			return err
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out after 10s waiting for another abr process")
+			return fmt.Errorf("timed out after %s waiting for another abr process", wait)
 		}
 		time.Sleep(25 * time.Millisecond)
 	}

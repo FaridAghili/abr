@@ -5,11 +5,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // WithLock locks a separate, permanent file: locking a replaced data file is unsafe.
 // All writers must use the same path. The lock is released on process exit too.
 func WithLock(path string, fn func() error) error {
+	return WithLockWait(path, DefaultLockWait, fn)
+}
+
+// DefaultLockWait is how long interactive commands wait for another abr process.
+const DefaultLockWait = 10 * time.Second
+
+// WithLockWait waits up to wait for the lock; background jobs such as
+// scheduled backups can wait out a long deployment instead of failing.
+func WithLockWait(path string, wait time.Duration, fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -18,7 +28,7 @@ func WithLock(path string, fn func() error) error {
 		return fmt.Errorf("open lock %s: %w", path, err)
 	}
 	defer f.Close()
-	if err := lock(f); err != nil {
+	if err := lock(f, wait); err != nil {
 		return fmt.Errorf("lock %s: %w", path, err)
 	}
 	defer unlock(f)

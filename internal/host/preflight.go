@@ -168,7 +168,7 @@ func (h Host) preflight(a config.App, env map[string]string, commit string, noPu
 	candidate := a
 	candidate.Directory = stage
 	run := func(name string, args ...string) error {
-		if _, err := h.asUser(candidate, env, true, name, args...); err != nil {
+		if _, err := h.asUser(candidate, env, false, name, args...); err != nil {
 			return fmt.Errorf("preflight: %w", deploymentCommandError(a, name, args, err))
 		}
 		return nil
@@ -195,6 +195,13 @@ func (h Host) preflight(a config.App, env map[string]string, commit string, noPu
 		}
 		if alreadyInstalled("npm", h.nodeRuntime(), npmInputs) {
 			h.say("Node packages unchanged since the last install; skipping the npm ci check")
+		} else if a.Type == "laravel" {
+			// A Laravel app installs its Node packages while it is stopped.
+			// Installing them here first fills the npm cache, so that install
+			// only extracts files instead of downloading them.
+			if err := run("npm", "ci", "--ignore-scripts", "--include=dev", "--engine-strict", "--no-audit", "--no-fund", "--prefer-offline"); err != nil {
+				return err
+			}
 		} else if err := run("npm", "ci", "--dry-run", "--ignore-scripts", "--include=dev", "--engine-strict", "--no-audit", "--no-fund"); err != nil {
 			return err
 		}

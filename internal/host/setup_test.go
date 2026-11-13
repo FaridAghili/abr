@@ -42,8 +42,11 @@ func (r *setupRunner) Run(c Command) ([]byte, error) {
 		return []byte(`{}`), nil
 	}
 	if c.Name == "redis-cli" {
-		if slices.Contains(c.Args, "SET") {
+		if slices.Contains(c.Args, "SET") || slices.Contains(c.Args, "LOAD") {
 			return []byte("OK\n"), nil
+		}
+		if slices.Contains(c.Args, "databases") {
+			return r.fakeRunner.Run(c)
 		}
 		if slices.Contains(c.Args, "INFO") {
 			return []byte("aof_enabled:1\naof_rewrite_in_progress:0\naof_rewrite_scheduled:0\naof_last_bgrewrite_status:ok\naof_last_write_status:ok\n"), nil
@@ -438,16 +441,15 @@ func TestSetupRejectsMissingDefaultsAndDownloadCorruption(t *testing.T) {
 	}
 }
 
-func TestInstallEmbeddedTemplatesPreservesEditsAndFillsMissingFiles(t *testing.T) {
+func TestInstallEmbeddedTemplatesReplacesEditsAndFillsMissingFiles(t *testing.T) {
 	h, _, _, _ := fixture(t)
 	h.TemplatesDir = filepath.Join(h.root, "installed-templates")
 	templates, err := abr.TemplateFS()
 	if err != nil {
 		t.Fatal(err)
 	}
-	custom := []byte("# locally edited scheduler\n")
-	customPath := filepath.Join(h.TemplatesDir, "scheduler.service.tmpl")
-	if err := h.write(customPath, custom, 0600); err != nil {
+	// Stale copies from an earlier release and hand edits are both replaced.
+	if err := h.write(filepath.Join(h.TemplatesDir, "scheduler.service.tmpl"), []byte("# locally edited scheduler\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
@@ -465,16 +467,12 @@ func TestInstallEmbeddedTemplatesPreservesEditsAndFillsMissingFiles(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		mode := os.FileMode(0644)
-		if path == customPath {
-			want, mode = custom, 0600
-		}
 		got, err := os.ReadFile(path)
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("installed %s: %v", entry.Name(), err)
 		}
 		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm() != mode {
+		if err != nil || info.Mode().Perm() != 0644 {
 			t.Fatalf("permissions for %s: %v", entry.Name(), err)
 		}
 	}
@@ -751,5 +749,29 @@ func TestSetupInstallsUpstreamRedisAndNode(t *testing.T) {
 	}
 	if !strings.Contains(nodeRepository.source, "node_"+NodeMajor+".x") || !strings.Contains(redisRepository.source, "URIs: https://"+redisRepository.origin+"/deb\n") || !strings.Contains(nodeRepository.source, "URIs: https://"+nodeRepository.origin+"/") {
 		t.Fatal("repository origins do not match their sources")
+	}
+}
+
+func TestMySQLBufferPoolFollowsTheServer(t *testing.T) {
+	for memory, want := range map[uint64]uint64{512 << 20: 256 << 20, 1 << 30: 256 << 20, 2 << 30: 512 << 20, 8 << 30: 2 << 30, 8330240000: 1920 << 20} {
+		if got := mysqlBufferPool(memory); got != want {
+			t.Fatalf("%d bytes of RAM: buffer pool %d, want %d", memory, got, want)
+		}
+	}
+	h, _ := setupFixture(t)
+	if err := h.hardenMySQL(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := h.read("/etc/mysql/mysql.conf.d/zz-abr.cnf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixture has 8135000 kB of RAM; a quarter rounds down to 128 MiB chunks.
+	if !strings.Contains(string(data), "\ninnodb_buffer_pool_size = 1920M\n") || strings.Contains(string(data), "{{") {
+		t.Fatalf("buffer pool not sized for this server:\n%s", data)
+	}
+	h.DryRun = true
+	if err := h.hardenMySQL(); err != nil {
+		t.Fatal(err)
 	}
 }

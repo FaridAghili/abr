@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"abr/internal/config"
 	"abr/internal/manager"
@@ -89,6 +90,9 @@ func (r *fakeRunner) Run(c Command) ([]byte, error) {
 	case "groupdel":
 		delete(r.groups, c.Args[0])
 	case "redis-cli":
+		if slices.Equal(c.Args, []string{"ACL", "LOAD"}) || slices.Equal(c.Args, []string{"--raw", "CONFIG", "SET", "appendonly", "yes"}) {
+			return []byte("OK\n"), nil
+		}
 		if slices.Equal(c.Args, []string{"CONFIG", "GET", "databases"}) {
 			if r.redisDatabases == "" {
 				return []byte("databases\n1000\n"), nil // As managed setup configures it.
@@ -573,7 +577,7 @@ func TestDeploymentGivesLaravelAppsTheirOwnRedisDatabases(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.fail = func(c Command) error {
-		if args := strings.Join(c.Args, " "); strings.Contains(args, "npm ci") && !strings.Contains(args, "--dry-run") {
+		if args := strings.Join(c.Args, " "); strings.Contains(args, "npm ci") && !strings.Contains(args, "--ignore-scripts") {
 			return testExit(9)
 		}
 		return nil
@@ -903,14 +907,11 @@ func TestDeploymentInstallsComposerFirstWithoutVendor(t *testing.T) {
 	}
 }
 
-func TestDeploymentCommandErrorShowsHowToReadHiddenOutput(t *testing.T) {
+func TestDeploymentCommandErrorPointsAtTheLog(t *testing.T) {
 	a := config.App{Name: "shop", User: "abr-shop", Directory: "/srv/apps/shop"}
 	err := deploymentCommandError(a, "npm", []string{"run", "build"}, errors.New("exit status 1"))
-	if !strings.Contains(err.Error(), "runuser -u abr-shop -- env -i HOME=/var/lib/abr-users/abr-shop PATH=/usr/local/bin:/usr/bin:/bin bash -c 'cd /srv/apps/shop && npm run build'") {
-		t.Fatal("missing rerun command", err)
-	}
-	if err := deploymentCommandError(a, "git", []string{"fetch"}, errors.New("exit status 1")); strings.Contains(err.Error(), "runuser") {
-		t.Fatal("logged command offered a hidden-output rerun", err)
+	if !strings.Contains(err.Error(), "npm run build as abr-shop") || !strings.Contains(err.Error(), "deployment log") || strings.Contains(err.Error(), "runuser") {
+		t.Fatal("unexpected build failure message", err)
 	}
 }
 
@@ -985,5 +986,57 @@ func TestDeploymentClearsLaravelCacheAfterRestart(t *testing.T) {
 	done := strings.Index(log, "Deployment preview complete")
 	if restart < 0 || clear < restart || done < clear {
 		t.Fatalf("cache not cleared after the new release started: restart=%d clear=%d done=%d\n%s", restart, clear, done, log)
+	}
+}
+
+func TestDeploymentHistoryKeepsRecentRuns(t *testing.T) {
+	h, r, _, a := fixture(t)
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	directory := h.path(filepath.Join(h.Manager.StateDir, "deployments", a.Name))
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for i := range deploymentHistoryKeep + 10 {
+		stamp := time.Date(2020, 1, 1, 0, 0, 0, i, time.UTC).Format("20060102T150405.000000000Z")
+		for _, suffix := range []string{".log", ".json"} {
+			if err := os.WriteFile(filepath.Join(directory, stamp+suffix), []byte("old"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	stamps := []string{"npm.installed", "composer.installed", "notes.txt"}
+	for _, name := range stamps {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("keep"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Failed deployments are recorded and pruned like successful ones.
+	r.fail = func(c Command) error {
+		if strings.Contains(strings.Join(c.Args, " "), "artisan optimize ") {
+			return testExit(1)
+		}
+		return nil
+	}
+	if err := h.Deploy([]string{a.Name}, DeployOptions{NoPull: true}); err == nil {
+		t.Fatal("failed optimize reported success")
+	}
+	logs, _ := filepath.Glob(filepath.Join(directory, "*.log"))
+	records, _ := filepath.Glob(filepath.Join(directory, "*.json"))
+	if len(logs) != deploymentHistoryKeep || len(records) != deploymentHistoryKeep {
+		t.Fatalf("kept %d logs and %d records, want %d each", len(logs), len(records), deploymentHistoryKeep)
+	}
+	slices.Sort(records)
+	if data, err := os.ReadFile(records[len(records)-1]); err != nil || !bytes.Contains(data, []byte(`"Success": false`)) {
+		t.Fatalf("newest deployment record missing: %v", err)
+	}
+	if data, err := os.ReadFile(records[0]); err != nil || string(data) != "old" {
+		t.Fatalf("pruning removed the wrong records: %q %v", data, err)
+	}
+	for _, name := range stamps {
+		if _, err := os.Stat(filepath.Join(directory, name)); err != nil {
+			t.Fatalf("pruning removed %s: %v", name, err)
+		}
 	}
 }

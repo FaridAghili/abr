@@ -201,7 +201,7 @@ func readFullArchive(t *testing.T, path string) (backup.Manifest, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateFullBackup(m, stage); err != nil {
+	if err := (Host{TemplatesDir: "../../templates"}).validateFullBackup(m, stage); err != nil {
 		t.Fatal(err)
 	}
 	return m, stage
@@ -374,7 +374,7 @@ func TestFullRestoreConfirmationPreviewAndFreshTarget(t *testing.T) {
 	}
 	m, _ = readFullArchive(t, output)
 	m.Files["apps/app/source.go"] = backup.File{}
-	if err := validateFullBackup(m, stage); err == nil {
+	if err := h.validateFullBackup(m, stage); err == nil {
 		t.Fatal("unexpected app data accepted")
 	}
 }
@@ -940,12 +940,12 @@ func TestBackupDestinationAndScheduleTravelWithBackups(t *testing.T) {
 		if err := backup.ReplaceFile(&m, stage, "state/backup-ssh/known_hosts", []byte("@cert-authority * ssh-ed25519 AAAA\n")); err != nil {
 			t.Fatal(err)
 		}
-		if err := validateFullBackup(m, stage); err == nil {
+		if err := preview.validateFullBackup(m, stage); err == nil {
 			t.Fatal("accepted a known_hosts marker")
 		}
 		delete(m.Files, "state/backup-ssh/known_hosts")
 		delete(m.Files, "state/backup-ssh/id_ed25519")
-		if err := validateFullBackup(m, stage); err == nil || !strings.Contains(err.Error(), "SSH key missing") {
+		if err := preview.validateFullBackup(m, stage); err == nil || !strings.Contains(err.Error(), "SSH key missing") {
 			t.Fatal("accepted a key destination without its key", err)
 		}
 	}
@@ -1060,5 +1060,35 @@ func TestRestoreStartsEachAppBeforeTheNextAndContinuesPastFailures(t *testing.T)
 	}
 	if err := h.Deploy([]string{"second"}, DeployOptions{NoPull: true}); err == nil || !strings.Contains(err.Error(), "working tree is dirty") {
 		t.Fatal("later deployment accepted uncommitted changes", err)
+	}
+}
+
+func TestRestoreKeepsThisServersMemorySizedConfigs(t *testing.T) {
+	h, _, _, _ := fixture(t)
+	for _, path := range []string{"/etc/mysql/mysql.conf.d/zz-abr.cnf", "/etc/redis/abr.conf", "/etc/caddy/Caddyfile"} {
+		if err := h.write(path, []byte("# Managed by abr; rendered on this server\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stage := t.TempDir()
+	m := backup.Manifest{Scope: "app", Files: map[string]backup.File{}}
+	for _, name := range []string{"shared/mysql.cnf", "shared/redis.conf", "shared/Caddyfile"} {
+		path := filepath.Join(stage, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("# Managed by abr; rendered on the old server\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		m.Files[name] = backup.File{}
+	}
+	if err := h.restoreSharedData(stage, m); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{"/etc/mysql/mysql.conf.d/zz-abr.cnf": "this server", "/etc/redis/abr.conf": "this server", "/etc/caddy/Caddyfile": "the old server"} {
+		data, err := h.read(path)
+		if err != nil || !strings.Contains(string(data), want) {
+			t.Fatalf("%s: %q %v, want %q", path, data, err, want)
+		}
 	}
 }

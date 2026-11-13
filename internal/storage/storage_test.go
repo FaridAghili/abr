@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -91,5 +92,24 @@ func TestAtomicWrite(t *testing.T) {
 	matches, err := filepath.Glob(filepath.Join(filepath.Dir(dir), ".abr-*"))
 	if err != nil || len(matches) != 0 {
 		t.Fatalf("temp files left: %v %v", matches, err)
+	}
+}
+
+func TestLockWaitIsConfigurable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wait.lock")
+	release := make(chan struct{})
+	held := make(chan struct{})
+	go func() {
+		_ = WithLock(path, func() error { close(held); <-release; return nil })
+	}()
+	<-held
+	started := time.Now()
+	err := WithLockWait(path, 200*time.Millisecond, func() error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "200ms") || time.Since(started) > 5*time.Second {
+		t.Fatalf("short wait did not time out as configured: %v", err)
+	}
+	go func() { time.Sleep(100 * time.Millisecond); close(release) }()
+	if err := WithLockWait(path, 5*time.Second, func() error { return nil }); err != nil {
+		t.Fatalf("longer wait did not acquire the lock: %v", err)
 	}
 }

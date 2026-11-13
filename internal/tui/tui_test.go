@@ -230,7 +230,7 @@ func TestGuidedDefaults(t *testing.T) {
 	m.registerForm()
 	m.next()
 	args := strings.Join(m.current.args, " ")
-	if !strings.Contains(args, "--web-driver fpm") || !strings.Contains(args, "--queue-workers 0") || !strings.Contains(args, "--canonical-host www") || strings.Contains(args, "--no-database") || strings.Contains(args, "--octane-workers") {
+	if !strings.Contains(args, "--web-driver fpm") || !strings.Contains(args, "--queue-workers 0") || !strings.Contains(args, "--canonical-host www") || strings.Contains(args, "--no-database") || !strings.Contains(args, "--web-workers 8") {
 		t.Fatalf("unexpected Laravel defaults: %s", args)
 	}
 	if m.page != "confirm" || m.approved {

@@ -1,0 +1,44 @@
+# Served while the app is stopped: during a deployment, or after abr disable.
+{{.SiteDomains}} {
+    header {
+        -Server
+        -Via
+        -X-Powered-By
+        Strict-Transport-Security "max-age=15768000"
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Cache-Control "no-store"
+        Retry-After "30"
+        Content-Type "text/html; charset=utf-8"
+    }
+    respond "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Updating</title><style>body{font:16px/1.5 system-ui,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#1f2937}main{text-align:center;padding:2rem}h1{font-size:1.5rem;margin:0 0 .5rem}p{margin:0;color:#4b5563}</style></head><body><main><h1>Back in a moment</h1><p>This site is being updated. Please try again shortly.</p></main></body></html>" 503
+}
+{{.HTTPDomains}} {
+    header {
+        -Server
+        -Via
+    }
+    redir https://{host}{uri} 308
+}
+{{range .Aliases}}
+{{.}} {
+    header {
+        -Server
+        -Via
+        -X-Powered-By
+        Strict-Transport-Security "max-age=15768000"
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+    redir https://{{$.Domain}}{uri} 308
+}
+http://{{.}} {
+    header {
+        -Server
+        -Via
+    }
+    redir https://{{$.Domain}}{uri} 308
+}
+{{end}}

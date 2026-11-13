@@ -54,23 +54,40 @@ sudoedit /srv/apps/api/.env
 sudo abr deploy api --no-pull
 ```
 
-Use `--type nuxt` for Nuxt. Laravel defaults to PHP-FPM; Octane, queues and
-scheduled jobs are optional. Set app secrets before deploying.
+Use `--type nuxt` for Nuxt. Laravel defaults to PHP-FPM with up to 8 on-demand
+workers; `--web-workers N` sets PHP-FPM's limit or the Octane process count.
+Octane, queues and scheduled jobs are optional. Set app secrets before deploying.
 Each Laravel app gets its own pair of Redis databases, from 10 upwards: `abr env`
 and every deployment set `REDIS_DB` (sessions, queues and locks),
 `REDIS_CACHE_DB` and `REDIS_PREFIX` in its `.env`, so `cache:clear` empties only
 that app's cache. Databases 0–9 stay unassigned for tools that use the defaults.
-Redis may use 20% of the server's RAM (at least 256 MB) and never evicts keys.
+Redis may use 20% of the server's RAM (at least 256 MB) and never evicts keys;
+MySQL's InnoDB buffer pool gets 25% (at least 256 MB). Both are set by `abr setup`.
+Redis requires authentication: each Laravel app connects as its own Redis user
+(`REDIS_USERNAME`, `REDIS_PASSWORD` in `.env`, written by `abr env` and every
+deployment) that can only use keys with its prefix, so apps cannot read each
+other's sessions, cache or queues. `config/database.php` must pass
+`REDIS_USERNAME` to the Redis client, as Laravel's default configuration does.
+**Server & credentials → Redis password** in the menu, or `abr database --redis-admin --show`,
+shows the TablePlus connection (user blank, password shown) over SSH. The
+server password is in `/var/lib/abr/redis-admin.json`; for `redis-cli`, run
+`export REDISCLI_AUTH=$(sudo sed -n 's/.*"password": *"\([a-f0-9]*\)".*/\1/p' /var/lib/abr/redis-admin.json)`.
 Removing an app keeps its Redis databases reserved; `--purge` empties them.
-Deployments may cause downtime and run Laravel migrations; failed changes are
-not automatically rolled back. Laravel builds the frontend before Composer by
+While an app is stopped, during a deployment or after `abr disable`, its domains
+answer 503 with a maintenance page and keep their certificates. Nuxt apps fetch
+code and install Node packages before stopping; Laravel apps stop first, so a
+build never serves half-updated PHP. Deployments run Laravel migrations; failed
+changes are not automatically rolled back, and the maintenance page stays up
+until the next successful deployment. Laravel builds the frontend before Composer by
 default (`--build-order composer-first` reverses it); while `vendor` is missing,
 Composer packages are installed without scripts before the frontend build.
 `npm ci` is skipped while `package.json`, `package-lock.json`, `.npmrc` and Node
 are unchanged since the last successful install; the package's own install
 scripts and the build still run. A deployment shows one line per main step with
 its time; every command, its output and all step times are in the deployment
-log, whose path is shown when a deployment fails.
+log, whose path is shown when a deployment fails; `abr logs api --type history`
+lists recent deployments with their result, commit and duration. The newest 50
+deployments' logs and records are kept per app.
 Health checks for an app's own domains are sent to this server.
 
 ## Everyday commands
@@ -136,4 +153,5 @@ and Esc to go back. Advanced settings are optional.
 ## More help
 
 - `abr help` lists commands; `abr COMMAND --help` lists flags.
-- [Example config](config.example.toml) and [editable templates](templates/).
+- [Example config](config.example.toml) and the bundled [templates](templates/),
+  which abr installs and refreshes from its executable on every host command.

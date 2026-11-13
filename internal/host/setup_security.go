@@ -285,7 +285,15 @@ func (h Host) hardenMySQL() error {
 	if _, err := h.mysql([]byte("ALTER USER 'root'@'localhost' IDENTIFIED WITH auth_socket;\n")); err != nil {
 		return err
 	}
-	if err := h.setupConfig("mysql-hardening.cnf.tmpl", "/etc/mysql/mysql.conf.d/zz-abr.cnf", func() error {
+	values := map[string]string{}
+	if !h.DryRun {
+		memory, err := h.totalMemory()
+		if err != nil {
+			return err
+		}
+		values["BufferPool"] = fmt.Sprintf("%dM", mysqlBufferPool(memory)>>20)
+	}
+	if err := h.setupTemplate("mysql-hardening.cnf.tmpl", "/etc/mysql/mysql.conf.d/zz-abr.cnf", values, func() error {
 		if err := h.command("/usr/sbin/mysqld", "--validate-config", "--user=mysql"); err != nil {
 			return err
 		}

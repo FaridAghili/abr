@@ -21,7 +21,7 @@ health_check = "https://api.example.com/up"
 enabled = true
 [apps.web]
 driver = "octane"
-workers = 2
+workers = 2 # Octane processes; for driver = "fpm" this is PHP-FPM's max children (default 8).
 [apps.queue]
 workers = 2
 [apps.scheduler]

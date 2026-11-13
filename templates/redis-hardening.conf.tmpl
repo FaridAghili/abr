@@ -11,3 +11,7 @@ maxmemory-policy noeviction
 # Keep queued work across restarts; a crash can lose about one second of writes.
 appendonly yes
 appendfsync everysec
+# Each Laravel app connects as its own user, limited to keys with its prefix.
+# The default user needs the server password saved by setup, so other local
+# processes cannot read or change app data. Setup writes this file.
+aclfile /etc/redis/abr.acl

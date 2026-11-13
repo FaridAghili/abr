@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"abr/internal/config"
 	"abr/internal/services"
 )
 
@@ -94,6 +95,14 @@ func redisMaxMemory(memory uint64) uint64 {
 	return max(memory/5, 256<<20)
 }
 
+// mysqlBufferPool sizes InnoDB's buffer pool at 25% of the server's memory,
+// never less than 256 MiB, in whole 128 MiB chunks as InnoDB allocates them.
+// A fixed small pool makes every app's queries read from disk on a large host.
+func mysqlBufferPool(memory uint64) uint64 {
+	const chunk = 128 << 20
+	return max(memory/4/chunk*chunk, 256<<20)
+}
+
 const redisServiceDropIn = "/etc/systemd/system/redis-server.service.d/abr-supervised.conf"
 
 func (h Host) configureRedis() (result error) {
@@ -150,6 +159,13 @@ func (h Host) configureRedis() (result error) {
 	}); err != nil {
 		return errors.Join(err, h.command("systemctl", "daemon-reload"))
 	}
+	// Record the server password first: a nopass default user accepts any
+	// password, so the commands below work before and after it applies.
+	if !h.DryRun {
+		if _, err := h.ensureRedisAdmin(); err != nil {
+			return err
+		}
+	}
 	if h.DryRun || hasDirective(policy, "appendonly yes") {
 		if err := h.command("systemctl", "enable", "--now", "redis-server"); err != nil {
 			return err
@@ -157,6 +173,11 @@ func (h Host) configureRedis() (result error) {
 		if err := h.prepareRedisAOF(); err != nil {
 			return err
 		}
+	}
+	// Redis refuses to start without its ACL file, so it exists before the
+	// configuration that names it. Registered apps get their accounts now.
+	if err := h.prepareRedisAccounts(); err != nil {
+		return err
 	}
 	defer func() {
 		if result != nil && !h.DryRun {
@@ -171,7 +192,7 @@ func (h Host) configureRedis() (result error) {
 		}
 		values["MaxMemory"] = fmt.Sprintf("%dmb", redisMaxMemory(memory)>>20)
 	}
-	return h.setupTemplate("redis-hardening.conf.tmpl", "/etc/redis/abr.conf", values, func() error {
+	if err := h.setupTemplate("redis-hardening.conf.tmpl", "/etc/redis/abr.conf", values, func() error {
 		if !hasDirective(old, include) {
 			if err := h.write(path, append(append([]byte(nil), old...), []byte("\n# Abr local Redis configuration\n"+include+"\n")...), 0640); err != nil {
 				return err
@@ -188,7 +209,7 @@ func (h Host) configureRedis() (result error) {
 		if err := h.command("systemctl", "restart", "redis-server"); err != nil {
 			return err
 		}
-		out, err := h.run("Verify local protected Redis", Command{Name: "redis-cli", Args: []string{"CONFIG", "GET", "bind", "protected-mode"}, Private: true})
+		out, err := h.redis("Verify local protected Redis", "CONFIG", "GET", "bind", "protected-mode")
 		if err != nil {
 			return err
 		}
@@ -196,7 +217,49 @@ func (h Host) configureRedis() (result error) {
 			return fmt.Errorf("Redis loopback/protected-mode settings could not be verified")
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if h.DryRun {
+		h.say("Would give every registered Laravel app its own Redis user and restart the running ones with it")
+		return nil
+	}
+	if err := h.applyRedisAccess(); err != nil {
+		return fmt.Errorf("apply Redis accounts: %w", err)
+	}
+	h.say("Redis requires authentication: apps use their own users; the server password is in %s", h.redisAdminPath())
+	return nil
+}
+
+// prepareRedisAccounts records an account for every registered Laravel app
+// and writes the ACL file the next Redis start loads.
+func (h Host) prepareRedisAccounts() error {
+	if h.DryRun {
+		h.say("Would write %s with the administrator and one user per Laravel app", redisACLPath)
+		return nil
+	}
+	c, err := config.Load(h.Manager.ConfigPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, a := range c.Apps {
+		if a.Type != "laravel" {
+			continue
+		}
+		if _, err := h.readRedisAccess(a.Name); os.IsNotExist(err) {
+			access := redisAccess{App: a.Name, User: redisUser(a.Name)}
+			if access.Password, err = redisSecret(); err != nil {
+				return err
+			}
+			data, _ := json.MarshalIndent(access, "", "  ")
+			if err := h.write(h.redisAccessPath(a.Name), append(data, '\n'), 0600); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+	}
+	return h.writeRedisACL()
 }
 
 // Test an actual SVG-to-PNG conversion, rather than merely listing a codec.
@@ -243,7 +306,7 @@ func (h Host) configurePHP() error {
 }
 
 func requireSetupTemplates(source fs.FS) error {
-	for _, name := range []string{"hostname.cfg.tmpl", "caddy-default.caddy.tmpl", "caddy-site.caddy.tmpl", "caddy-admin.service.conf.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "php-fpm.service.conf.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "redis.service.conf.tmpl", "automatic-updates.conf.tmpl", "backup.service.tmpl", "backup.timer.tmpl", "swapfile.swap.tmpl", "swap-sysctl.conf.tmpl", "zshrc.tmpl"} {
+	for _, name := range []string{"hostname.cfg.tmpl", "caddy-default.caddy.tmpl", "caddy-site.caddy.tmpl", "caddy-maintenance.caddy.tmpl", "caddy-admin.service.conf.tmpl", "nuxt.service.tmpl", "octane.service.tmpl", "php-fpm-pool.conf.tmpl", "queue-worker.service.tmpl", "scheduler.service.tmpl", "scheduler.timer.tmpl", "nightwatch.service.tmpl", "inertia-ssr.service.tmpl", "php-cli.ini.tmpl", "php-fpm.ini.tmpl", "php-fpm.service.conf.tmpl", "ssh-hardening.conf.tmpl", "mysql-hardening.cnf.tmpl", "redis-hardening.conf.tmpl", "redis.service.conf.tmpl", "automatic-updates.conf.tmpl", "backup.service.tmpl", "backup.timer.tmpl", "swapfile.swap.tmpl", "swap-sysctl.conf.tmpl", "zshrc.tmpl"} {
 		if info, err := fs.Stat(source, name); err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("missing embedded template %s", name)
 		}
@@ -352,7 +415,7 @@ func (h Host) configureCaddyAdmin() error {
 
 // Do not stop Redis if a conversion/rewrite fails or has not finished.
 func (h Host) prepareRedisAOF() error {
-	out, err := h.run("Enable Redis AOF on the live dataset before restart", Command{Name: "redis-cli", Args: []string{"--raw", "CONFIG", "SET", "appendonly", "yes"}, Private: true})
+	out, err := h.redis("Enable Redis AOF on the live dataset before restart", "--raw", "CONFIG", "SET", "appendonly", "yes")
 	if err != nil {
 		return err
 	}
@@ -364,7 +427,7 @@ func (h Host) prepareRedisAOF() error {
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		out, err := h.run("Wait for durable Redis AOF conversion", Command{Name: "redis-cli", Args: []string{"--raw", "INFO", "persistence"}, Private: true})
+		out, err := h.redis("Wait for durable Redis AOF conversion", "--raw", "INFO", "persistence")
 		if err != nil {
 			return err
 		}

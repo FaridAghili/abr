@@ -107,7 +107,7 @@ func (m *model) registrationForm(name, detected string, cloned bool) tea.Cmd {
 	var domain, kind, driver, aliases, domains, health string
 	var configOnly, extra bool
 	canonicalHost := config.CanonicalWWW
-	workers, queue := "2", "0"
+	workers, fpmWorkers, queue := "2", "8", "0"
 	buildOrder := config.BuildFrontendFirst
 	kind, driver = "laravel", "fpm"
 	if detected != "" {
@@ -134,10 +134,11 @@ func (m *model) registrationForm(name, detected string, cloned bool) tea.Cmd {
 			}
 		}
 		if kind == "laravel" {
-			args = append(args, "--web-driver", driver, "--queue-workers", queue)
-			if driver == "octane" {
-				args = append(args, "--octane-workers", workers)
+			web := workers
+			if driver == "fpm" {
+				web = fpmWorkers
 			}
+			args = append(args, "--web-driver", driver, "--web-workers", web, "--queue-workers", queue)
 			if extra {
 				args = append(args, "--build-order", buildOrder)
 				for _, component := range components {
@@ -177,6 +178,7 @@ func (m *model) registrationForm(name, detected string, cloned bool) tea.Cmd {
 		groups = append(groups,
 			huh.NewGroup(huh.NewSelect[string]().Title("Laravel web server").Description("PHP-FPM is the default. Choose Octane if your app uses it.\nExample: PHP-FPM for a standard Laravel app.").Options(huh.NewOption("PHP-FPM (default)", "fpm"), huh.NewOption("Octane / RoadRunner", "octane")).Value(&driver)).WithHideFunc(func() bool { return kind != "laravel" }),
 			huh.NewGroup(textInput("Octane workers", "How many Octane processes serve requests. Start with 2.", "2", &workers).Validate(workerCount)).WithHideFunc(func() bool { return kind != "laravel" || driver != "octane" }),
+			huh.NewGroup(textInput("PHP-FPM workers", "Most PHP processes serving this app at once; they start on demand. Start with 8.", "8", &fpmWorkers).Validate(workerCount)).WithHideFunc(func() bool { return kind != "laravel" || driver != "fpm" }),
 			huh.NewGroup(textInput("Queue workers", "Processes for background jobs. Use 0 if your app has no queue.", "1", &queue).Validate(workerCount)).WithHideFunc(func() bool { return kind != "laravel" }),
 			huh.NewGroup(huh.NewSelect[bool]().Title("MySQL database").Description("Create a dedicated database and fill its values into .env.\nExample: enable MySQL for a Laravel app that stores data.").Options(huh.NewOption("Enable MySQL (default)", true), huh.NewOption("Use my own database", false)).Value(&database)).WithHideFunc(func() bool { return kind != "laravel" }),
 		)

@@ -48,7 +48,7 @@ Commands:
   register         Register /srv/apps/NAME, create its Ubuntu user and Laravel database
                    --canonical-host as-entered|www|non-www selects this app's host pair
   edit APP         Save app settings; deploy afterward to apply them
-                   --domain HOST --queue-workers N --scheduler=true|false, etc.
+                   --domain HOST --web-workers N --queue-workers N --scheduler=true|false, etc.
   ports            Show reservations (--allocate reconciles config edits)
   doctor           Check configuration, reservations and app TCP listener ownership
   update           Upgrade apt packages, stable Caddy, Composer, global npm tools, Oh My Zsh and shell plugins
@@ -60,7 +60,8 @@ Commands:
   clone URL NAME   Clone a GitHub SSH repository into /srv/apps/NAME
   env APP          Prepare .env when its example exists; fill managed Laravel MySQL and Redis values
   database APP     Create/verify MySQL database (--show prints credentials)
-  database --admin TablePlus root connection details (--show prints password)
+  database --admin TablePlus MySQL root connection details (--show prints password)
+  database --redis-admin  TablePlus Redis connection details (--show prints the server password)
   backup APP... | --all | --due [--output-dir DIR]
                    Back up apps sequentially online using the saved backup destination;
                    --due backs up apps whose schedule is due and applies retention
@@ -99,7 +100,7 @@ Commands:
   restart --group NAME   Restart every app in a group, in order
   logs APP [SERVICE]     Show journal (--follow streams it)
   logs --all            Read all apps' journals in one timeline
-                   --type journal|application|deployment --lines N (default 100)
+                   --type journal|application|deployment|history --lines N (default 100)
   logs clear APP... | --all --yes
                    Clear file logs (--type all|application|deployment; default all)
   deploy APP...    Pull, install dependencies, build, migrate, enable
@@ -184,7 +185,7 @@ func run(args []string, out, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	pathFlags(fs, &m, m.ConfigPath, m.StateDir)
 	hostFlags(fs, &h, h.TemplatesDir, h.AppsDir, h.DryRun)
-	var allocate, configOnly, noDatabase, show, databaseAdmin bool
+	var allocate, configOnly, noDatabase, show, databaseAdmin, redisAdmin bool
 	var app config.App
 	var imports portFlags
 	var setup host.SetupOptions
@@ -253,7 +254,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.StringVar(&app.HealthCheck, "health-check", "", "deployment health-check URL (empty clears)")
 		fs.StringVar(&app.BuildOrder, "build-order", "", "Laravel: frontend-first (default) or composer-first")
 		fs.StringVar(&app.Web.Driver, "web-driver", "", "Laravel: fpm or octane")
-		fs.IntVar(&app.Web.Workers, "octane-workers", 0, "Octane worker count")
+		fs.IntVar(&app.Web.Workers, "web-workers", 0, "Octane processes or PHP-FPM max children (0 restores the default)")
 		fs.IntVar(&app.Queue.Workers, "queue-workers", 0, "queue worker count (0 disables)")
 		fs.BoolVar(&app.Scheduler.Enabled, "scheduler", false, "enable/disable scheduler")
 		fs.BoolVar(&app.Nightwatch.Enabled, "nightwatch", false, "enable/disable Nightwatch")
@@ -287,7 +288,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.StringVar(&app.HealthCheck, "health-check", "", "optional deployment health-check URL")
 		fs.StringVar(&app.BuildOrder, "build-order", "", "Laravel: frontend-first (default) or composer-first")
 		fs.StringVar(&app.Web.Driver, "web-driver", "", "Laravel: fpm (default) or octane")
-		fs.IntVar(&app.Web.Workers, "octane-workers", 0, "Octane worker count (default 2)")
+		fs.IntVar(&app.Web.Workers, "web-workers", 0, "Octane processes (default 2) or PHP-FPM max children (default 8)")
 		fs.IntVar(&app.Queue.Workers, "queue-workers", 0, "Laravel queue worker count")
 		fs.BoolVar(&app.Scheduler.Enabled, "scheduler", false, "enable Laravel scheduler")
 		fs.BoolVar(&app.Nightwatch.Enabled, "nightwatch", false, "enable Laravel Nightwatch")
@@ -310,11 +311,12 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&importYes, "yes", false, "confirm SQL import may overwrite data")
 	case "database":
 		fs.BoolVar(&databaseAdmin, "admin", false, "show server admin connection details instead of an app database")
+		fs.BoolVar(&redisAdmin, "redis-admin", false, "show the Redis server connection details instead of an app database")
 		fs.BoolVar(&show, "show", false, "print existing/generated credentials explicitly")
 	case "logs":
 		fs.BoolVar(&readLogs.Follow, "follow", false, "stream journal logs (CLI only)")
 		fs.BoolVar(&readLogs.All, "all", false, "read all registered apps' logs in one view")
-		fs.StringVar(&readLogs.Type, "type", "journal", "logs to read: journal, application or deployment")
+		fs.StringVar(&readLogs.Type, "type", "journal", "logs to read: journal, application, deployment or history (deployment results)")
 		fs.IntVar(&readLogs.Lines, "lines", 100, "recent lines per file or combined journal (1-1000; byte limits also apply)")
 	case "logs clear":
 		fs.BoolVar(&clearLogs.All, "all", false, "clear file logs for all registered apps")
@@ -340,7 +342,7 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "edit" {
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
-			case "embed-path", "embed-origin", "domain", "canonical-host", "alias", "serving-domain", "health-check", "build-order", "web-driver", "octane-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "database", "backup-schedule", "backup-keep":
+			case "embed-path", "embed-origin", "domain", "canonical-host", "alias", "serving-domain", "health-check", "build-order", "web-driver", "web-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "database", "backup-schedule", "backup-keep":
 				changes.Fields = append(changes.Fields, f.Name)
 			}
 		})
@@ -409,8 +411,8 @@ func run(args []string, out, stderr io.Writer) error {
 			return fmt.Errorf("use abr clone git@github.com:OWNER/REPO.git APP")
 		}
 	case "database":
-		if (databaseAdmin && len(positional) != 0) || (!databaseAdmin && len(positional) != 1) {
-			return fmt.Errorf("use abr database APP [--show] or abr database --admin [--show]")
+		if (databaseAdmin && redisAdmin) || ((databaseAdmin || redisAdmin) && len(positional) != 0) || (!databaseAdmin && !redisAdmin && len(positional) != 1) {
+			return fmt.Errorf("use abr database APP [--show], abr database --admin [--show] or abr database --redis-admin [--show]")
 		}
 	case "enable", "disable", "remove", "edit", "env", "shell":
 		if len(positional) != 1 {
@@ -421,7 +423,7 @@ func run(args []string, out, stderr io.Writer) error {
 			return fmt.Errorf("--lines must be between 1 and 1000")
 		}
 		if (readLogs.All && len(positional) != 0) || (!readLogs.All && (len(positional) < 1 || len(positional) > 2)) {
-			return fmt.Errorf("use abr logs APP [SERVICE], or abr logs --all [--type journal|application|deployment]")
+			return fmt.Errorf("use abr logs APP [SERVICE], or abr logs --all [--type journal|application|deployment|history]")
 		}
 	case "restart":
 		if group != "" && len(positional) != 0 {
@@ -717,6 +719,9 @@ func run(args []string, out, stderr io.Writer) error {
 	case "database":
 		if databaseAdmin {
 			return h.MySQLAdmin(show)
+		}
+		if redisAdmin {
+			return h.RedisAdmin(show)
 		}
 		return h.Database(positional[0], show)
 	case "env":

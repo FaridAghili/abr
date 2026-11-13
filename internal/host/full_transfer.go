@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"abr"
 	"abr/internal/backup"
 	"abr/internal/config"
 	"abr/internal/manager"
@@ -336,7 +338,7 @@ func (h Host) FullBackup(output string) error {
 				if err := os.MkdirAll(filepath.Join(stage, "redis"), 0700); err != nil {
 					return err
 				}
-				if _, err := h.run("Capture online Redis RDB snapshot", Command{Name: "redis-cli", Args: []string{"--rdb", filepath.Join(stage, "redis/dump.rdb")}, Private: true}); err != nil {
+				if _, err := h.redis("Capture online Redis RDB snapshot", "--rdb", filepath.Join(stage, "redis/dump.rdb")); err != nil {
 					return err
 				}
 			}
@@ -353,7 +355,7 @@ func (h Host) FullBackup(output string) error {
 			if err := backup.Write(f, stage, &m, live); err != nil {
 				return err
 			}
-			if err := validateFullBackup(m, stage); err != nil {
+			if err := h.validateFullBackup(m, stage); err != nil {
 				return err
 			}
 			if err := f.Sync(); err != nil {
@@ -377,6 +379,40 @@ func (h Host) FullBackup(output string) error {
 			return nil
 		})
 	})
+}
+
+// embeddedTemplatesDir extracts this executable's templates into a private
+// temporary directory for rendering checks that must not depend on host state.
+func embeddedTemplatesDir() (string, error) {
+	source, err := abr.TemplateFS()
+	if err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp("", "abr-templates-")
+	if err != nil {
+		return "", err
+	}
+	entries, err := fs.ReadDir(source, ".")
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	for _, entry := range entries {
+		data, err := fs.ReadFile(source, entry.Name())
+		if err == nil {
+			err = os.WriteFile(filepath.Join(dir, entry.Name()), data, 0600)
+		}
+		if err != nil {
+			os.RemoveAll(dir)
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
 }
 
 func appDirectories(c config.Config) []string {
@@ -457,7 +493,7 @@ func (h Host) RestoreArchives(inputs []string, o RestoreOptions) error {
 			return err
 		}
 	}
-	if err := validateFullBackup(m, stage); err != nil {
+	if err := h.validateFullBackup(m, stage); err != nil {
 		return err
 	}
 	if err := h.renameRestore(&m, stage, o.Name); err != nil {
@@ -488,10 +524,8 @@ func (h Host) RestoreArchives(inputs []string, o RestoreOptions) error {
 		if err := h.freshRestoreTarget(m, true); err != nil {
 			return err
 		}
-		// Install saved templates and admin password before setup consumes them.
-		if err := backup.CopyTree(filepath.Join(stage, "templates"), h.path(h.TemplatesDir)); err != nil {
-			return err
-		}
+		// Install the saved admin password before setup consumes it. Templates
+		// always come from this executable, not from the backup.
 		if data, err := os.ReadFile(filepath.Join(stage, "state/mysql-admin.json")); err == nil {
 			var c mysqlAdminCredentials
 			if err := json.Unmarshal(data, &c); err != nil {
@@ -560,7 +594,7 @@ func (h Host) extractArchive(input, destination string) (backup.Manifest, error)
 	if err != nil {
 		return m, fmt.Errorf("invalid backup %s: %w", filepath.Base(input), err)
 	}
-	if err := validateFullBackup(m, destination); err != nil {
+	if err := h.validateFullBackup(m, destination); err != nil {
 		return m, fmt.Errorf("invalid backup %s: %w", filepath.Base(input), err)
 	}
 	return m, nil
@@ -777,7 +811,7 @@ func (h Host) renameRestore(m *backup.Manifest, stage, name string) error {
 			h.say("Review %s in %s's .env after restore: %s", key, name, renamedEnvReason(key))
 		}
 	}
-	return validateFullBackup(*m, stage)
+	return h.validateFullBackup(*m, stage)
 }
 
 // renamedEnvReview lists .env keys a rename cannot safely rewrite: values
@@ -894,6 +928,9 @@ func (h Host) restoreEachApp(apps []config.App, records []backup.App, restore fu
 			}
 			if err == nil {
 				err = h.deploymentHealth(a)
+			}
+			if err == nil && (a.Type == "nuxt" || fileExists(h.path(filepath.Join(a.Directory, "package.json")))) {
+				err = h.compressAssets(a, nil)
 			}
 		}
 		if err == nil {
@@ -1191,6 +1228,16 @@ func (h Host) restoreSharedData(stage string, m backup.Manifest) error {
 		return err
 	}
 	for name, target := range sharedBackupFiles() {
+		// Setup already rendered the MySQL and Redis policies from the restored
+		// templates for this server's memory. The old server's rendered files
+		// would size the buffer pool and maxmemory for its RAM instead.
+		if name == "shared/mysql.cnf" || name == "shared/redis.conf" {
+			if _, err := os.Lstat(h.path(target)); err == nil {
+				continue
+			} else if !os.IsNotExist(err) {
+				return err
+			}
+		}
 		data, err := os.ReadFile(filepath.Join(stage, name))
 		if os.IsNotExist(err) {
 			continue
@@ -1247,24 +1294,6 @@ func (h Host) restoreSharedData(stage string, m backup.Manifest) error {
 		if err := h.startRestoredRedis(); err != nil {
 			return err
 		}
-	} else if !m.Settings.NoRedis && m.Scope == "app" {
-		// The fresh Redis data stays empty, but saved runtime settings must take effect.
-		if _, ok := m.Files["shared/redis.conf"]; ok {
-			if err := h.command("systemctl", "restart", "redis-server"); err != nil {
-				return err
-			}
-			if _, err := h.run("Verify fresh Redis", Command{Name: "redis-cli", Args: []string{"PING"}, Private: true}); err != nil {
-				return err
-			}
-		}
-	}
-	if _, ok := m.Files["shared/mysql.cnf"]; ok {
-		if err := h.command("/usr/sbin/mysqld", "--validate-config", "--user=mysql"); err != nil {
-			return err
-		}
-		if err := h.command("systemctl", "restart", "mysql"); err != nil {
-			return err
-		}
 	}
 	if err := h.command("/usr/sbin/php-fpm"+services.PHPVersion, "--test"); err != nil {
 		return err
@@ -1304,18 +1333,18 @@ func (h Host) startRestoredRedis() (result error) {
 	if err := h.command("systemctl", "start", "redis-server"); err != nil {
 		return err
 	}
-	if _, err := h.run("Verify restored Redis", Command{Name: "redis-cli", Args: []string{"PING"}, Private: true}); err != nil {
+	if _, err := h.redis("Verify restored Redis", "PING"); err != nil {
 		return err
 	}
 	if enabled {
-		if _, err := h.run("Recreate Redis AOF from restored snapshot", Command{Name: "redis-cli", Args: []string{"CONFIG", "SET", "appendonly", "yes"}, Private: true}); err != nil {
+		if _, err := h.redis("Recreate Redis AOF from restored snapshot", "CONFIG", "SET", "appendonly", "yes"); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateFullBackup(m backup.Manifest, stage string) error {
+func (h Host) validateFullBackup(m backup.Manifest, stage string) error {
 	if !regexp.MustCompile(`^(latest|[0-9]{4}\.[0-9]+\.[0-9]+)$`).MatchString(m.Settings.RoadRunnerVersion) {
 		return fmt.Errorf("invalid RoadRunner setting in backup")
 	}
@@ -1402,9 +1431,11 @@ func validateFullBackup(m backup.Manifest, stage string) error {
 	if _, ok := m.Files["templates"]; !ok {
 		return fmt.Errorf("backup templates missing")
 	}
-	if err := requireSetupTemplates(os.DirFS(filepath.Join(stage, "templates"))); err != nil {
+	templates, err := embeddedTemplatesDir()
+	if err != nil {
 		return err
 	}
+	defer os.RemoveAll(templates)
 	for _, a := range m.Config.Apps {
 		if record, ok := m.Files["apps/"+a.Name+"/repository.bundle"]; !ok || record.Directory || record.Size == 0 {
 			return fmt.Errorf("%s: backup source bundle missing", a.Name)
@@ -1428,7 +1459,8 @@ func validateFullBackup(m backup.Manifest, stage string) error {
 				return fmt.Errorf("invalid deleted-source path")
 			}
 		}
-		if _, err := services.Render(a, m.Ports, filepath.Join(stage, "templates"), "/var/lib/abr"); err != nil {
+		// Saved templates are informational; this release's templates render.
+		if _, err := services.Render(a, m.Ports, templates, "/var/lib/abr"); err != nil {
 			return err
 		}
 	}

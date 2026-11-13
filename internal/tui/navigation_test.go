@@ -151,6 +151,7 @@ func TestReviewCancelPreservesFormAndOutputReturnsToFreshMenu(t *testing.T) {
 	m.moreAppMenu(app)
 	m.editMenu(app)
 	m.editForm(app, "workers")
+	m.form.NextGroup() // PHP-FPM workers.
 	m.form.NextGroup() // Queue workers.
 	m.Update(tea.PasteMsg{Content: "5"})
 	m.form.NextGroup()                                 // Complete form.

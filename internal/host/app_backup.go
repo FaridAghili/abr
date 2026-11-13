@@ -76,6 +76,11 @@ func (h Host) BackupApps(names []string, o BackupOptions) error {
 	if err := o.Validate(names); err != nil {
 		return err
 	}
+	if o.Due {
+		// The hourly timer runs unattended; wait out a long deployment rather
+		// than recording a failed attempt.
+		h.lockWait = 30 * time.Minute
+	}
 	var selected []config.App
 	err := h.locked(func() error {
 		var err error
@@ -437,7 +442,7 @@ func (h Host) captureAppBackup(a config.App, c config.Config, r ports.Registry, 
 	if err := backup.Write(io.MultiWriter(f, hash), stage, &m, live); err != nil {
 		return "", err
 	}
-	if err := validateFullBackup(m, stage); err != nil {
+	if err := h.validateFullBackup(m, stage); err != nil {
 		return "", err
 	}
 	if err := f.Sync(); err != nil {

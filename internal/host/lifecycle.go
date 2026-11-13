@@ -66,7 +66,7 @@ func (h Host) fileAllowed(a config.App, path string) bool {
 	if path != filepath.Clean(path) {
 		return false
 	}
-	if path == filepath.Join(h.Manager.StateDir, "env", a.Name+".env") || path == "/etc/caddy/abr.d/abr-"+a.Name+".caddy" || path == "/etc/php/"+services.PHPVersion+"/fpm/pool.d/abr-"+a.Name+".conf" {
+	if path == filepath.Join(h.Manager.StateDir, "env", a.Name+".env") || path == services.SitePath(a) || path == "/etc/php/"+services.PHPVersion+"/fpm/pool.d/abr-"+a.Name+".conf" {
 		return true
 	}
 	return filepath.Dir(path) == "/etc/systemd/system" && (unitAllowed(a.Name, filepath.Base(path)) || filepath.Base(path) == "abr-"+a.Name+"-queue@.service")
@@ -374,6 +374,12 @@ func (h Host) apply(a config.App, r ports.Registry, p services.Plan) (result err
 	return h.saveManifest(next)
 }
 
+// readyTimeout bounds how long started services get to open their listeners.
+// Octane boots one Laravel copy per worker and Nuxt loads its server bundle,
+// which takes well over 15 seconds on a small VPS; a unit that actually fails
+// is reported immediately by its systemd state, not by this deadline.
+const readyTimeout = 60 * time.Second
+
 func (h Host) ready(a config.App, r ports.Registry, m manifest) error {
 	if h.DryRun {
 		h.say("Would verify active services and loopback listeners for %s", a.Name)
@@ -389,7 +395,7 @@ func (h Host) ready(a config.App, r ports.Registry, m manifest) error {
 			return err
 		}
 	}
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(readyTimeout)
 	if m.FPM {
 		for {
 			connection, err := net.DialTimeout("unix", h.path("/run/php/abr-"+a.Name+".sock"), 250*time.Millisecond)
@@ -457,10 +463,17 @@ func (h Host) disable(a config.App) error {
 		}
 	}
 	for _, path := range m.Files {
-		if strings.HasPrefix(path, "/etc/caddy/") || strings.HasPrefix(path, "/etc/php/") {
+		if strings.HasPrefix(path, "/etc/php/") {
 			if err := h.removeFile(path); err != nil {
 				return err
 			}
+		}
+	}
+	// The site stays configured and answers 503, so visitors see a page and
+	// Caddy keeps the certificate instead of refusing the TLS handshake.
+	if slices.Contains(m.Files, services.SitePath(a)) {
+		if err := h.writeMaintenanceSite(a); err != nil {
+			return err
 		}
 	}
 	if m.FPM {
@@ -484,9 +497,21 @@ func (h Host) disable(a config.App) error {
 	if h.DryRun {
 		h.say("Disable preview complete for %s", a.Name)
 	} else {
-		h.say("Disabled %s; reservations retained", a.Name)
+		h.say("Disabled %s; its domains answer 503 until it is enabled again; reservations retained", a.Name)
 	}
 	return nil
+}
+
+// writeMaintenanceSite replaces the app's Caddy site with its 503 page.
+func (h Host) writeMaintenanceSite(a config.App) error {
+	f, err := services.RenderMaintenance(a, h.TemplatesDir)
+	if err != nil {
+		return err
+	}
+	if err := h.write(f.Path, f.Data, f.Mode); err != nil {
+		return err
+	}
+	return h.formatCaddy(f.Path)
 }
 
 func (h Host) stopUnit(unit string) error {

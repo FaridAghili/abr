@@ -52,6 +52,8 @@ type Embedding struct {
 	Origins []string `toml:"origins,omitempty"`
 }
 
+// Web selects the Laravel web server. Workers is the number of Octane
+// processes or PHP-FPM's pm.max_children; 0 uses the default of each.
 type Web struct {
 	Driver  string `toml:"driver,omitempty"`
 	Workers int    `toml:"workers,omitempty"`
@@ -242,9 +244,6 @@ func (a App) Validate() error {
 		}
 		if a.Web.Driver != "fpm" && a.Web.Driver != "octane" {
 			return fmt.Errorf("web.driver must be fpm or octane")
-		}
-		if a.Web.Driver == "fpm" && a.Web.Workers != 0 {
-			return fmt.Errorf("web.workers is only used by Octane")
 		}
 	case "nuxt":
 		if a.BuildOrder != "" || a.Web.Driver != "" || a.Web.Workers != 0 || a.Queue.Workers != 0 || a.Scheduler.Enabled || a.Nightwatch.Enabled || a.InertiaSSR.Enabled || a.Database.Enabled {

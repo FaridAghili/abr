@@ -20,6 +20,8 @@ ProtectHostname=true
 RestrictRealtime=true
 LockPersonality=true
 SystemCallArchitectures=native
+# Long-running servers hold many sockets; systemd's 1024 soft limit is too low.
+LimitNOFILE=65536
 User={{.User}}
 WorkingDirectory={{unitPath .Directory}}
 EnvironmentFile={{unitPath .ManagedEnvironmentFile}}

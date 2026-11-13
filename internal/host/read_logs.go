@@ -2,6 +2,7 @@ package host
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,6 +17,7 @@ import (
 	"abr/internal/config"
 	"abr/internal/logview"
 	"abr/internal/services"
+	"abr/internal/table"
 )
 
 type ReadLogsOptions struct {
@@ -37,8 +39,8 @@ func (h Host) ReadLogs(name, service string, o ReadLogsOptions) error {
 	if o.Lines < 1 || o.Lines > 1000 {
 		return fmt.Errorf("--lines must be between 1 and 1000")
 	}
-	if o.Type != "journal" && o.Type != "application" && o.Type != "deployment" {
-		return fmt.Errorf("log type must be journal, application or deployment")
+	if o.Type != "journal" && o.Type != "application" && o.Type != "deployment" && o.Type != "history" {
+		return fmt.Errorf("log type must be journal, application, deployment or history")
 	}
 	if service != "" && (o.All || o.Type != "journal") {
 		return fmt.Errorf("SERVICE is only used with one app's journal logs")
@@ -62,6 +64,15 @@ func (h Host) ReadLogs(name, service string, o ReadLogsOptions) error {
 	}
 	if o.Type == "journal" {
 		return h.readJournalLogs(apps, service, o)
+	}
+	if o.Type == "history" {
+		var failures []error
+		for _, app := range apps {
+			if err := h.readDeploymentHistory(app, o.Lines); err != nil {
+				failures = append(failures, fmt.Errorf("%s: %w", app.Name, err))
+			}
+		}
+		return errors.Join(failures...)
 	}
 	var failures []error
 	// Bound file content for the combined view, even with many large log files.
@@ -248,4 +259,101 @@ func (h Host) readLogTail(file logEntry, lines, byteLimit int) error {
 		h.say("%s", string(data))
 	}
 	return nil
+}
+
+// readDeploymentHistory lists an app's recent deployments, newest first: when
+// each started, its commit, result, duration and the step that failed.
+func (h Host) readDeploymentHistory(app config.App, limit int) error {
+	directory := h.path(filepath.Join(h.Manager.StateDir, "deployments", app.Name))
+	if h.DryRun {
+		h.say("Would list the last %d deployments of %s from %s", limit, app.Name, directory)
+		return nil
+	}
+	entries, err := os.ReadDir(directory)
+	if os.IsNotExist(err) {
+		h.say("%s: no deployments yet", app.Name)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var names []string
+	for _, entry := range entries {
+		if match := deploymentRecordName.FindStringSubmatch(entry.Name()); match != nil && match[2] == "json" && entry.Type().IsRegular() {
+			names = append(names, entry.Name())
+		}
+	}
+	slices.Sort(names)
+	slices.Reverse(names)
+	if len(names) > limit {
+		names = names[:limit]
+	}
+	history := table.Table{Title: fmt.Sprintf("Deployments · %s · newest first · times in %s", app.Name, time.Now().Format("MST")), Headers: []string{"STARTED", "RESULT", "COMMIT", "TIME", "DETAIL"}, Right: []int{3}}
+	for _, name := range names {
+		data, err := readProjectFile(filepath.Join(directory, name), 1<<20)
+		if err != nil {
+			return err
+		}
+		var record deploymentRecord
+		if err := json.Unmarshal(data, &record); err != nil {
+			return fmt.Errorf("corrupt deployment record %s: %w", name, err)
+		}
+		history.Rows = append(history.Rows, historyRow(record))
+	}
+	if len(history.Rows) == 0 {
+		h.say("%s: no deployments yet", app.Name)
+		return nil
+	}
+	return h.writeTable(history)
+}
+
+func historyRow(r deploymentRecord) []table.Cell {
+	started := table.Styled("—", table.Muted)
+	if t, err := time.Parse(time.RFC3339Nano, r.Started); err == nil {
+		started = table.Text(t.Local().Format("2006-01-02 15:04"))
+	}
+	result := table.Styled("deployed", table.Good)
+	if !r.Success {
+		result = table.Styled("failed", table.Bad)
+	}
+	commit := table.Styled("—", table.Muted)
+	if len(r.Commit) >= 12 {
+		commit = table.Text(r.Commit[:12])
+	}
+	duration := table.Styled("—", table.Muted)
+	if began, err := time.Parse(time.RFC3339Nano, r.Started); err == nil {
+		if finished, err := time.Parse(time.RFC3339Nano, r.Finished); err == nil {
+			duration = table.Text(formatSeconds(finished.Sub(began).Seconds()))
+		}
+	}
+	detail := table.Styled("—", table.Muted)
+	if r.Success {
+		if n := len(r.Steps); n > 0 {
+			longest := r.Steps[0]
+			for _, s := range r.Steps[1:] {
+				if s.Seconds > longest.Seconds {
+					longest = s
+				}
+			}
+			detail = table.Styled(fmt.Sprintf("%d steps; longest %s %s", n, longest.Step, formatSeconds(longest.Seconds)), table.Muted)
+		}
+	} else {
+		text := r.Error
+		if n := len(r.Steps); n > 0 {
+			text = "failed at " + r.Steps[n-1].Step + ": " + text
+		}
+		if line, _, ok := strings.Cut(text, "\n"); ok {
+			text = line
+		}
+		detail = table.Styled(ansiTruncate(text, 72), table.Bad)
+	}
+	return []table.Cell{started, result, commit, duration, detail}
+}
+
+func ansiTruncate(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n-1]) + "…"
 }

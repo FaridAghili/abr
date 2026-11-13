@@ -29,9 +29,9 @@ func TestAssetCompressionBatchesFilesAndStopsOnFailure(t *testing.T) {
 	}
 	count := 0
 	for _, c := range runner.calls {
-		index := slices.Index(c.Args, "--quality=5")
-		paths := c.Args[index+2:]
-		if len(paths) > 64 || c.Name != "runuser" || c.Args[1] != a.User {
+		index := slices.Index(c.Args, "--quality=11")
+		paths := c.Args[index+3:]
+		if len(paths) > 64 || c.Name != "runuser" || c.Args[1] != a.User || !slices.Contains(c.Args, "nice") || !slices.Contains(c.Args, "/usr/bin/brotli") {
 			t.Fatal("unsafe compression batch", c)
 		}
 		count += len(paths)

@@ -86,7 +86,7 @@ func (h Host) PrepareEnv(name string) error {
 			h.say("Set managed MySQL values in .env; password remains private")
 		}
 		if redis != nil {
-			h.say("Set this app's own Redis databases in .env: %s", formatEnvValues(redis))
+			h.say("Set this app's own Redis databases in .env: %s", formatEnvValues(redisPublicValues(redis)))
 		}
 		h.say("Review .env for app secrets before deployment")
 		return nil
@@ -108,7 +108,12 @@ func (h Host) redisValues(a config.App, r ports.Registry) ([][2]string, error) {
 			return nil, fmt.Errorf("%s has no Redis databases reserved", a.Name)
 		}
 	}
-	return [][2]string{{"REDIS_DB", strconv.Itoa(database)}, {"REDIS_CACHE_DB", strconv.Itoa(database + 1)}, {"REDIS_PREFIX", a.Name + "-"}}, nil
+	values := [][2]string{{"REDIS_DB", strconv.Itoa(database)}, {"REDIS_CACHE_DB", strconv.Itoa(database + 1)}, {"REDIS_PREFIX", a.Name + "-"}}
+	access, err := h.redisAccessValues(a)
+	if err != nil {
+		return nil, err
+	}
+	return append(values, access...), nil
 }
 
 // useOwnRedis writes the app's Redis values into .env only when they differ.
@@ -134,19 +139,17 @@ func (h Host) useOwnRedis(a config.App, r ports.Registry) error {
 	if err := h.writeEnvironment(a, setEnvValues(data, values)); err != nil {
 		return err
 	}
-	h.note("Set this app's own Redis databases in .env: %s", formatEnvValues(values))
+	h.note("Set this app's own Redis databases in .env: %s", formatEnvValues(redisPublicValues(values)))
 	return nil
 }
 
 // checkRedisDatabases makes sure the running Redis has the app's databases;
 // a server set up before they were reserved needs setup to apply them.
 func (h Host) checkRedisDatabases(a config.App, values [][2]string) error {
-	if _, err := os.Lstat(h.path("/etc/redis/abr.conf")); os.IsNotExist(err) {
-		return nil // Set up without Redis.
-	} else if err != nil {
-		return err
+	if managed, err := h.redisManaged(); err != nil || !managed {
+		return err // Set up without Redis.
 	}
-	out, err := h.run("Check Redis databases", Command{Name: "redis-cli", Args: []string{"CONFIG", "GET", "databases"}, Private: true})
+	out, err := h.redis("Check Redis databases", "CONFIG", "GET", "databases")
 	if err != nil {
 		return err
 	}
@@ -163,6 +166,17 @@ func (h Host) checkRedisDatabases(a config.App, values [][2]string) error {
 		return fmt.Errorf("%s uses Redis databases %s and %d, but Redis has %d; run abr setup to apply the managed Redis configuration, then deploy again", a.Name, values[0][1], cache, available)
 	}
 	return nil
+}
+
+// redisPublicValues omits the password from messages.
+func redisPublicValues(values [][2]string) [][2]string {
+	var public [][2]string
+	for _, pair := range values {
+		if pair[0] != "REDIS_PASSWORD" {
+			public = append(public, pair)
+		}
+	}
+	return public
 }
 
 func formatEnvValues(values [][2]string) string {

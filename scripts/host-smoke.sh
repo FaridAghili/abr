@@ -39,6 +39,10 @@ fixture_refused() {
   fi
   echo "Verified refusal: $expected"
 }
+# After setup Redis requires the server password abr saved; apps use their own users.
+fixture_redis() {
+  sudo env "REDISCLI_AUTH=$(sudo sed -n 's/.*"password": *"\([a-f0-9]*\)".*/\1/p' /var/lib/abr-ci/redis-admin.json)" redis-cli "$@"
+}
 fixture_caddy_format() {
   # fmt exits nonzero if formatting differs; never rewrite configs in this check.
   sudo caddy fmt "$1" > /dev/null
@@ -238,7 +242,7 @@ sudo test -f /etc/abr/templates/scheduler.service.tmpl
 sudo test -f /etc/abr/templates/ssh-hardening.conf.tmpl
 abr_ci config example > "$abr_binary_directory/config.example.toml"
 grep -Fx 'user = "abr-api"' "$abr_binary_directory/config.example.toml"
-sudo redis-cli GET abr-fixture-persist | grep -Fx survives-setup
+fixture_redis GET abr-fixture-persist | grep -Fx survives-setup
 apt-cache policy redis-server | grep -F '***' -A1 | grep -F packages.redis.io
 sudo grep -Fx "daemonize yes" /etc/redis/redis.conf
 systemctl is-active redis-server
@@ -312,7 +316,7 @@ for shell_repository in "${admin_shell_repositories[@]}"; do
   sudo -u abr-ci-admin git -C "$shell_repository" merge-base --is-ancestor "$shell_expected" HEAD
 done
 sudo cmp /var/lib/abr-ci/mysql-admin.json "$abr_binary_directory/admin-before-update.json"
-sudo redis-cli GET abr-fixture-persist | grep -Fx survives-setup
+fixture_redis GET abr-fixture-persist | grep -Fx survives-setup
 /usr/local/bin/composer --no-plugins --no-scripts --version
 /usr/local/bin/svgo --version
 "${node_global_env[@]}" /usr/local/bin/npm list --global --depth=0 --json > "$abr_binary_directory/updated-globals.json"
@@ -369,7 +373,7 @@ sudo /usr/sbin/sshd -T | grep -Fx 'passwordauthentication no'
 sudo /usr/sbin/sshd -T | grep -Fx 'authenticationmethods publickey'
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \
   -e 'SELECT @@bind_address, @@local_infile;' | grep -Fx $'127.0.0.1\t0'
-sudo redis-cli CONFIG GET bind | grep -Fx '127.0.0.1 -::1'
+fixture_redis CONFIG GET bind | grep -Fx '127.0.0.1 -::1'
 stat -c '%U:%G %a %n' /etc/redis
 # chmod preserves the packaged directory's setgid bit for group inheritance.
 case "$(stat -c '%u:%G:%a' /etc/redis)" in
@@ -379,11 +383,11 @@ esac
 sudo runuser -u redis -- head -c 1 /etc/redis/redis.conf >/dev/null
 sudo runuser -u redis -- head -c 1 /etc/redis/abr.conf >/dev/null
 fixture_denied redis touch /etc/redis/.abr-ci-write-probe
-sudo redis-cli CONFIG GET appendonly | grep -Fx yes
-sudo redis-cli CONFIG GET maxmemory-policy | grep -Fx noeviction
-sudo redis-cli CONFIG GET databases | grep -Fx 1000
+fixture_redis CONFIG GET appendonly | grep -Fx yes
+fixture_redis CONFIG GET maxmemory-policy | grep -Fx noeviction
+fixture_redis CONFIG GET databases | grep -Fx 1000
 # 20% of RAM, at least 256 MiB.
-test "$(sudo redis-cli CONFIG GET maxmemory | sed -n 2p)" -ge $((256 << 20))
+test "$(fixture_redis CONFIG GET maxmemory | sed -n 2p)" -ge $((256 << 20))
 sudo mysql --protocol=socket --user=root --batch --skip-column-names \
   -e 'SELECT @@innodb_buffer_pool_size, @@max_connections, @@log_bin, @@performance_schema;' | grep -Fx $'268435456\t200\t0\t0'
 # Shared identity tests remain offline: no GitHub account or private repository.
@@ -546,14 +550,25 @@ sudo runuser -u abr-fixture-php -- rm -- /srv/apps/fixture-php/storage/abr-acces
 abr_ci artisan fixture-php cache:clear --no-interaction
 # Clearing the app's Redis cache empties only its own cache database.
 for db in 0 1 "$fixture_redis_db" "$((fixture_redis_db + 1))"; do
-  sudo redis-cli -n "$db" SET abr-ci-isolation kept >/dev/null
+  fixture_redis -n "$db" SET abr-ci-isolation kept >/dev/null
 done
 abr_ci artisan fixture-php cache:clear redis --no-interaction
 for db in 0 1 "$fixture_redis_db"; do
-  sudo redis-cli -n "$db" GET abr-ci-isolation | grep -Fx kept
-  sudo redis-cli -n "$db" DEL abr-ci-isolation >/dev/null
+  fixture_redis -n "$db" GET abr-ci-isolation | grep -Fx kept
+  fixture_redis -n "$db" DEL abr-ci-isolation >/dev/null
 done
-test -z "$(sudo redis-cli -n "$((fixture_redis_db + 1))" GET abr-ci-isolation)"
+test -z "$(fixture_redis -n "$((fixture_redis_db + 1))" GET abr-ci-isolation)"
+# The app authenticates as its own Redis user and only reaches keys with its prefix.
+fixture_redis_user=$(sudo sed -n 's/^REDIS_USERNAME=//p' /srv/apps/fixture-php/.env)
+fixture_redis_password=$(sudo sed -n 's/^REDIS_PASSWORD=//p' /srv/apps/fixture-php/.env)
+test "$fixture_redis_user" = abr-fixture-php
+fixture_app_redis() { sudo env "REDISCLI_AUTH=$fixture_redis_password" redis-cli --user "$fixture_redis_user" "$@"; }
+fixture_app_redis -n "$fixture_redis_db" SET fixture-php-isolation own >/dev/null
+fixture_app_redis -n "$fixture_redis_db" GET fixture-php-isolation | grep -Fx own
+fixture_app_redis -n "$fixture_redis_db" GET abr-fixture-persist 2>&1 | grep -F NOPERM
+fixture_app_redis CONFIG GET databases 2>&1 | grep -F NOPERM
+if redis-cli PING 2>/dev/null | grep -Fx PONG; then echo 'Redis accepts unauthenticated clients' >&2; exit 1; fi
+fixture_app_redis -n "$fixture_redis_db" DEL fixture-php-isolation >/dev/null
 # A group redeploys, restarts and checks its apps in order; deleting it keeps them.
 abr_ci group create fixture-group fixture-php
 abr_ci deploy --group fixture-group --no-pull
@@ -686,6 +701,11 @@ abr_ci database backup fixture-php --output-dir /var/lib/abr-ci/backups
 sql_dump=$(sudo find /var/lib/abr-ci/backups -name 'fixture-php-*.sql' -print -quit)
 sudo test "$(sudo stat -c '%a' "$sql_dump")" = 600
 abr_ci disable fixture-php
+# A stopped app keeps its certificate and answers 503 instead of failing the TLS handshake.
+disabled_status=$(curl --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 -D "$fixture_source/disabled-headers" -o /dev/null --write-out '%{http_code}' https://fixture-php.localhost/)
+test "$disabled_status" = 503
+tr -d '\r' < "$fixture_source/disabled-headers" | grep -Fix 'Retry-After: 30'
+fixture_security_headers "$fixture_source/disabled-headers"
 sudo mysql --protocol=socket --user=root fixture_php -e 'DROP TABLE abr_backup_check;'
 abr_ci database import fixture-php "$sql_dump" --yes
 sudo mysql --protocol=socket --user=root --batch --skip-column-names fixture_php -e 'SELECT id FROM abr_backup_check;' | grep -Fx 42

@@ -3,6 +3,7 @@ package host
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"abr/internal/manager"
 	"abr/internal/storage"
@@ -139,7 +141,9 @@ type Host struct {
 	// Set only on the local copy used while full restore owns host.lock.
 	lockHeld bool
 	// Set while a deployment writes details to its log; see note.
-	progress     io.Writer
+	progress io.Writer
+	// How long to wait for host.lock; zero uses the interactive default.
+	lockWait     time.Duration
 	Manager      manager.Manager
 	TemplatesDir string
 	AppsDir      string
@@ -193,6 +197,11 @@ func (h Host) guard() error {
 			return err
 		}
 	}
+	// Every host operation renders this release's templates: the installed
+	// copies are refreshed from the executable, never edited by hand.
+	if err := h.syncTemplates(); err != nil {
+		return err
+	}
 	for _, path := range []string{h.Manager.ConfigPath, h.Manager.ConfigPath + ".lock", h.Manager.RegistryPath(), filepath.Join(h.Manager.StateDir, "ports.lock"), filepath.Join(h.Manager.StateDir, "host.lock")} {
 		if err := h.trustedFile(path); err != nil && !os.IsNotExist(err) {
 			return err
@@ -228,7 +237,7 @@ func (h Host) locked(fn func() error) error {
 	if err := h.trustedDirectory(h.path(h.Manager.StateDir)); err != nil {
 		return err
 	}
-	return storage.WithLock(filepath.Join(h.Manager.StateDir, "host.lock"), fn)
+	return storage.WithLockWait(filepath.Join(h.Manager.StateDir, "host.lock"), cmp.Or(h.lockWait, storage.DefaultLockWait), fn)
 }
 
 func (h Host) path(path string) string {

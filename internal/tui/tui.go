@@ -287,6 +287,8 @@ func (m *model) serverMenu() tea.Cmd {
 			return m.fullTransferMenu()
 		case "mysql-admin":
 			return m.start(action{title: "MySQL admin · TablePlus", args: []string{"database", "--admin", "--show"}})
+		case "redis-admin":
+			return m.start(action{title: "Redis · TablePlus", args: []string{"database", "--redis-admin", "--show"}})
 		}
 		return m.home()
 	}, huh.NewGroup(huh.NewSelect[string]().Title("Server actions").Description("Set up VPS guides you through GitHub, Composer and the TablePlus login.").Options(
@@ -296,6 +298,7 @@ func (m *model) serverMenu() tea.Cmd {
 		huh.NewOption("GitHub key", "git"),
 		huh.NewOption("Composer credentials", "composer"),
 		huh.NewOption("MySQL admin · TablePlus", "mysql-admin"),
+		huh.NewOption("Redis password · TablePlus", "redis-admin"),
 		huh.NewOption("Back", "back")).Value(&selected)))
 }
 
@@ -436,7 +439,7 @@ func (m *model) appAction(app config.App, selected string) tea.Cmd {
 	case "remove":
 		return m.removeForm(app)
 	case "disable":
-		return m.review(action{title: "Disable " + app.Name, args: args, note: "Stops services and routing; the app becomes unavailable. Its files, database and ports are kept."})
+		return m.review(action{title: "Disable " + app.Name, args: args, note: "Stops services; the app's domains answer 503 until it is enabled again. Its files, database and ports are kept."})
 	case "enable":
 		return m.review(action{title: "Enable " + app.Name, args: args, note: "Start this app's configured services and enable its HTTPS site."})
 	case "database":
@@ -514,7 +517,7 @@ func (m *model) deployForm(name string) tea.Cmd {
 		if noPull {
 			args = append(args, "--no-pull")
 		}
-		note := "The app has downtime while dependencies are installed, assets are built and services restart. Failures are reported; completed changes are not automatically rolled back."
+		note := "Visitors see a 503 maintenance page while assets are built, Composer packages are installed and services restart; Nuxt apps fetch code and Node packages before stopping. Failures are reported and leave the maintenance page up; completed changes are not automatically rolled back."
 		if c, err := config.Load(m.options.ConfigPath); err == nil {
 			for _, app := range c.Apps {
 				if app.Type == "laravel" && (name == "" || app.Name == name) {
@@ -904,6 +907,9 @@ func nextStep(args []string) string {
 	case "database":
 		if slices.Contains(args, "--admin") {
 			return "In TablePlus choose MySQL with SSH, use the database values above and your existing VPS SSH login."
+		}
+		if slices.Contains(args, "--redis-admin") {
+			return "In TablePlus choose Redis with SSH, leave the user blank, paste the password and use your existing VPS SSH login."
 		}
 		if len(args) > 1 && args[1] == "backup" {
 			return "Copy the SQL backups to storage outside this VPS."

@@ -9,7 +9,9 @@ import (
 	"abr/internal/config"
 )
 
-// Build-time Brotli keeps the official Caddy binary and avoids response-time CPU cost.
+// Brotli sidecars built after each deployment keep the official Caddy binary
+// and avoid response-time CPU cost. Build directories are emptied by each
+// build, so no stale sidecar outlives its asset.
 func (h Host) compressAssets(a config.App, environment map[string]string) error {
 	suffix := "public/build/assets"
 	if a.Type == "nuxt" {
@@ -38,8 +40,11 @@ func (h Host) compressAssets(a config.App, environment map[string]string) error 
 		if len(batch) == 0 {
 			return nil
 		}
-		args := append([]string{"--force", "--quality=5", "--"}, batch...)
-		_, err := h.asUser(a, environment, false, "/usr/bin/brotli", args...)
+		// The app already serves while this runs; Caddy serves assets without a
+		// sidecar uncompressed or gzip-encoded until it appears. Best quality
+		// costs nothing at request time, and low priority leaves CPU to the app.
+		args := append([]string{"-n", "10", "/usr/bin/brotli", "--force", "--quality=11", "--lgwin=24", "--"}, batch...)
+		_, err := h.asUser(a, environment, false, "nice", args...)
 		batch = batch[:0]
 		bytes = 0
 		return err

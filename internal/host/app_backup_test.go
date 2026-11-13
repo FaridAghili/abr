@@ -341,7 +341,7 @@ func TestRestoreUsesNewestSharedFilesFromAppBackups(t *testing.T) {
 		if data, err := os.ReadFile(filepath.Join(stage, "templates/php-cli.ini.tmpl")); err != nil || string(data) != "; edited shared setting\n" {
 			t.Fatal("older shared file won", string(data), err)
 		}
-		if err := validateFullBackup(m, stage); err != nil || len(m.Apps) != 2 {
+		if err := fresh.validateFullBackup(m, stage); err != nil || len(m.Apps) != 2 {
 			t.Fatal("merged backup invalid", err)
 		}
 	}

@@ -33,7 +33,7 @@ func (changes AppChanges) Apply(a App) (App, error) {
 			a.BuildOrder = v.BuildOrder
 		case "web-driver":
 			a.Web.Driver = v.Web.Driver
-		case "octane-workers":
+		case "web-workers":
 			a.Web.Workers = v.Web.Workers
 		case "queue-workers":
 			a.Queue.Workers = v.Queue.Workers
@@ -57,7 +57,9 @@ func (changes AppChanges) Apply(a App) (App, error) {
 			return App{}, fmt.Errorf("unsupported app setting %q", field)
 		}
 	}
-	if a.Web.Driver == "fpm" && slices.Contains(changes.Fields, "web-driver") && !slices.Contains(changes.Fields, "octane-workers") {
+	// Octane processes and FPM children are sized differently; a driver change
+	// without a new count returns to the new driver's default.
+	if slices.Contains(changes.Fields, "web-driver") && !slices.Contains(changes.Fields, "web-workers") {
 		a.Web.Workers = 0
 	}
 	if changes.CanonicalHost != "" {

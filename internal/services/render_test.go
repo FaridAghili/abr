@@ -476,7 +476,7 @@ func TestNuxtAndFPMTemplates(t *testing.T) {
 			if strings.HasSuffix(f.Path, ".caddy") && (!strings.Contains(string(f.Data), "@private path /.env /.env.* /.git /.git/*") || !strings.Contains(string(f.Data), "handle @private {\n        respond 404")) {
 				t.Fatal("private static files are not blocked", f.Path)
 			}
-			if strings.HasSuffix(f.Path, "nuxt.service") && !strings.Contains(string(f.Data), "--max-old-space-size=512 --env-file-if-exists=.env .output/server/index.mjs") {
+			if strings.HasSuffix(f.Path, "nuxt.service") && (!strings.Contains(string(f.Data), "--max-old-space-size=512 --env-file-if-exists=.env .output/server/index.mjs") || !strings.Contains(string(f.Data), "\nLimitNOFILE=65536\n")) {
 				t.Fatal(string(f.Data))
 			}
 			if strings.HasSuffix(f.Path, ".conf") && !strings.HasPrefix(string(f.Data), "; Managed by abr") {

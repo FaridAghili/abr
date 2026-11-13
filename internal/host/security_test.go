@@ -288,8 +288,8 @@ func TestBackupRefusesReplaceableParent(t *testing.T) {
 	}
 }
 
-func TestDeploymentKeepsArtisanAndComposerOutputPrivate(t *testing.T) {
-	h, runner, _, a := fixture(t)
+func TestDeploymentWritesBuildOutputOnlyToItsLog(t *testing.T) {
+	h, runner, out, a := fixture(t)
 	if _, err := h.Register(a, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -307,13 +307,18 @@ func TestDeploymentKeepsArtisanAndComposerOutputPrivate(t *testing.T) {
 		args := strings.Join(c.Args, " ")
 		if c.Name == "runuser" && (strings.Contains(args, "artisan ") || strings.Contains(args, "composer ") || strings.Contains(args, "npm ")) {
 			found = true
-			if !c.Private || !c.Stream {
-				t.Fatal("deployment could log SQL/password exception output")
+			// Output streams to the root-only deployment log, never captured or shown.
+			if c.Private || !c.Stream {
+				t.Fatal("build output is not written to the deployment log")
 			}
 		}
 	}
 	if !found {
 		t.Fatal("deployment did not reach PHP commands")
+	}
+	// The terminal gets one line per step; command labels and output stay in the log.
+	if strings.Contains(out.String(), "Run composer") || strings.Contains(out.String(), "Run npm") || strings.Contains(out.String(), "artisan migrate --force") {
+		t.Fatalf("command details reached the terminal:\n%s", out.String())
 	}
 }
 
