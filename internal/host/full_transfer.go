@@ -323,6 +323,9 @@ func (h Host) FullBackup(output string) error {
 				if err := copyBackupFile(h.path(h.backupRecordPath(a.Name)), filepath.Join(stage, "state/backups", a.Name+".json"), true); err != nil {
 					return err
 				}
+				if err := copyBackupFile(h.path(h.redisAccessPath(a.Name)), filepath.Join(stage, "state/redis", a.Name+".json"), true); err != nil {
+					return err
+				}
 				if a.Type == "laravel" {
 					if err := stageLiveTree(live, stage, "apps/"+a.Name+"/storage/app", h.path(a.Directory), "storage/app"); err != nil {
 						return err
@@ -810,6 +813,22 @@ func (h Host) renameRestore(m *backup.Manifest, stage, name string) error {
 		}
 		database = "MySQL database " + c.Database + " and account " + c.User
 	}
+	// The saved Redis password moves to the user named after the new app.
+	if redisName := "state/redis/" + name + ".json"; hasFile(m, redisName) {
+		data, err := readProjectFile(filepath.Join(stage, redisName), 1<<20)
+		if err != nil {
+			return err
+		}
+		access, err := parseRedisAccess(data, old.Name)
+		if err != nil {
+			return fmt.Errorf("invalid backup %w", err)
+		}
+		access.App, access.User = name, redisUser(name)
+		data, _ = json.MarshalIndent(access, "", "  ")
+		if err := backup.ReplaceFile(m, stage, redisName, append(data, '\n')); err != nil {
+			return err
+		}
+	}
 	h.say("Restoring %s as %s: project %s, user %s, %s; services, ports and records use the new name; domains are unchanged", old.Name, name, a.Directory, a.User, database)
 	if _, ok := m.Files[env]; ok {
 		data, err := readProjectFile(filepath.Join(stage, filepath.FromSlash(env)), 1<<20)
@@ -1040,6 +1059,35 @@ func (h Host) restoreSharedCredentials(stage string, keep bool) error {
 }
 
 // restoreApplication recreates one app's user, saved source, files and database.
+func hasFile(m *backup.Manifest, name string) bool {
+	_, ok := m.Files[name]
+	return ok
+}
+
+// restoreRedisAccess keeps the app's saved Redis user and password, so its
+// restored .env stays valid. A renamed app has no saved account and gets a new
+// one; the Redis user name follows the app name.
+func (h Host) restoreRedisAccess(a config.App, stage string) error {
+	data, err := os.ReadFile(filepath.Join(stage, "state/redis", a.Name+".json"))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := parseRedisAccess(data, a.Name); err != nil {
+		return err
+	}
+	if err := h.write(h.redisAccessPath(a.Name), data, 0600); err != nil {
+		return err
+	}
+	managed, err := h.redisAccessManaged()
+	if err != nil || !managed {
+		return err
+	}
+	return h.applyRedisACL()
+}
+
 func (h Host) restoreApplication(a config.App, record backup.App, stage string, m backup.Manifest) error {
 	if err := h.cloneRepository(record.Repository, a.Directory, filepath.Join(stage, "apps", a.Name, "repository.bundle"), record.Branch); err != nil {
 		return fmt.Errorf("clone %s: %w", a.Name, err)
@@ -1072,6 +1120,9 @@ func (h Host) restoreApplication(a config.App, record backup.App, stage string, 
 			return err
 		}
 	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := h.restoreRedisAccess(a, stage); err != nil {
 		return err
 	}
 	data, err := os.ReadFile(filepath.Join(stage, "state/databases", a.Name+".json"))
@@ -1372,7 +1423,7 @@ func (h Host) validateFullBackup(m backup.Manifest, stage string) error {
 		if _, ok := sharedBackupFiles()[name]; ok {
 			return !directory
 		}
-		if name == "shared" || name == "state" || name == "state/git" || name == "state/composer" || name == "state/databases" || name == "state/backup-ssh" || name == "state/backups" || name == "sql" || name == "apps" {
+		if name == "shared" || name == "state" || name == "state/git" || name == "state/composer" || name == "state/databases" || name == "state/backup-ssh" || name == "state/backups" || name == "state/redis" || name == "sql" || name == "apps" {
 			return directory
 		}
 		for _, n := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json", "redis-admin.json", "backup-destination.json", "backup-ssh/id_ed25519", "backup-ssh/id_ed25519.pub", "backup-ssh/known_hosts"} {
@@ -1393,7 +1444,7 @@ func (h Host) validateFullBackup(m backup.Manifest, stage string) error {
 			return true
 		}
 		for _, a := range m.Config.Apps {
-			if name == "state/databases/"+a.Name+".json" || name == "state/backups/"+a.Name+".json" || name == "sql/"+a.Name+".sql" {
+			if name == "state/databases/"+a.Name+".json" || name == "state/backups/"+a.Name+".json" || name == "state/redis/"+a.Name+".json" || name == "sql/"+a.Name+".sql" {
 				return !directory
 			}
 			base := "apps/" + a.Name
@@ -1564,6 +1615,15 @@ func (h Host) validateFullBackup(m backup.Manifest, stage string) error {
 		}
 	} else if !os.IsNotExist(err) {
 		return err
+	}
+	for _, a := range m.Config.Apps {
+		if data, err := os.ReadFile(filepath.Join(stage, "state/redis", a.Name+".json")); err == nil {
+			if _, err := parseRedisAccess(data, a.Name); err != nil {
+				return fmt.Errorf("invalid backup %w", err)
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 	}
 	return nil
 }

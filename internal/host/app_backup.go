@@ -424,6 +424,9 @@ func (h Host) captureAppBackup(a config.App, c config.Config, r ports.Registry, 
 	if err := copyBackupFile(h.path(h.backupRecordPath(a.Name)), filepath.Join(stage, "state/backups", a.Name+".json"), true); err != nil {
 		return "", err
 	}
+	if err := copyBackupFile(h.path(h.redisAccessPath(a.Name)), filepath.Join(stage, "state/redis", a.Name+".json"), true); err != nil {
+		return "", err
+	}
 	live := map[string]*os.Root{}
 	defer closeLiveTrees(live)
 	if a.Type == "laravel" {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -1100,10 +1101,34 @@ func TestFullBackupCarriesRedisAdminPassword(t *testing.T) {
 	if err := os.WriteFile(h.path(h.redisAdminPath()), []byte(record), 0600); err != nil {
 		t.Fatal(err)
 	}
+	account := `{"app":"app","user":"abr-app","password":"` + strings.Repeat("cd", 32) + `"}` + "\n"
+	if err := os.MkdirAll(filepath.Dir(h.path(h.redisAccessPath("app"))), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.path(h.redisAccessPath("app")), []byte(account), 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := h.FullBackup(output); err != nil {
 		t.Fatal(err)
 	}
 	m, stage := readFullArchive(t, output)
+	if data, err := os.ReadFile(filepath.Join(stage, "state/redis/app.json")); err != nil || string(data) != account {
+		t.Fatal("backup lost the app's Redis account", err)
+	}
+	// A restore under a new name keeps the password for the renamed Redis user.
+	renamed := m
+	renamed.Files = maps.Clone(m.Files)
+	renamed.Config.Apps = slices.Clone(m.Config.Apps)
+	renamed.Apps = slices.Clone(m.Apps)
+	if err := freshFullHost(t).renameRestore(&renamed, stage, "copy"); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(stage, "state/redis/copy.json")); err != nil {
+		t.Fatal(err)
+	} else if access, err := parseRedisAccess(data, "copy"); err != nil || access.Password != strings.Repeat("cd", 32) {
+		t.Fatal("renamed restore lost the Redis password", err)
+	}
+	m, stage = readFullArchive(t, output)
 	name := filepath.Join(stage, "state/redis-admin.json")
 	if data, err := os.ReadFile(name); err != nil || string(data) != record {
 		t.Fatal("backup lost the Redis server password", err)

@@ -123,11 +123,15 @@ func (h Host) redis(label string, args ...string) ([]byte, error) {
 }
 
 func (h Host) readRedisAccess(name string) (redisAccess, error) {
-	var a redisAccess
 	data, err := h.read(h.redisAccessPath(name))
 	if err != nil {
-		return a, err
+		return redisAccess{}, err
 	}
+	return parseRedisAccess(data, name)
+}
+
+func parseRedisAccess(data []byte, name string) (redisAccess, error) {
+	var a redisAccess
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&a) != nil || decoder.Decode(new(any)) != io.EOF || a.App != name || a.User != redisUser(name) || !redisPasswordPattern.MatchString(a.Password) {
