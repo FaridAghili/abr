@@ -388,8 +388,16 @@ fixture_redis CONFIG GET maxmemory-policy | grep -Fx noeviction
 fixture_redis CONFIG GET databases | grep -Fx 1000
 # 20% of RAM, at least 256 MiB.
 test "$(fixture_redis CONFIG GET maxmemory | sed -n 2p)" -ge $((256 << 20))
-sudo mysql --protocol=socket --user=root --batch --skip-column-names \
-  -e 'SELECT @@innodb_buffer_pool_size, @@max_connections, @@log_bin, @@performance_schema;' | grep -Fx $'268435456\t200\t0\t0'
+# 25% of RAM in whole 128 MiB chunks, at least 256 MiB; MySQL may round the
+# pool up to a multiple of its chunk size times buffer pool instances.
+memory=$(( $(sed -n 's/^MemTotal: *\([0-9]*\) kB$/\1/p' /proc/meminfo) << 10 ))
+buffer_pool=$(( memory / 4 / (128 << 20) * (128 << 20) ))
+[ "$buffer_pool" -ge $((256 << 20)) ] || buffer_pool=$((256 << 20))
+mysql_tuning=$(sudo mysql --protocol=socket --user=root --batch --skip-column-names \
+  -e 'SELECT @@innodb_buffer_pool_size, @@max_connections, @@log_bin, @@performance_schema;')
+test "$(cut -f1 <<<"$mysql_tuning")" -ge "$buffer_pool"
+test "$(cut -f1 <<<"$mysql_tuning")" -lt $((buffer_pool + (1 << 30)))
+cut -f2- <<<"$mysql_tuning" | grep -Fx $'200\t0\t0'
 # Shared identity tests remain offline: no GitHub account or private repository.
 abr_ci git setup
 abr_ci git setup
