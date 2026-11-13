@@ -283,7 +283,7 @@ func (h Host) FullBackup(output string) error {
 				}
 			}
 			// Capture only recorded shared credentials and editable templates.
-			for _, name := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json"} {
+			for _, name := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json", "redis-admin.json"} {
 				if err := copyBackupFile(h.path(filepath.Join(h.Manager.StateDir, name)), filepath.Join(stage, "state", name), name != "git/id_ed25519" && name != "git/known_hosts"); err != nil {
 					return err
 				}
@@ -534,6 +534,15 @@ func (h Host) RestoreArchives(inputs []string, o RestoreOptions) error {
 			c.Ready = false
 			data, _ = json.Marshal(c)
 			if err := h.write(h.mysqlAdminPath(), data, 0600); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		// Keep the saved Redis password: a fresh Redis accepts any password until
+		// setup applies it, and the administrator's connection stays the same.
+		if data, err := os.ReadFile(filepath.Join(stage, "state/redis-admin.json")); err == nil {
+			if err := h.write(h.redisAdminPath(), data, 0600); err != nil {
 				return err
 			}
 		} else if !os.IsNotExist(err) {
@@ -1104,7 +1113,7 @@ func (h Host) freshRestoreTarget(m backup.Manifest, hostChecks bool) error {
 	if len(r.Assignments) != 0 {
 		return fmt.Errorf("full restore requires an empty port registry")
 	}
-	for _, name := range []string{"apps", "users", "databases", "credentials", "env", "git", "composer", "mysql-admin.json", "setup.json", "backup-destination.json", "backup-ssh", "backups"} {
+	for _, name := range []string{"apps", "users", "databases", "credentials", "env", "git", "composer", "mysql-admin.json", "redis-admin.json", "setup.json", "backup-destination.json", "backup-ssh", "backups"} {
 		if _, err := os.Lstat(h.path(filepath.Join(h.Manager.StateDir, name))); !os.IsNotExist(err) {
 			return fmt.Errorf("full restore requires fresh abr state; found %s", name)
 		}
@@ -1366,7 +1375,7 @@ func (h Host) validateFullBackup(m backup.Manifest, stage string) error {
 		if name == "shared" || name == "state" || name == "state/git" || name == "state/composer" || name == "state/databases" || name == "state/backup-ssh" || name == "state/backups" || name == "sql" || name == "apps" {
 			return directory
 		}
-		for _, n := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json", "backup-destination.json", "backup-ssh/id_ed25519", "backup-ssh/id_ed25519.pub", "backup-ssh/known_hosts"} {
+		for _, n := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json", "redis-admin.json", "backup-destination.json", "backup-ssh/id_ed25519", "backup-ssh/id_ed25519.pub", "backup-ssh/known_hosts"} {
 			if name == "state/"+n {
 				return !directory
 			}
@@ -1542,6 +1551,16 @@ func (h Host) validateFullBackup(m backup.Manifest, stage string) error {
 		}
 		if decoder.Decode(new(any)) != io.EOF || c.User != "root" || c.Host != "127.0.0.1" || !regexp.MustCompile(`^[a-f0-9]{64}Aa1!$`).MatchString(c.Password) {
 			return fmt.Errorf("invalid backup admin ownership record")
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if data, err := os.ReadFile(filepath.Join(stage, "state/redis-admin.json")); err == nil {
+		var a redisAdmin
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&a) != nil || decoder.Decode(new(any)) != io.EOF || !redisPasswordPattern.MatchString(a.Password) {
+			return fmt.Errorf("invalid backup Redis admin record")
 		}
 	} else if !os.IsNotExist(err) {
 		return err

@@ -284,7 +284,7 @@ func (h Host) stageSharedBackup(shared string) (backup.Settings, error) {
 	if err != nil {
 		return settings, err
 	}
-	for _, name := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json"} {
+	for _, name := range []string{"git/id_ed25519", "git/id_ed25519.pub", "git/known_hosts", "composer/auth.json", "mysql-admin.json", "redis-admin.json"} {
 		if err := copyBackupFile(h.path(filepath.Join(h.Manager.StateDir, name)), filepath.Join(shared, "state", name), name != "git/id_ed25519" && name != "git/known_hosts"); err != nil {
 			return settings, err
 		}

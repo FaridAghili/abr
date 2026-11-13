@@ -114,6 +114,9 @@ fixture_refused 'fresh server' restore "$full_backup_fixture" --yes
 # Remove only disposable fixture apps and move their application state aside.
 for full_app in "${full_apps[@]}"; do abr_ci remove "$full_app" --purge --yes; done
 full_node_tools_before=$(readlink /opt/abr/node-tools/current)
+# Delete while the Redis password is still recorded; restore must bring it back.
+fixture_redis -n 5 DEL abr-full-state | grep -Ex '[01]'
+sudo cp /var/lib/abr-ci/redis-admin.json "$abr_binary_directory/full-redis-admin-before"
 sudo mv /var/lib/abr-ci "$abr_binary_directory/full-old-state"
 # Shared runtimes stay installed on this host. Keep their ownership record so
 # restore setup can replace the recorded Node tools without adopting unknown files.
@@ -123,7 +126,6 @@ sudo mv /etc/abr-ci/config.toml "$abr_binary_directory/full-old-config.toml"
 sudo mysql --protocol=socket --user=root <<'SQL'
 DROP USER 'root'@'127.0.0.1';
 SQL
-fixture_redis -n 5 DEL abr-full-state >/dev/null
 sudo systemctl stop caddy
 sudo rm -rf /var/lib/caddy/.local
 source "$abr_smoke_script_directory/app-restore-smoke.sh"
@@ -146,6 +148,7 @@ sudo cmp /etc/abr/templates/php-cli.ini.tmpl "$abr_binary_directory/full-templat
 sudo cmp /var/lib/abr-ci/backup-destination.json "$abr_binary_directory/full-destination-before"
 sudo cmp /var/lib/abr-ci/backup-ssh/id_ed25519 "$abr_binary_directory/full-backup-key-before"
 sudo cmp /var/lib/abr-ci/backups/fixture-php.json "$abr_binary_directory/full-backup-record-before"
+sudo cmp /var/lib/abr-ci/redis-admin.json "$abr_binary_directory/full-redis-admin-before"
 abr_ci backup test
 abr_ci ports > "$abr_binary_directory/full-ports-after"
 cmp "$abr_binary_directory/full-ports-before" "$abr_binary_directory/full-ports-after"

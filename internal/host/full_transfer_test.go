@@ -1092,3 +1092,26 @@ func TestRestoreKeepsThisServersMemorySizedConfigs(t *testing.T) {
 		}
 	}
 }
+
+func TestFullBackupCarriesRedisAdminPassword(t *testing.T) {
+	h, _, output, cleanup := fullFixture(t, false)
+	defer cleanup()
+	record := `{"password":"` + strings.Repeat("ab", 32) + `"}` + "\n"
+	if err := os.WriteFile(h.path(h.redisAdminPath()), []byte(record), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.FullBackup(output); err != nil {
+		t.Fatal(err)
+	}
+	m, stage := readFullArchive(t, output)
+	name := filepath.Join(stage, "state/redis-admin.json")
+	if data, err := os.ReadFile(name); err != nil || string(data) != record {
+		t.Fatal("backup lost the Redis server password", err)
+	}
+	if err := os.WriteFile(name, []byte(`{"password":"short"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Host{TemplatesDir: "../../templates"}).validateFullBackup(m, stage); err == nil || !strings.Contains(err.Error(), "Redis admin") {
+		t.Fatal("invalid Redis admin record accepted", err)
+	}
+}
