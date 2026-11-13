@@ -309,14 +309,27 @@ func (h Host) applyRedisAccess() error {
 		if _, err := os.Stat(h.path(filepath.Join(a.Directory, "vendor/autoload.php"))); err != nil {
 			continue
 		}
-		php := "/usr/bin/php" + services.PHPVersion
-		if _, err := h.asUser(a, nil, true, php, "artisan", "config:cache", "--no-interaction"); err != nil {
-			failures = append(failures, fmt.Errorf("%s: refresh cached configuration: %w", a.Name, err))
+		// Cache with the same environment as deployments and the services, so
+		// production settings apply and dev-only providers stay unloaded.
+		plan, err := services.Render(a, r, h.TemplatesDir, h.Manager.StateDir)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", a.Name, err))
 			continue
+		}
+		php := "/usr/bin/php" + services.PHPVersion
+		if _, err := h.asUser(a, plan.Environment, true, php, "artisan", "config:cache", "--no-interaction"); err != nil {
+			// A stale cache lacks the new Redis login, which Redis now requires.
+			// Without a cache the app reads .env, so it keeps working uncached.
+			failure := fmt.Errorf("%s: refresh cached configuration failed (see abr artisan %s config:cache); running without a configuration cache", a.Name, a.Name)
+			if _, err := h.asUser(a, nil, true, "rm", "-f", "--", "bootstrap/cache/config.php"); err != nil {
+				failure = fmt.Errorf("%s: refresh cached configuration failed (see abr artisan %s config:cache), and removing the stale cache failed: %w", a.Name, a.Name, err)
+			}
+			failures = append(failures, failure)
 		}
 		if len(m.Units) > 0 {
 			if err := h.command("systemctl", append([]string{"restart"}, m.Units...)...); err != nil {
 				failures = append(failures, fmt.Errorf("%s: restart services: %w", a.Name, err))
+				continue
 			}
 		}
 		h.say("%s now authenticates to Redis as %s", a.Name, redisUser(a.Name))

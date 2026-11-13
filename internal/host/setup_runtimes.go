@@ -179,8 +179,12 @@ func (h Host) configureRedis() (result error) {
 	if err := h.prepareRedisAccounts(); err != nil {
 		return err
 	}
+	// Restore the packaged file only while the new configuration is unproven.
+	// Once Redis runs with it, a failure to update an app must not restart
+	// Redis again or drop the authentication other apps already use.
+	configured := false
 	defer func() {
-		if result != nil && !h.DryRun {
+		if result != nil && !h.DryRun && !configured {
 			result = errors.Join(result, h.write(path, old, 0640), h.command("chown", "root:redis", path), h.command("systemctl", "restart", "redis-server"))
 		}
 	}()
@@ -220,6 +224,7 @@ func (h Host) configureRedis() (result error) {
 	}); err != nil {
 		return err
 	}
+	configured = true
 	if h.DryRun {
 		h.say("Would give every registered Laravel app its own Redis user and restart the running ones with it")
 		return nil

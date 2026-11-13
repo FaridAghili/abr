@@ -153,3 +153,63 @@ func TestRedisAdminShowsPasswordOnlyOnRequest(t *testing.T) {
 		t.Fatalf("password not shown with --show: %v", err)
 	}
 }
+
+// A failed config cache must not leave the app on a cache without its new
+// Redis login, nor roll back and restart Redis that other apps already use.
+func TestRedisAccountCacheFailureKeepsRedisAndDropsStaleCache(t *testing.T) {
+	h, r := setupFixture(t)
+	a := fixtureApp(h)
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.write("/etc/redis/redis.conf", []byte("bind 127.0.0.1\n"), 0640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(a.Directory, "vendor"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.Directory, "vendor/autoload.php"), []byte("<?php\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(a.Directory, ".env"), []byte("APP_ENV=local\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.saveManifest(manifest{Version: 1, App: a.Name, User: a.User, Units: []string{"abr-app-queue@1.service"}, FPM: true, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	r.fail = func(c Command) error {
+		if slices.Contains(c.Args, "config:cache") {
+			return testExit(1)
+		}
+		return nil
+	}
+	err := h.configureRedis()
+	if err == nil || !strings.Contains(err.Error(), "abr artisan app config:cache") {
+		t.Fatal("cache failure not reported with its next step", err)
+	}
+	conf, _ := h.read("/etc/redis/redis.conf")
+	if !hasDirective(conf, "include /etc/redis/abr.conf") {
+		t.Fatal("app failure rolled back the Redis configuration")
+	}
+	var cached, removed, restarted bool
+	restarts := 0
+	for _, c := range r.calls {
+		args := strings.Join(c.Args, " ")
+		switch {
+		case strings.Contains(args, "config:cache"):
+			cached = strings.Contains(args, "APP_ENV=production") && strings.Contains(args, "APP_DEBUG=false")
+		case strings.Contains(args, "rm -f -- bootstrap/cache/config.php"):
+			removed = true
+		case c.Name == "systemctl" && strings.HasPrefix(args, "restart abr-app"):
+			restarted = removed
+		case c.Name == "systemctl" && args == "restart redis-server":
+			restarts++
+		}
+	}
+	if !cached || !removed || !restarted {
+		t.Fatalf("cache with production env %t, stale cache removed %t, services restarted after %t", cached, removed, restarted)
+	}
+	if restarts != 1 {
+		t.Fatalf("Redis restarted %d times", restarts)
+	}
+}
