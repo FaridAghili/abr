@@ -316,15 +316,17 @@ func (h Host) applyRedisAccess() error {
 			failures = append(failures, fmt.Errorf("%s: %w", a.Name, err))
 			continue
 		}
+		// Artisan boots from the cached configuration before running any
+		// command, so a stale cache without the Redis login, which Redis now
+		// requires, fails every command for an app that reads its cache while
+		// booting. Remove it first; without a cache the app reads .env.
+		if _, err := h.asUser(a, nil, true, "rm", "-f", "--", "bootstrap/cache/config.php"); err != nil {
+			failures = append(failures, fmt.Errorf("%s: remove the stale cached configuration: %w", a.Name, err))
+			continue
+		}
 		php := "/usr/bin/php" + services.PHPVersion
 		if _, err := h.asUser(a, plan.Environment, true, php, "artisan", "config:cache", "--no-interaction"); err != nil {
-			// A stale cache lacks the new Redis login, which Redis now requires.
-			// Without a cache the app reads .env, so it keeps working uncached.
-			failure := fmt.Errorf("%s: refresh cached configuration failed (see abr artisan %s config:cache); running without a configuration cache", a.Name, a.Name)
-			if _, err := h.asUser(a, nil, true, "rm", "-f", "--", "bootstrap/cache/config.php"); err != nil {
-				failure = fmt.Errorf("%s: refresh cached configuration failed (see abr artisan %s config:cache), and removing the stale cache failed: %w", a.Name, a.Name, err)
-			}
-			failures = append(failures, failure)
+			failures = append(failures, fmt.Errorf("%s: refresh cached configuration failed (see abr artisan %s config:cache); running without a configuration cache", a.Name, a.Name))
 		}
 		if len(m.Units) > 0 {
 			if err := h.command("systemctl", append([]string{"restart"}, m.Units...)...); err != nil {

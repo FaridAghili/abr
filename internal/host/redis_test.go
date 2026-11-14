@@ -197,7 +197,8 @@ func TestRedisAccountCacheFailureKeepsRedisAndDropsStaleCache(t *testing.T) {
 		args := strings.Join(c.Args, " ")
 		switch {
 		case strings.Contains(args, "config:cache"):
-			cached = strings.Contains(args, "APP_ENV=production") && strings.Contains(args, "APP_DEBUG=false")
+			// The stale cache goes first: artisan would boot from it.
+			cached = removed && strings.Contains(args, "APP_ENV=production") && strings.Contains(args, "APP_DEBUG=false")
 		case strings.Contains(args, "rm -f -- bootstrap/cache/config.php"):
 			removed = true
 		case c.Name == "systemctl" && strings.HasPrefix(args, "restart abr-app"):
@@ -207,7 +208,7 @@ func TestRedisAccountCacheFailureKeepsRedisAndDropsStaleCache(t *testing.T) {
 		}
 	}
 	if !cached || !removed || !restarted {
-		t.Fatalf("cache with production env %t, stale cache removed %t, services restarted after %t", cached, removed, restarted)
+		t.Fatalf("cached after removing the stale cache with production env %t, stale cache removed %t, services restarted %t", cached, removed, restarted)
 	}
 	if restarts != 1 {
 		t.Fatalf("Redis restarted %d times", restarts)
