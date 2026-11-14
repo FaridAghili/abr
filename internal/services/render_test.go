@@ -319,6 +319,17 @@ func TestCaddyStaticCaching(t *testing.T) {
 					paths[hashed] = month
 				}
 			}
+			// Service worker entry scripts always revalidate, even with a query;
+			// hashed Workbox runtime files stay immutable.
+			for _, path := range []string{"/sw.js", "/service-worker.js", "/nested/app/sw.js", build + "/service-worker.js"} {
+				write(path)
+				paths[path] = "no-cache"
+				paths[path+"?v=8ea5922c"] = "no-cache"
+			}
+			write("/workbox-f2d0f07d.js")
+			paths["/workbox-f2d0f07d.js"] = year
+			write("/not-sw.js")
+			paths["/not-sw.js"] = month
 			// Existing HTML/PHP paths must not gain public caching from a query.
 			write("/page.html")
 			write("/page-8ea5922c.html")
@@ -370,7 +381,7 @@ func TestCaddyStaticCaching(t *testing.T) {
 					_ = response.Body.Close()
 				}
 			}
-			for _, path := range []string{"/assets/plain.png", "/vendor/livewire/livewire.min.js?id=8ea5922c", "/assets/logo-AbCd1234.woff2", "/data/plain.json?v=1", "/data/plain.xml"} {
+			for _, path := range []string{"/assets/plain.png", "/vendor/livewire/livewire.min.js?id=8ea5922c", "/assets/logo-AbCd1234.woff2", "/data/plain.json?v=1", "/data/plain.xml", "/sw.js"} {
 				etag := request("HEAD", path, nil).Header.Get("Etag")
 				if etag == "" {
 					t.Fatal("static response has no ETag", path)
@@ -391,7 +402,7 @@ func TestCaddyStaticCaching(t *testing.T) {
 					t.Fatal("missing or private image was publicly cached", path, response.StatusCode, response.Header)
 				}
 			}
-			for _, path := range []string{"/dynamic.png", "/missing.png", "/missing.js?id=8ea5922c", "/api.json?v=1", "/api.xml?v=1", "/page.html?v=1", "/page-8ea5922c.html?v=1", "/index.php?v=1", "/?v=1"} {
+			for _, path := range []string{"/dynamic.png", "/missing.png", "/missing.js?id=8ea5922c", "/api.json?v=1", "/api.xml?v=1", "/missing/sw.js", "/missing/service-worker.js?v=1", "/page.html?v=1", "/page-8ea5922c.html?v=1", "/index.php?v=1", "/?v=1"} {
 				response := request("GET", path, nil)
 				if strings.Contains(response.Header.Get("Cache-Control"), "public") || (kind != "fpm" && response.Header.Get("Cache-Control") != "private, no-store") {
 					t.Fatal("dynamic image cache policy was overwritten", path, response.Header)

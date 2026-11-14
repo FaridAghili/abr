@@ -41,15 +41,24 @@
         path_regexp staticFiles (?i)\.(css|m?js|cjs|woff2?|ttf|otf|eot|ttc|sfnt|png|jpe?g|gif|webp|avif|svgz?|ico|bmp|tiff?|apng|jxl|heic|heif)$
         file {path}
     }
+    # Service worker entry scripts keep fixed URLs; browsers must revalidate
+    # them so a cached copy never pins an old application release.
+    @serviceWorker {
+        method GET HEAD
+        path */sw.js */service-worker.js
+        file {path}
+    }
     @versionedStatic {
         method GET HEAD
         path_regexp versionedStatic (?i)\.(css|m?js|cjs|woff2?|ttf|otf|eot|ttc|sfnt|png|jpe?g|gif|webp|avif|svgz?|ico|bmp|tiff?|apng|jxl|heic|heif)$
+        not path */sw.js */service-worker.js
         file {path}
         vars assetVersioned true
     }
     @stableStatic {
         method GET HEAD
         path_regexp stableStatic (?i)\.(css|m?js|cjs|woff2?|ttf|otf|eot|ttc|sfnt|png|jpe?g|gif|webp|avif|svgz?|ico|bmp|tiff?|apng|jxl|heic|heif)$
+        not path */sw.js */service-worker.js
         file {path}
         not vars assetVersioned true
     }
@@ -77,6 +86,10 @@
     }
     header @stableStatic {
         Cache-Control "public, max-age=2592000"
+        match status 200 206 304
+    }
+    header @serviceWorker {
+        Cache-Control "no-cache"
         match status 200 206 304
     }
     header @versionedOther {
