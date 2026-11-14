@@ -160,6 +160,35 @@
     }
     redir https://{host}{uri} 308
 }
+{{if .ReverbDomain}}
+# Laravel Reverb: WebSockets at /app, its signed HTTP API at /apps and /up.
+{{.ReverbDomain}} {
+    header {
+        -Server
+        -Via
+        Strict-Transport-Security "max-age=15768000"
+        X-Content-Type-Options "nosniff"
+    }
+    @reverb path /app/* /apps/* /up
+    handle @reverb {
+        reverse_proxy 127.0.0.1:{{.ReverbPort}} {
+            # Caddy reloads whenever an app starts or stops; keep open
+            # WebSockets meanwhile instead of disconnecting every client.
+            stream_close_delay 30m
+        }
+    }
+    handle {
+        respond 404
+    }
+}
+http://{{.ReverbDomain}} {
+    header {
+        -Server
+        -Via
+    }
+    redir https://{host}{uri} 308
+}
+{{end}}
 {{range .Aliases}}
 {{.}} {
     header {

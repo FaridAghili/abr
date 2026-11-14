@@ -43,6 +43,7 @@ type App struct {
 	Scheduler   Component `toml:"scheduler,omitempty"`
 	Nightwatch  Component `toml:"nightwatch,omitempty"`
 	InertiaSSR  Component `toml:"inertia_ssr,omitempty"`
+	Reverb      Reverb    `toml:"reverb,omitempty"`
 	Database    Database  `toml:"database,omitempty"`
 	Backup      Backup    `toml:"backup,omitempty"`
 }
@@ -65,6 +66,15 @@ type Queue struct {
 type Component struct {
 	Enabled bool `toml:"enabled,omitempty"`
 }
+
+// Reverb runs a Laravel Reverb WebSocket server for the app. Its own domain,
+// such as ws.example.com, serves only Reverb; setting it enables Reverb.
+type Reverb struct {
+	Domain string `toml:"domain,omitempty"`
+}
+
+func (r Reverb) Enabled() bool { return r.Domain != "" }
+
 type Database struct {
 	Enabled bool `toml:"enabled,omitempty"`
 }
@@ -169,6 +179,9 @@ func (c Config) Validate() error {
 		directories[dir] = a.Name
 		all := append([]string{a.Domain}, a.Aliases...)
 		all = append(all, a.Domains...)
+		if a.Reverb.Enabled() {
+			all = append(all, a.Reverb.Domain)
+		}
 		for _, d := range all {
 			d = strings.ToLower(d)
 			if owner, ok := domains[d]; ok {
@@ -222,6 +235,9 @@ func (a App) Validate() error {
 			return fmt.Errorf("invalid domain %q", d)
 		}
 	}
+	if a.Reverb.Enabled() && !validDomain(a.Reverb.Domain) {
+		return fmt.Errorf("invalid Reverb domain %q", a.Reverb.Domain)
+	}
 	if err := a.Embedding.Validate(); err != nil {
 		return err
 	}
@@ -246,7 +262,7 @@ func (a App) Validate() error {
 			return fmt.Errorf("web.driver must be fpm or octane")
 		}
 	case "nuxt":
-		if a.BuildOrder != "" || a.Web.Driver != "" || a.Web.Workers != 0 || a.Queue.Workers != 0 || a.Scheduler.Enabled || a.Nightwatch.Enabled || a.InertiaSSR.Enabled || a.Database.Enabled {
+		if a.BuildOrder != "" || a.Web.Driver != "" || a.Web.Workers != 0 || a.Queue.Workers != 0 || a.Scheduler.Enabled || a.Nightwatch.Enabled || a.InertiaSSR.Enabled || a.Reverb.Enabled() || a.Database.Enabled {
 			return fmt.Errorf("Laravel components cannot be enabled for Nuxt apps")
 		}
 	default:
@@ -286,6 +302,9 @@ func (a App) Endpoints() []string {
 	}
 	if a.Nightwatch.Enabled {
 		purposes = append(purposes, "nightwatch-ingest")
+	}
+	if a.Reverb.Enabled() {
+		purposes = append(purposes, "reverb")
 	}
 	return purposes
 }

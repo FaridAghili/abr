@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -570,6 +571,7 @@ func TestCaddyTemplatesAdapt(t *testing.T) {
 				a.Type = kind
 			} else {
 				a.Web.Driver = kind
+				a.Reverb.Domain = "ws.test"
 			}
 			r := ports.Empty()
 			if err := r.Ensure(a, config.Default().Ports, nil, func(int) error { return nil }); err != nil {
@@ -665,5 +667,158 @@ func TestCaddyEmbedding(t *testing.T) {
 				t.Fatal("embedding setting leaked to another app")
 			}
 		})
+	}
+}
+
+func reverbApp(directory string) config.App {
+	return config.App{Name: "app", User: "abr-app", Directory: directory, Type: "laravel", Domain: "app.test", Web: config.Web{Driver: "fpm"}, Reverb: config.Reverb{Domain: "ws.test"}}
+}
+
+func TestRenderReverb(t *testing.T) {
+	a := reverbApp("/srv/apps/app")
+	r := ports.Empty()
+	if err := r.Ensure(a, config.Default().Ports, nil, func(int) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Render(a, r, "../../templates", "/var/lib/abr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(p.Units, "abr-app-reverb.service") {
+		t.Fatalf("Reverb unit not enabled: %v", p.Units)
+	}
+	// Only where Reverb listens is managed; REVERB_HOST stays in .env because
+	// Vite builds may copy it into the browser bundle.
+	if p.Environment["REVERB_SERVER_HOST"] != "127.0.0.1" || p.Environment["REVERB_SERVER_PORT"] != "10000" || p.Environment["REVERB_HOST"] != "" {
+		t.Fatalf("bad Reverb environment: %v", p.Environment)
+	}
+	files := map[string]string{}
+	for _, f := range p.Files {
+		files[f.Path] = string(f.Data)
+	}
+	unit := files["/etc/systemd/system/abr-app-reverb.service"]
+	if !strings.Contains(unit, "artisan reverb:start --host=127.0.0.1 --port=10000 --no-interaction\n") || !strings.Contains(unit, "LimitNOFILE=65536\n") || !strings.Contains(unit, "Restart=always\n") {
+		t.Fatal(unit)
+	}
+	site := files[SitePath(a)]
+	_, reverb, ok := strings.Cut(site, "\nws.test {")
+	if !ok || !strings.Contains(reverb, "@reverb path /app/* /apps/* /up") || !strings.Contains(reverb, "reverse_proxy 127.0.0.1:10000") || !strings.Contains(reverb, "stream_close_delay 30m") || !strings.Contains(site, "http://ws.test {") {
+		t.Fatal(site)
+	}
+	if strings.Contains(site, "app.test, ws.test") {
+		t.Fatal("Reverb domain serves the Laravel site")
+	}
+	maintenance, err := RenderMaintenance(a, "../../templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(maintenance.Data), "app.test, ws.test {") || !strings.Contains(string(maintenance.Data), "http://app.test, http://ws.test {") {
+		t.Fatalf("stopped app's Reverb domain not covered:\n%s", maintenance.Data)
+	}
+}
+
+// Caddy must pass the WebSocket upgrade through to Reverb and answer every
+// other path itself, so the Reverb domain never reaches the Laravel site.
+func TestCaddyReverbWebSocket(t *testing.T) {
+	caddy, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("Caddy is not installed")
+	}
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		for {
+			conn, err := upstream.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				request, err := http.ReadRequest(bufio.NewReader(conn))
+				if err != nil {
+					return
+				}
+				if request.Header.Get("Upgrade") != "websocket" {
+					_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n{\"health\":\"OK\"}")
+					return
+				}
+				_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\nupgraded "+request.URL.Path+"\n")
+			}()
+		}
+	}()
+	a := reverbApp(t.TempDir())
+	r := ports.Empty()
+	r.Assignments = append(r.Assignments, ports.Assignment{App: a.Name, Purpose: "reverb", Port: upstream.Addr().(*net.TCPAddr).Port})
+	plan, err := Render(a, r, "../../templates", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	var site string
+	for _, file := range plan.Files {
+		if file.Path == SitePath(a) {
+			_, site, _ = strings.Cut(string(file.Data), "# Laravel Reverb")
+			site, _, _ = strings.Cut(site, "http://ws.test {")
+			site = strings.Replace(site, "ws.test {", "http://"+address+" {", 1)
+		}
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Caddyfile")
+	if err := os.WriteFile(path, []byte("{\n admin off\n auto_https off\n}\n"+site), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(caddy, "run", "--config", path, "--adapter", "caddyfile")
+	cmd.Env = append(os.Environ(), "HOME="+dir, "XDG_DATA_HOME="+dir, "XDG_CONFIG_HOME="+dir)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	client := &http.Client{Timeout: time.Second}
+	var response *http.Response
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if response, err = client.Get("http://" + address + "/up"); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+	}
+	body, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || string(body) != `{"health":"OK"}` {
+		t.Fatalf("health check not proxied: %d %s", response.StatusCode, body)
+	}
+	for _, other := range []string{"/", "/index.php", "/.env", "/application"} {
+		response, err := client.Get("http://" + address + other)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s reached past the Reverb paths: %d", other, response.StatusCode)
+		}
+	}
+	conn, err := net.DialTimeout("tcp", address, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	_, _ = io.WriteString(conn, "GET /app/key123?protocol=7 HTTP/1.1\r\nHost: "+address+"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+	reader := bufio.NewReader(conn)
+	upgrade, err := http.ReadResponse(reader, nil)
+	if err != nil || upgrade.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("WebSocket upgrade not proxied: %v %+v", err, upgrade)
+	}
+	if line, err := reader.ReadString('\n'); err != nil || line != "upgraded /app/key123\n" {
+		t.Fatalf("upgraded stream not passed through: %q %v", line, err)
 	}
 }

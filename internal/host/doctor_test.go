@@ -165,12 +165,12 @@ func TestDoctorPortableChecksDoNotClaimListenerConflicts(t *testing.T) {
 
 func TestDoctorBatchesEndpointsAndRecognizesOctaneChildren(t *testing.T) {
 	h, _, out, app := fixture(t)
-	app.Web.Driver, app.InertiaSSR.Enabled, app.Nightwatch.Enabled = "octane", true, true
+	app.Web.Driver, app.InertiaSSR.Enabled, app.Nightwatch.Enabled, app.Reverb.Domain = "octane", true, true, "ws.example.com"
 	r, err := h.Manager.Register(app, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	units := []string{"abr-app-octane.service", "abr-app-inertia-ssr.service", "abr-app-nightwatch.service"}
+	units := []string{"abr-app-octane.service", "abr-app-inertia-ssr.service", "abr-app-nightwatch.service", "abr-app-reverb.service"}
 	if err := h.saveManifest(manifest{Version: 1, App: app.Name, User: app.User, Enabled: true, Units: units}); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestDoctorBatchesEndpointsAndRecognizesOctaneChildren(t *testing.T) {
 	if err := h.Doctor(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if len(runner.calls) != 2 || !strings.Contains(out.String(), "all 4 app endpoint checks passed") {
+	if len(runner.calls) != 2 || !strings.Contains(out.String(), "all 5 app endpoint checks passed") {
 		t.Fatalf("not batched or incomplete: %s", out)
 	}
 	if strings.Count(strings.Join(runner.calls[0].Args, " "), "abr-app-octane.service") != 1 {

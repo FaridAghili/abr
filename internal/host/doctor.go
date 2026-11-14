@@ -140,6 +140,8 @@ func endpointUnit(app, purpose string) string {
 		suffix = "inertia-ssr"
 	case "nightwatch-ingest":
 		suffix = "nightwatch"
+	case "reverb":
+		suffix = "reverb"
 	}
 	return "abr-" + app + "-" + suffix + ".service"
 }

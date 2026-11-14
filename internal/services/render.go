@@ -33,14 +33,14 @@ type Plan struct {
 
 type data struct {
 	Name, User, Directory, Type, WebDriver                                string
-	SiteDomains, Domain                                                   string
+	SiteDomains, Domain, ReverbDomain                                     string
 	Aliases                                                               []string
 	EmbedPaths                                                            []string
 	FrameAncestors                                                        string
 	AssetRoot, AssetPath, HTTPDomains                                     string
 	PHPBinary, NodeBinary, ManagedEnvironmentFile, FPMSocket              string
 	OctaneHTTPPort, RoadRunnerRPCPort, NuxtHTTPPort, NightwatchIngestPort int
-	OctaneWorkers, FPMChildren, QueueWorkers                              int
+	OctaneWorkers, FPMChildren, QueueWorkers, ReverbPort                  int
 	FPMEnvironment                                                        string
 }
 
@@ -92,11 +92,16 @@ func RenderMaintenance(a config.App, templates string) (File, error) {
 	return File{SitePath(a), data, 0644}, nil
 }
 
-// siteData has the domain fields the Caddy templates use.
+// siteData has the domain fields the maintenance template uses. A stopped
+// app's Reverb domain answers 503 too, so WebSocket clients retry later.
 func siteData(a config.App) data {
-	d := data{Name: a.Name, Domain: a.Domain, SiteDomains: strings.Join(append([]string{a.Domain}, a.Domains...), ", "), Aliases: a.Aliases}
+	domains := append([]string{a.Domain}, a.Domains...)
+	if a.Reverb.Enabled() {
+		domains = append(domains, a.Reverb.Domain)
+	}
+	d := data{Name: a.Name, Domain: a.Domain, SiteDomains: strings.Join(domains, ", "), Aliases: a.Aliases}
 	httpDomains := []string{}
-	for _, domain := range append([]string{a.Domain}, a.Domains...) {
+	for _, domain := range domains {
 		httpDomains = append(httpDomains, "http://"+domain)
 	}
 	d.HTTPDomains = strings.Join(httpDomains, ", ")
@@ -117,7 +122,7 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 		}
 	}
 	d := data{Name: a.Name, User: a.User, Directory: a.Directory, Type: a.Type, WebDriver: a.Web.Driver,
-		Domain: a.Domain, SiteDomains: strings.Join(append([]string{a.Domain}, a.Domains...), ", "), Aliases: a.Aliases,
+		Domain: a.Domain, ReverbDomain: a.Reverb.Domain, SiteDomains: strings.Join(append([]string{a.Domain}, a.Domains...), ", "), Aliases: a.Aliases,
 		PHPBinary: "/usr/bin/php" + PHPVersion, NodeBinary: "/usr/bin/node", OctaneWorkers: a.Web.Workers, QueueWorkers: a.Queue.Workers,
 		ManagedEnvironmentFile: filepath.Join(state, "env", a.Name+".env"), FPMSocket: "/run/php/abr-" + a.Name + ".sock",
 	}
@@ -161,6 +166,12 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 		case "inertia-ssr":
 			p.Environment["INERTIA_SSR_URL"] = "http://127.0.0.1:" + strconv.Itoa(port)
 			p.Environment["SSR_PORT"] = strconv.Itoa(port)
+		case "reverb":
+			// Where Reverb listens. REVERB_HOST and REVERB_PORT stay in .env:
+			// Vite builds may copy them into the browser bundle.
+			d.ReverbPort = port
+			p.Environment["REVERB_SERVER_HOST"] = "127.0.0.1"
+			p.Environment["REVERB_SERVER_PORT"] = strconv.Itoa(port)
 		}
 	}
 	keys := make([]string, 0, len(p.Environment))
@@ -224,6 +235,7 @@ func Render(a config.App, r ports.Registry, templates, state string) (Plan, erro
 	}{
 		{a.Nightwatch.Enabled, "nightwatch.service.tmpl", "nightwatch.service"},
 		{a.InertiaSSR.Enabled, "inertia-ssr.service.tmpl", "inertia-ssr.service"},
+		{a.Reverb.Enabled(), "reverb.service.tmpl", "reverb.service"},
 		{a.Scheduler.Enabled, "scheduler.service.tmpl", "scheduler.service"},
 		{a.Scheduler.Enabled, "scheduler.timer.tmpl", "scheduler.timer"},
 	} {

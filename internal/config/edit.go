@@ -43,6 +43,8 @@ func (changes AppChanges) Apply(a App) (App, error) {
 			a.Nightwatch.Enabled = v.Nightwatch.Enabled
 		case "inertia-ssr":
 			a.InertiaSSR.Enabled = v.InertiaSSR.Enabled
+		case "reverb-domain":
+			a.Reverb.Domain = v.Reverb.Domain
 		case "database":
 			a.Database.Enabled = v.Database.Enabled
 		case "backup-schedule":

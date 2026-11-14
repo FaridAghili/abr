@@ -441,7 +441,7 @@ composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel
   cd "$fixture_source/laravel"
   # Match Abr's shared 2025.1 runtime. HTTP 4.2 requires the old 3.0
   # metapackage, which Composer correctly blocks for a security advisory.
-  composer require laravel/octane spiral/roadrunner-cli \
+  composer require laravel/octane laravel/reverb spiral/roadrunner-cli \
     'spiral/roadrunner-http:~4.1.0' 'spiral/roadrunner:~2025.1.0' \
     --no-update --no-scripts --no-interaction
   composer update --no-install --no-scripts --no-interaction
@@ -809,7 +809,7 @@ PHP
 sudo php -r '$p="/srv/apps/fixture-octane/composer.json"; $c=json_decode(file_get_contents($p),true); $c["scripts"]["pre-install-cmd"][]="@php abr-fixture-assets.php"; file_put_contents($p,json_encode($c,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");'
 printf '\n.rr.yaml\n' | sudo tee -a /srv/apps/fixture-octane/.gitignore >/dev/null
 fixture_git /srv/apps/fixture-octane
-abr_ci register --name fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost --canonical-host www
+abr_ci register --name fixture-octane --type laravel --web-driver octane --domain fixture-octane.localhost --canonical-host www --reverb-domain ws.fixture-octane.localhost
 sudo rm -f /srv/apps/fixture-octane/.env
 abr_ci env fixture-octane
 sudo test "$(sudo stat -c '%U:%a' /srv/apps/fixture-octane/.env)" = abr-fixture-octane:600
@@ -821,6 +821,64 @@ fixture_security_headers "$fixture_source/octane-headers"
 fixture_static_cache www.fixture-octane.localhost /srv/apps/fixture-octane/public abr-fixture-octane
 fixture_redirect www.fixture-octane.localhost www.fixture-octane.localhost http
 fixture_redirect fixture-octane.localhost www.fixture-octane.localhost
+fixture_reverb_up() {
+  curl --silent --insecure --resolve ws.fixture-octane.localhost:443:127.0.0.1 \
+    -o "$fixture_source/reverb-up" --write-out '%{http_code}' https://ws.fixture-octane.localhost/up
+}
+# Reverb serves only its own domain: its health check, the WebSocket handshake
+# and Pusher's welcome message pass through Caddy; other paths never reach Laravel.
+sudo systemctl is-active --quiet abr-fixture-octane-reverb.service
+for reverb_value in BROADCAST_CONNECTION=reverb REVERB_HOST=ws.fixture-octane.localhost REVERB_PORT=443 REVERB_SCHEME=https; do
+  sudo grep -Fx "$reverb_value" /srv/apps/fixture-octane/.env
+done
+sudo grep -Fx 'REVERB_SERVER_HOST="127.0.0.1"' /var/lib/abr-ci/env/fixture-octane.env
+reverb_key=$(sudo sed -n 's/^REVERB_APP_KEY=//p' /srv/apps/fixture-octane/.env)
+test -n "$reverb_key"
+test -n "$(sudo sed -n 's/^REVERB_APP_SECRET=//p' /srv/apps/fixture-octane/.env)"
+if sudo grep -R -F "$(sudo sed -n 's/^REVERB_APP_SECRET=//p' /srv/apps/fixture-octane/.env)" /var/lib/abr-ci/deployments; then
+  echo 'Reverb secret leaked to deployment history' >&2; exit 1
+fi
+for attempt in $(seq 20); do
+  [[ $(fixture_reverb_up) == 200 ]] && break
+  sleep 1
+done
+grep -F '"health":"OK"' "$fixture_source/reverb-up"
+for reverb_uri in / /index.php /.env /up/extra; do
+  reverb_status=$(curl --silent --insecure --resolve ws.fixture-octane.localhost:443:127.0.0.1 \
+    -o /dev/null --write-out '%{http_code}' "https://ws.fixture-octane.localhost$reverb_uri")
+  test "$reverb_status" = 404
+done
+cat > "$fixture_source/reverb-handshake.php" <<'PHP'
+<?php
+// TLS to the local Caddy with SNI, then a raw HTTP/1.1 WebSocket upgrade.
+[$_, $host, $key] = $argv;
+$context = stream_context_create(['ssl' => ['peer_name' => $host, 'verify_peer' => false, 'verify_peer_name' => false]]);
+$socket = stream_socket_client('ssl://127.0.0.1:443', $code, $error, 5, STREAM_CLIENT_CONNECT, $context) or exit("connect failed: $error\n");
+stream_set_timeout($socket, 5);
+fwrite($socket, "GET /app/$key?protocol=7&client=js&version=8.4.0 HTTP/1.1\r\nHost: $host\r\nOrigin: https://$host\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
+$received = '';
+while (!str_contains($received, 'pusher:connection_established') && !feof($socket) && strlen($received) < 8192) {
+    $chunk = fread($socket, 1024);
+    if ($chunk === false || ($chunk === '' && stream_get_meta_data($socket)['timed_out'])) {
+        break;
+    }
+    $received .= $chunk;
+}
+if (!str_starts_with($received, 'HTTP/1.1 101') || !str_contains($received, 'pusher:connection_established')) {
+    exit("WebSocket handshake failed:\n$received\n");
+}
+echo "Reverb WebSocket connection established\n";
+PHP
+php "$fixture_source/reverb-handshake.php" ws.fixture-octane.localhost "$reverb_key"
+# A stopped app's Reverb domain answers 503 so clients retry, keeping its certificate.
+abr_ci disable fixture-octane
+test "$(fixture_reverb_up)" = 503
+abr_ci enable fixture-octane
+for attempt in $(seq 20); do
+  [[ $(fixture_reverb_up) == 200 ]] && break
+  sleep 1
+done
+test "$(fixture_reverb_up)" = 200
 sudo test ! -f /srv/apps/fixture-octane/rr
 sudo test -x /usr/local/bin/rr
 abr_ci restart fixture-octane web
@@ -873,7 +931,7 @@ for rendering in true false; do
   abr_ci deploy "$app" --no-pull
   sudo test ! -e "$dir/.env"
   sudo test ! -e "/etc/php/8.5/fpm/pool.d/abr-$app.conf"
-  for component in octane queue@1 scheduler nightwatch inertia-ssr; do
+  for component in octane queue@1 scheduler nightwatch inertia-ssr reverb; do
     sudo test ! -e "/etc/systemd/system/abr-$app-$component.service"
   done
   fixture_caddy_format "/etc/caddy/abr.d/abr-$app.caddy"

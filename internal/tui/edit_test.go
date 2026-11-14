@@ -83,3 +83,59 @@ func TestEmbeddingFormPrefillsAndDisables(t *testing.T) {
 		t.Fatalf("disable did not clear both lists: %v", m.current.args)
 	}
 }
+
+func TestEditReverbDomainPrefillsAndDisables(t *testing.T) {
+	m := newModel(testOptions(t))
+	a := config.App{Name: "app", Type: "laravel", Web: config.Web{Driver: "fpm"}, Reverb: config.Reverb{Domain: "ws.example.com"}}
+	m.editForm(a, "reverb")
+	if !strings.Contains(m.form.View(), "Example: ws.example.com") {
+		t.Fatal("missing description/example")
+	}
+	m.next()
+	if strings.Join(m.current.args, " ") != "edit app --reverb-domain ws.example.com" || !strings.Contains(m.reviewText, "Deploy afterward") {
+		t.Fatalf("lost Reverb domain: %v", m.current.args)
+	}
+	a.Reverb.Domain = ""
+	m.editForm(a, "reverb")
+	m.next()
+	if len(m.current.args) != 4 || m.current.args[2] != "--reverb-domain" || m.current.args[3] != "" {
+		t.Fatalf("clearing did not disable Reverb: %q", m.current.args)
+	}
+	if err := reverbDomainValid(""); err == nil {
+		t.Fatal("registration accepted an empty Reverb domain")
+	}
+	if err := reverbDomainValid("-ws.example.com"); err == nil {
+		t.Fatal("invalid Reverb domain accepted")
+	}
+}
+
+func TestRegistrationAdvancedReverb(t *testing.T) {
+	m := newModel(testOptions(t))
+	m.registrationForm("app", "laravel", true)
+	m.Update(tea.PasteMsg{Content: "example.com"})
+	for step := 0; !strings.Contains(m.form.View(), "Advanced settings?"); step++ {
+		if step > 12 {
+			t.Fatal("advanced settings inaccessible")
+		}
+		m.form.NextGroup()
+	}
+	press(m, tea.KeyDown)
+	m.form.NextGroup()
+	if !strings.Contains(m.form.View(), "Reverb · WebSockets") {
+		t.Fatal("Reverb option missing")
+	}
+	for range 3 {
+		press(m, tea.KeyDown)
+	}
+	press(m, tea.KeySpace)
+	m.form.NextGroup()
+	if !strings.Contains(m.form.View(), "Reverb domain") {
+		t.Fatalf("Reverb domain step missing:\n%s", m.form.View())
+	}
+	m.Update(tea.PasteMsg{Content: "ws.example.com"})
+	m.next()
+	args := strings.Join(m.current.args, " ")
+	if !strings.Contains(args, "--reverb-domain ws.example.com") || strings.Contains(args, "--reverb ") {
+		t.Fatalf("registration lost Reverb domain: %v", m.current.args)
+	}
+}

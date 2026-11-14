@@ -104,7 +104,7 @@ func (m *model) registerForm() tea.Cmd {
 
 func (m *model) registrationForm(name, detected string, cloned bool) tea.Cmd {
 	m.context, m.notice = "", ""
-	var domain, kind, driver, aliases, domains, health string
+	var domain, kind, driver, aliases, domains, health, reverbDomain string
 	var configOnly, extra bool
 	canonicalHost := config.CanonicalWWW
 	workers, fpmWorkers, queue := "2", "8", "0"
@@ -142,7 +142,11 @@ func (m *model) registrationForm(name, detected string, cloned bool) tea.Cmd {
 			if extra {
 				args = append(args, "--build-order", buildOrder)
 				for _, component := range components {
-					args = append(args, "--"+component)
+					if component == "reverb" {
+						args = append(args, "--reverb-domain", reverbDomain)
+					} else {
+						args = append(args, "--"+component)
+					}
 				}
 			}
 			if !database {
@@ -185,7 +189,10 @@ func (m *model) registrationForm(name, detected string, cloned bool) tea.Cmd {
 	}
 	groups = append(groups, huh.NewGroup(huh.NewSelect[bool]().Title("Advanced settings?").Description("Most apps can skip these optional settings.\nExample: add an old domain that redirects to your primary domain.").Options(huh.NewOption("Skip (default)", false), huh.NewOption("Configure extras", true)).Value(&extra)))
 	if detected != "nuxt" {
-		groups = append(groups, huh.NewGroup(huh.NewMultiSelect[string]().Height(8).Title("Laravel components").Description("Optional services used by this project.\nExample: scheduler for scheduled jobs.").Options(huh.NewOption("Scheduler · scheduled jobs", "scheduler"), huh.NewOption("Nightwatch · monitoring", "nightwatch"), huh.NewOption("Inertia SSR · server rendering", "inertia-ssr")).Value(&components)).WithHideFunc(func() bool { return !extra || kind != "laravel" }))
+		groups = append(groups, huh.NewGroup(huh.NewMultiSelect[string]().Height(8).Title("Laravel components").Description("Optional services used by this project.\nExample: scheduler for scheduled jobs.").Options(huh.NewOption("Scheduler · scheduled jobs", "scheduler"), huh.NewOption("Nightwatch · monitoring", "nightwatch"), huh.NewOption("Inertia SSR · server rendering", "inertia-ssr"), huh.NewOption("Reverb · WebSockets", "reverb")).Value(&components)).WithHideFunc(func() bool { return !extra || kind != "laravel" }))
+		groups = append(groups, huh.NewGroup(textInput("Reverb domain", reverbDomainHelp, "ws.example.com", &reverbDomain).Validate(reverbDomainValid)).WithHideFunc(func() bool {
+			return !extra || kind != "laravel" || !slices.Contains(components, "reverb")
+		}))
 		groups = append(groups, huh.NewGroup(buildOrderSelect(&buildOrder)).WithHideFunc(func() bool { return !extra || kind != "laravel" }))
 	}
 	groups = append(groups,

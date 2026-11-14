@@ -484,6 +484,9 @@ func (m *model) serviceForm(app config.App, command string) tea.Cmd {
 	if app.InertiaSSR.Enabled {
 		choices = append(choices, huh.NewOption("Inertia SSR", "inertia-ssr"))
 	}
+	if app.Reverb.Enabled() {
+		choices = append(choices, huh.NewOption("Reverb", "reverb"))
+	}
 	var selected string
 	return m.setForm("form", command+" / "+app.Name, func() tea.Cmd {
 		args := []string{command, app.Name}

@@ -34,6 +34,13 @@ SQL
   fixture_https fixture-php.localhost | grep -F 'Laravel fixture database=1'
   curl --fail --silent --insecure --resolve fixture-php.localhost:443:127.0.0.1 https://fixture-php.localhost/full-saved.txt | grep -F 'saved working source'
   fixture_https api.fixture-octane.localhost | grep -F 'Abr Nuxt fixture'
+  # A restored Reverb app serves WebSockets again at its own domain.
+  sudo systemctl is-active --quiet abr-fixture-octane-reverb.service
+  for attempt in $(seq 20); do
+    [[ $(fixture_reverb_up) == 200 ]] && break
+    sleep 1
+  done
+  test "$(fixture_reverb_up)" = 200
   if sudo systemctl is-active --quiet abr-fixture-spa-nuxt.service; then
     echo 'App restore enabled a previously disabled app' >&2; exit 1
   fi

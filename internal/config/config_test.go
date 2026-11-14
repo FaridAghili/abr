@@ -198,3 +198,37 @@ func TestBackupScheduleValidationAndInterval(t *testing.T) {
 		t.Fatal("off did not clear only the schedule", a.Backup, err)
 	}
 }
+
+func TestReverbDomain(t *testing.T) {
+	a := testApp()
+	a.Reverb.Domain = "ws.example.com"
+	if err := a.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Endpoints(); !reflect.DeepEqual(got, []string{"reverb"}) {
+		t.Fatalf("Reverb endpoint missing: %v", got)
+	}
+	bad := a
+	bad.Reverb.Domain = "-ws.example.com"
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "Reverb domain") {
+		t.Fatalf("invalid Reverb domain accepted: %v", err)
+	}
+	nuxt := App{Name: "web", Directory: "/srv/web", User: "web", Type: "nuxt", Domain: "web.example.com", Reverb: Reverb{Domain: "ws.example.com"}}
+	if err := nuxt.Validate(); err == nil {
+		t.Fatal("Nuxt app accepted Reverb")
+	}
+	// The Reverb domain must not serve another app or this app's site.
+	other := App{Name: "web", Directory: "/srv/web", User: "web", Type: "nuxt", Domain: "WS.example.com"}
+	if err := (Config{Ports: Default().Ports, Apps: []App{a, other}}).Validate(); err == nil || !strings.Contains(err.Error(), "duplicate domain") {
+		t.Fatalf("Reverb domain shared with another app: %v", err)
+	}
+	same := a
+	same.Reverb.Domain = a.Domain
+	if err := (Config{Ports: Default().Ports, Apps: []App{same}}).Validate(); err == nil {
+		t.Fatal("Reverb domain shared with the app's own site")
+	}
+	edited, err := AppChanges{Values: App{Reverb: Reverb{}}, Fields: []string{"reverb-domain"}}.Apply(a)
+	if err != nil || edited.Reverb.Enabled() || len(edited.Endpoints()) != 0 {
+		t.Fatalf("empty Reverb domain did not disable Reverb: %+v %v", edited.Reverb, err)
+	}
+}

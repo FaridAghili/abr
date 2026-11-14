@@ -48,7 +48,7 @@ type Probe func(int) error
 
 func ValidPurpose(p string) bool {
 	switch p {
-	case "octane-http", "roadrunner-rpc", "nuxt-http", "inertia-ssr", "nightwatch-ingest":
+	case "octane-http", "roadrunner-rpc", "nuxt-http", "inertia-ssr", "nightwatch-ingest", "reverb":
 		return true
 	}
 	return false

@@ -59,7 +59,7 @@ func (h Host) application(name string) (config.App, ports.Registry, error) {
 }
 
 func unitAllowed(name, unit string) bool {
-	return regexp.MustCompile(`^abr-` + regexp.QuoteMeta(name) + `-((octane|nuxt|queue@[1-9][0-9]*|nightwatch|inertia-ssr|scheduler)\.service|scheduler\.timer)$`).MatchString(unit)
+	return regexp.MustCompile(`^abr-` + regexp.QuoteMeta(name) + `-((octane|nuxt|queue@[1-9][0-9]*|nightwatch|inertia-ssr|reverb|scheduler)\.service|scheduler\.timer)$`).MatchString(unit)
 }
 
 func (h Host) fileAllowed(a config.App, path string) bool {

@@ -57,6 +57,23 @@ sudo abr deploy api --no-pull
 Use `--type nuxt` for Nuxt. Laravel defaults to PHP-FPM with up to 8 on-demand
 workers; `--web-workers N` sets PHP-FPM's limit or the Octane process count.
 Octane, queues and scheduled jobs are optional. Set app secrets before deploying.
+
+For WebSockets, a Laravel app can run Laravel Reverb at its own domain:
+`--reverb-domain ws.example.com` when registering, `abr edit api --reverb-domain ws.example.com`
+later, or **Reverb · WebSockets** in the menu. Point that domain's DNS at the VPS.
+Reverb runs as the app's own service on a reserved local port. Caddy serves its
+WebSocket path `/app`, its API `/apps` and its `/up` health check at that domain
+and answers 404 for everything else. `abr env` and every deployment set
+`BROADCAST_CONNECTION=reverb`, `REVERB_HOST` (the Reverb domain), `REVERB_PORT=443`
+and `REVERB_SCHEME=https` in `.env`, and generate `REVERB_APP_ID`, `REVERB_APP_KEY`
+and `REVERB_APP_SECRET` only when they are empty. The app sends broadcasts to
+Reverb through that public domain. A separate frontend, such as a Nuxt app,
+connects with Laravel Echo to `wss://ws.example.com` using the public app key
+`abr env` prints; list its origin in `allowed_origins` in `config/reverb.php`.
+Open connections survive other apps' deployments; deploying the app itself
+restarts Reverb, and clients reconnect. Each Reverb server holds about 1,000
+connections at once, the limit of PHP's built-in event loop. `--reverb-domain ''`
+stops Reverb and leaves its `.env` values; change `BROADCAST_CONNECTION` yourself.
 Each Laravel app gets its own pair of Redis databases, from 10 upwards: `abr env`
 and every deployment set `REDIS_DB` (sessions, queues and locks),
 `REDIS_CACHE_DB` and `REDIS_PREFIX` in its `.env`, so `cache:clear` empties only

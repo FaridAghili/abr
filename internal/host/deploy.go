@@ -330,6 +330,9 @@ func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result er
 		if err := h.useOwnRedis(a, r); err != nil {
 			return err
 		}
+		if err := h.useOwnReverb(a); err != nil {
+			return err
+		}
 		if frontend {
 			if err := installPackages(); err != nil {
 				return err

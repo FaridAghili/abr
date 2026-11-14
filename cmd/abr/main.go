@@ -259,6 +259,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&app.Scheduler.Enabled, "scheduler", false, "enable/disable scheduler")
 		fs.BoolVar(&app.Nightwatch.Enabled, "nightwatch", false, "enable/disable Nightwatch")
 		fs.BoolVar(&app.InertiaSSR.Enabled, "inertia-ssr", false, "enable/disable Inertia SSR")
+		fs.StringVar(&app.Reverb.Domain, "reverb-domain", "", "Laravel Reverb WebSocket domain, e.g. ws.example.com (empty disables)")
 		fs.BoolVar(&app.Database.Enabled, "database", false, "enable/disable managed database; existing data retained")
 		fs.StringVar(&app.Backup.Schedule, "backup-schedule", "", "automatic backups: 6h (every 1-23 hours), daily, weekly or off")
 		fs.IntVar(&app.Backup.Keep, "backup-keep", 0, "newest backups to keep on the backup server, or locally without one (0 keeps all)")
@@ -293,6 +294,7 @@ func run(args []string, out, stderr io.Writer) error {
 		fs.BoolVar(&app.Scheduler.Enabled, "scheduler", false, "enable Laravel scheduler")
 		fs.BoolVar(&app.Nightwatch.Enabled, "nightwatch", false, "enable Laravel Nightwatch")
 		fs.BoolVar(&app.InertiaSSR.Enabled, "inertia-ssr", false, "enable Inertia SSR (bundle must honor SSR_PORT)")
+		fs.StringVar(&app.Reverb.Domain, "reverb-domain", "", "enable Laravel Reverb at its own WebSocket domain, e.g. ws.example.com")
 		fs.BoolVar(&configOnly, "config-only", false, "save portable config/ports only; do not create host users/databases")
 		fs.BoolVar(&noDatabase, "no-database", false, "Laravel: use an existing/self-managed database")
 		fs.Var(&imports, "port", "import free ENDPOINT=PORT (repeatable)")
@@ -342,7 +344,7 @@ func run(args []string, out, stderr io.Writer) error {
 	if command == "edit" {
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
-			case "embed-path", "embed-origin", "domain", "canonical-host", "alias", "serving-domain", "health-check", "build-order", "web-driver", "web-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "database", "backup-schedule", "backup-keep":
+			case "embed-path", "embed-origin", "domain", "canonical-host", "alias", "serving-domain", "health-check", "build-order", "web-driver", "web-workers", "queue-workers", "scheduler", "nightwatch", "inertia-ssr", "reverb-domain", "database", "backup-schedule", "backup-keep":
 				changes.Fields = append(changes.Fields, f.Name)
 			}
 		})
@@ -1014,7 +1016,7 @@ func (p *portFlags) String() string { return "ENDPOINT=PORT" }
 func (p *portFlags) Set(value string) error {
 	parts := strings.Split(value, "=")
 	if len(parts) != 2 || !ports.ValidPurpose(parts[0]) {
-		return fmt.Errorf("expected ENDPOINT=PORT (octane-http, roadrunner-rpc, nuxt-http, inertia-ssr, nightwatch-ingest)")
+		return fmt.Errorf("expected ENDPOINT=PORT (octane-http, roadrunner-rpc, nuxt-http, inertia-ssr, nightwatch-ingest, reverb)")
 	}
 	port, err := strconv.Atoi(parts[1])
 	if err != nil || port < 1024 || port > 65535 {

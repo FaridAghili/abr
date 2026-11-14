@@ -16,7 +16,7 @@ func (m *model) editMenu(app config.App) tea.Cmd {
 	selected := m.choice(app.Name + " / Edit settings")
 	choices := []huh.Option[string]{huh.NewOption("Domains", "domains"), huh.NewOption("Health check", "health")}
 	if app.Type == "laravel" {
-		choices = append(choices, huh.NewOption("Workers", "workers"), huh.NewOption("Components", "components"), huh.NewOption("Build order", "build-order"))
+		choices = append(choices, huh.NewOption("Workers", "workers"), huh.NewOption("Components", "components"), huh.NewOption("WebSockets", "reverb"), huh.NewOption("Build order", "build-order"))
 	}
 	choices = append(choices, huh.NewOption("Iframe embedding", "embedding"), huh.NewOption("Backups", "backups"), huh.NewOption("Back", "back"))
 	return m.setForm("app", app.Name+" / Edit settings", func() tea.Cmd {
@@ -109,6 +109,15 @@ func (m *model) editForm(app config.App, section string) tea.Cmd {
 			}
 			return []string{"--backup-schedule", value, "--backup-keep", keep}
 		}
+	case "reverb":
+		domain := app.Reverb.Domain
+		groups = []*huh.Group{huh.NewGroup(textInput("Reverb domain", reverbDomainHelp+" Clear to disable Reverb.", "ws.example.com", &domain).Validate(func(s string) error {
+			if s == "" {
+				return nil
+			}
+			return reverbDomainValid(s)
+		}))}
+		flags = func() []string { return []string{"--reverb-domain", domain} }
 	case "health":
 		health := app.HealthCheck
 		groups = []*huh.Group{huh.NewGroup(textInput("Health check URL", "Check this URL after deployment. Clear to disable this check.", "https://example.com/up", &health))}
@@ -181,6 +190,16 @@ func (m *model) editForm(app config.App, section string) tea.Cmd {
 		}
 		return m.review(action{title: "Save settings: " + app.Name, args: args, note: note + "\n\n" + clean(strings.Join(flags(), " "))})
 	}, groups...)
+}
+
+const reverbDomainHelp = "Its own hostname for Laravel Reverb WebSockets. Point its DNS to this VPS."
+
+func reverbDomainValid(s string) error {
+	a := config.App{Name: "test", Directory: "/srv/test", User: "abr-test", Type: "laravel", Domain: "app.invalid", Web: config.Web{Driver: "fpm"}, Reverb: config.Reverb{Domain: s}}
+	if s == "" {
+		return fmt.Errorf("Enter a domain such as ws.example.com")
+	}
+	return a.Validate()
 }
 
 func buildOrderSelect(order *string) *huh.Select[string] {

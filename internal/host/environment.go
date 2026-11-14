@@ -1,11 +1,14 @@
 package host
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +34,7 @@ func (h Host) PrepareEnv(name string) error {
 			return err
 		}
 		if h.DryRun {
-			h.say("Would copy .env.example to .env if absent for %s when the example exists, preserve existing settings and fill managed MySQL values when enabled and a Laravel app's own Redis databases; skip preparation if no example exists", name)
+			h.say("Would copy .env.example to .env if absent for %s when the example exists, preserve existing settings and fill managed MySQL values when enabled, a Laravel app's own Redis databases and its Reverb values when enabled; skip preparation if no example exists", name)
 			return nil
 		}
 		exists, err := project.HasEnvExample(h.path(a.Directory))
@@ -74,6 +77,13 @@ func (h Host) PrepareEnv(name string) error {
 			}
 			data = setEnvValues(data, redis)
 		}
+		var reverb [][2]string
+		if a.Reverb.Enabled() {
+			if reverb, err = reverbValues(a, data); err != nil {
+				return err
+			}
+			data = setEnvValues(data, reverb)
+		}
 		if err := h.writeEnvironment(a, data); err != nil {
 			return err
 		}
@@ -87,6 +97,12 @@ func (h Host) PrepareEnv(name string) error {
 		}
 		if redis != nil {
 			h.say("Set this app's own Redis databases in .env: %s", formatEnvValues(redisPublicValues(redis)))
+		}
+		if len(reverb) > 0 {
+			h.say("Set Reverb values in .env: %s", formatEnvValues(reverbPublicValues(reverb)))
+		}
+		if a.Reverb.Enabled() {
+			h.say("%s", reverbClientHint(a, data))
 		}
 		h.say("Review .env for app secrets before deployment")
 		return nil
@@ -165,6 +181,91 @@ func (h Host) checkRedisDatabases(a config.App, values [][2]string) error {
 	if cache >= available {
 		return fmt.Errorf("%s uses Redis databases %s and %d, but Redis has %d; run abr setup to apply the managed Redis configuration, then deploy again", a.Name, values[0][1], cache, available)
 	}
+	return nil
+}
+
+// reverbValues points Laravel's Reverb broadcaster at the app's Reverb domain,
+// through Caddy, and generates the app credentials when .env has none. The
+// browser connects to the same host, port and scheme.
+func reverbValues(a config.App, data []byte) ([][2]string, error) {
+	values := [][2]string{{"BROADCAST_CONNECTION", "reverb"}, {"REVERB_HOST", a.Reverb.Domain}, {"REVERB_PORT", "443"}, {"REVERB_SCHEME", "https"}}
+	for _, credential := range []struct {
+		key    string
+		digits bool
+	}{{"REVERB_APP_ID", true}, {"REVERB_APP_KEY", false}, {"REVERB_APP_SECRET", false}} {
+		if dotenvValue(data, credential.key) != "" {
+			continue
+		}
+		value, err := reverbCredential(credential.digits)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, [2]string{credential.key, value})
+	}
+	var changed [][2]string
+	for _, pair := range values {
+		if dotenvValue(data, pair[0]) != pair[1] {
+			changed = append(changed, pair)
+		}
+	}
+	return changed, nil
+}
+
+// reverbCredential matches reverb:install: a six-digit app ID, or 20
+// lowercase characters for the key and secret.
+func reverbCredential(digits bool) (string, error) {
+	if digits {
+		n, err := rand.Int(rand.Reader, big.NewInt(900000))
+		if err != nil {
+			return "", err
+		}
+		return strconv.FormatInt(n.Int64()+100000, 10), nil
+	}
+	secret := make([]byte, 10)
+	if _, err := rand.Read(secret); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(secret), nil
+}
+
+// reverbPublicValues omits the app secret from messages.
+func reverbPublicValues(values [][2]string) [][2]string {
+	var public [][2]string
+	for _, pair := range values {
+		if pair[0] != "REVERB_APP_SECRET" {
+			public = append(public, pair)
+		}
+	}
+	return public
+}
+
+// reverbClientHint tells the owner what a separate frontend needs; the app key
+// is public, the secret never leaves the server.
+func reverbClientHint(a config.App, data []byte) string {
+	return fmt.Sprintf("WebSocket clients connect to wss://%s:443 with app key %s; point Reverb's DNS at this VPS", a.Reverb.Domain, dotenvValue(data, "REVERB_APP_KEY"))
+}
+
+// useOwnReverb writes the app's Reverb values into .env only when they differ.
+func (h Host) useOwnReverb(a config.App) error {
+	if !a.Reverb.Enabled() {
+		return nil
+	}
+	if h.DryRun {
+		h.say("Would set BROADCAST_CONNECTION, REVERB_HOST, REVERB_PORT and REVERB_SCHEME in .env for %s, and generate Reverb credentials if missing", a.Reverb.Domain)
+		return nil
+	}
+	data, err := readProjectEnv(h.path(filepath.Join(a.Directory, ".env")))
+	if err != nil {
+		return err
+	}
+	values, err := reverbValues(a, data)
+	if err != nil || len(values) == 0 {
+		return err
+	}
+	if err := h.writeEnvironment(a, setEnvValues(data, values)); err != nil {
+		return err
+	}
+	h.note("Set Reverb values in .env: %s", formatEnvValues(reverbPublicValues(values)))
 	return nil
 }
 

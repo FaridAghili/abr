@@ -79,6 +79,8 @@ func TestEditRejectsDomainAndPortConflictsWithoutSaving(t *testing.T) {
 	for _, change := range []config.AppChanges{
 		{Values: config.App{Domain: "other.test"}, Fields: []string{"domain"}},
 		{Values: config.App{Nightwatch: config.Component{Enabled: true}}, Fields: []string{"nightwatch"}},
+		{Values: config.App{Reverb: config.Reverb{Domain: "other.test"}}, Fields: []string{"reverb-domain"}},
+		{Values: config.App{Reverb: config.Reverb{Domain: "ws.app.test"}}, Fields: []string{"reverb-domain"}},
 	} {
 		if err := m.Edit("app", change, true); err == nil {
 			t.Fatal("conflict succeeded")
@@ -117,5 +119,25 @@ func TestEditPreviewDoesNotCreateStateOrLocks(t *testing.T) {
 	after, _ := os.ReadFile(m.ConfigPath)
 	if !bytes.Equal(data, after) {
 		t.Fatal("preview saved config")
+	}
+}
+
+func TestEditReverbDomainReservesPort(t *testing.T) {
+	m := testManager(t)
+	if _, err := m.Register(testApp("app"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Edit("app", config.AppChanges{Values: config.App{Reverb: config.Reverb{Domain: "ws.app.test"}}, Fields: []string{"reverb-domain"}}, true); err != nil {
+		t.Fatal(err)
+	}
+	c, r, err := m.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Apps[0].Reverb.Domain != "ws.app.test" {
+		t.Fatalf("Reverb domain not saved: %+v", c.Apps[0].Reverb)
+	}
+	if _, ok := r.Lookup("app", "reverb"); !ok {
+		t.Fatal("missing Reverb reservation")
 	}
 }

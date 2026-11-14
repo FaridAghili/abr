@@ -336,3 +336,96 @@ func TestEnvEditorChangeCheckRejectsRemovedOrUnsafeFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestPrepareEnvSetsReverbValuesAndKeepsCredentials(t *testing.T) {
+	h, runner, out, a := fixture(t)
+	a.Reverb.Domain = "ws.example.com"
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(a.Directory, ".env")
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	// reverb:install's local values must not reach production.
+	example := "BROADCAST_CONNECTION=log\nREVERB_APP_ID=\nREVERB_APP_KEY=\nREVERB_APP_SECRET=\nREVERB_HOST=\"localhost\"\nREVERB_PORT=8080\nREVERB_SCHEME=http\nVITE_REVERB_HOST=\"${REVERB_HOST}\"\n"
+	if err := os.WriteFile(filepath.Join(a.Directory, ".env.example"), []byte(example), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.PrepareEnv(a.Name); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"BROADCAST_CONNECTION": "reverb", "REVERB_HOST": "ws.example.com", "REVERB_PORT": "443", "REVERB_SCHEME": "https", "VITE_REVERB_HOST": "${REVERB_HOST}"} {
+		if got := dotenvValue(data, key); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+	id, key, secret := dotenvValue(data, "REVERB_APP_ID"), dotenvValue(data, "REVERB_APP_KEY"), dotenvValue(data, "REVERB_APP_SECRET")
+	if len(id) != 6 || id[0] == '0' || len(key) != 20 || len(secret) != 20 || key == secret || strings.ToLower(key) != key {
+		t.Fatalf("bad Reverb credentials: %q %q %q", id, key, secret)
+	}
+	if strings.Contains(out.String(), secret) || !strings.Contains(out.String(), "wss://ws.example.com:443 with app key "+key) {
+		t.Fatalf("Reverb output leaked the secret or omitted client settings:\n%s", out)
+	}
+	for _, command := range runner.calls {
+		if strings.Contains(strings.Join(command.Args, " "), secret) {
+			t.Fatal("Reverb secret in command arguments")
+		}
+	}
+	// Existing credentials survive; repeated preparation changes nothing.
+	if err := h.PrepareEnv(a.Name); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := os.ReadFile(path)
+	if !bytes.Equal(second, data) {
+		t.Fatalf("repeated preparation changed Reverb settings:\n%s\n%s", data, second)
+	}
+	if values, err := reverbValues(a, second); err != nil || len(values) != 0 {
+		t.Fatalf("unchanged .env reported Reverb changes: %v %v", values, err)
+	}
+	values, err := reverbValues(a, []byte("REVERB_HOST=old.example.com\nREVERB_APP_KEY=kept\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(values, func(pair [2]string) bool { return pair[0] == "REVERB_APP_KEY" }) || !slices.Contains(values, [2]string{"REVERB_HOST", "ws.example.com"}) {
+		t.Fatalf("bad Reverb changes: %v", values)
+	}
+	if slices.ContainsFunc(reverbPublicValues(values), func(pair [2]string) bool { return pair[0] == "REVERB_APP_SECRET" }) {
+		t.Fatal("public values include the secret")
+	}
+}
+
+func TestDeployKeepsReverbValuesCurrent(t *testing.T) {
+	h, _, out, a := fixture(t)
+	a.Reverb.Domain = "ws.example.com"
+	if _, err := h.Register(a, nil); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(a.Directory, ".env")
+	if err := os.WriteFile(path, []byte("APP_KEY=base64:x\nREVERB_HOST=localhost\nREVERB_APP_SECRET=kept-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.useOwnReverb(a); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if dotenvValue(data, "REVERB_HOST") != "ws.example.com" || dotenvValue(data, "REVERB_APP_SECRET") != "kept-secret" || dotenvValue(data, "APP_KEY") != "base64:x" || dotenvValue(data, "REVERB_APP_KEY") == "" {
+		t.Fatalf("bad deployed Reverb values:\n%s", data)
+	}
+	if strings.Contains(out.String(), "kept-secret") {
+		t.Fatal("secret printed")
+	}
+	// A disabled Reverb leaves .env untouched.
+	a.Reverb.Domain = ""
+	before, _ := os.ReadFile(path)
+	if err := h.useOwnReverb(a); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+		t.Fatal("disabled Reverb changed .env")
+	}
+}
