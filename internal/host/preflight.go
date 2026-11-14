@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"abr/internal/config"
 	"abr/internal/services"
@@ -16,7 +17,7 @@ import (
 // live checkout. Dependency checks run in an app-owned temporary directory.
 func (h Host) deploymentTarget(a config.App, env map[string]string, noPull bool) (string, error) {
 	if !noPull {
-		if _, err := h.asUser(a, env, true, "git", "fetch", "--prune"); err != nil {
+		if err := h.fetch(a, env); err != nil {
 			return "", fmt.Errorf("fetch repository before deployment: %w", err)
 		}
 	}
@@ -41,6 +42,29 @@ func (h Host) deploymentTarget(a config.App, env map[string]string, noPull bool)
 		}
 	}
 	return sha, nil
+}
+
+// fetchAttempts and fetchRetryDelay bound retries of an interrupted fetch.
+var (
+	fetchAttempts   = 3
+	fetchRetryDelay = 5 * time.Second
+)
+
+// fetch retries a failed git fetch, such as a connection to GitHub that
+// stalled and was ended by SSH keepalives. Fetching changes only remote
+// refs, and the app keeps serving, so another attempt is safe.
+func (h Host) fetch(a config.App, env map[string]string) error {
+	var err error
+	for attempt := 1; attempt <= fetchAttempts; attempt++ {
+		if _, err = h.asUser(a, env, true, "git", "fetch", "--prune"); err == nil || h.DryRun {
+			return err
+		}
+		if attempt < fetchAttempts {
+			h.note("  Fetching code failed; retrying (%d of %d)", attempt+1, fetchAttempts)
+			time.Sleep(fetchRetryDelay)
+		}
+	}
+	return err
 }
 
 func (h Host) preflight(a config.App, env map[string]string, commit string, noPull bool) error {

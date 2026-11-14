@@ -197,8 +197,11 @@ func (h Host) gitSSHWithKey(key string) string {
 	return gitSSHCommand(key, filepath.Join(dir, "known_hosts"))
 }
 
+// ConnectTimeout covers only connecting. A connection that stalls later, with
+// packets silently dropped, would otherwise block Git forever; keepalives end
+// it after about a minute without replies.
 func gitSSHCommand(key, knownHosts string) string {
-	return "ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o UserKnownHostsFile=" + shellQuote(knownHosts) + " -i " + shellQuote(key)
+	return "ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o UserKnownHostsFile=" + shellQuote(knownHosts) + " -i " + shellQuote(key)
 }
 
 func (h Host) sharedGit() (bool, error) {

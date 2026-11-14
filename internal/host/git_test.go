@@ -2,6 +2,7 @@ package host
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -233,5 +234,42 @@ func TestGitPreviewDoesNotCreateFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(h.gitDir()); !os.IsNotExist(err) {
 		t.Fatal("preview wrote shared identity")
+	}
+}
+
+func TestFetchRetriesInterruptedConnections(t *testing.T) {
+	h, runner, out, a := fixture(t)
+	delay := fetchRetryDelay
+	fetchRetryDelay = 0
+	t.Cleanup(func() { fetchRetryDelay = delay })
+	fetches := 0
+	failures := 2
+	runner.fail = func(c Command) error {
+		if slices.Contains(c.Args, "fetch") {
+			fetches++
+			if fetches <= failures {
+				return errors.New("Connection to github.com timed out")
+			}
+		}
+		return nil
+	}
+	if err := h.fetch(a, nil); err != nil || fetches != 3 {
+		t.Fatalf("fetch was not retried: %v after %d attempts", err, fetches)
+	}
+	if !strings.Contains(out.String(), "retrying (3 of 3)") {
+		t.Fatalf("retry not reported:\n%s", out)
+	}
+	fetches, failures = 0, 10
+	if err := h.fetch(a, nil); err == nil || fetches != fetchAttempts {
+		t.Fatalf("fetch retried without bound: %v after %d attempts", err, fetches)
+	}
+}
+
+func TestGitSSHEndsStalledConnections(t *testing.T) {
+	command := gitSSHCommand("/key", "/known_hosts")
+	for _, option := range []string{"BatchMode=yes", "ConnectTimeout=15", "ServerAliveInterval=15", "ServerAliveCountMax=4"} {
+		if !strings.Contains(command, "-o "+option+" ") {
+			t.Fatalf("missing %s: %s", option, command)
+		}
 	}
 }

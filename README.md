@@ -95,7 +95,9 @@ answer 503 with a maintenance page and keep their certificates. Nuxt apps fetch
 code and install Node packages before stopping; Laravel apps stop first, so a
 build never serves half-updated PHP. Deployments run Laravel migrations; failed
 changes are not automatically rolled back, and the maintenance page stays up
-until the next successful deployment. Laravel builds the frontend before Composer by
+until the next successful deployment. A connection to GitHub that stalls is
+ended after about a minute, and a failed fetch is retried twice before the
+deployment gives up; the app keeps serving meanwhile. Laravel builds the frontend before Composer by
 default (`--build-order composer-first` reverses it); while `vendor` is missing,
 Composer packages are installed without scripts before the frontend build.
 `npm ci` is skipped while `package.json`, `package-lock.json`, `.npmrc` and Node
