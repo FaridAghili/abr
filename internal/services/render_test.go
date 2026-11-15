@@ -2,6 +2,7 @@ package services
 
 import (
 	"bufio"
+	"encoding/base64"
 	"io"
 	"net"
 	"net/http"
@@ -831,5 +832,95 @@ func TestCaddyReverbWebSocket(t *testing.T) {
 	}
 	if line, err := reader.ReadString('\n'); err != nil || line != "upgraded /app/key123\n" {
 		t.Fatalf("upgraded stream not passed through: %q %v", line, err)
+	}
+}
+
+// A stopped app answers with its Persian maintenance page; the heredoc body
+// must reach visitors without the template's indentation.
+func TestCaddyMaintenancePage(t *testing.T) {
+	caddy, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("Caddy is not installed")
+	}
+	a := config.App{Name: "app", User: "abr-app", Directory: t.TempDir(), Type: "laravel", Domain: "app.test", Web: config.Web{Driver: "fpm"}}
+	f, err := RenderMaintenance(a, "../../templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	_ = listener.Close()
+	dir := t.TempDir()
+	site := strings.Replace(string(f.Data), "\napp.test {", "\nhttp://"+address+" {", 1)
+	path := filepath.Join(dir, "Caddyfile")
+	if err := os.WriteFile(path, []byte("{\n admin off\n auto_https off\n}\n"+site), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(caddy, "fmt", "--overwrite", path).CombinedOutput(); err != nil {
+		t.Fatalf("Caddy could not format maintenance site: %v\n%s", err, output)
+	}
+	cmd := exec.Command(caddy, "run", "--config", path, "--adapter", "caddyfile")
+	cmd.Env = append(os.Environ(), "HOME="+dir, "XDG_DATA_HOME="+dir, "XDG_CONFIG_HOME="+dir)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		response, err := client.Get("http://" + address + "/any/page")
+		if err == nil {
+			body, err := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusServiceUnavailable || response.Header.Get("Retry-After") != "30" || response.Header.Get("Content-Type") != "text/html; charset=utf-8" {
+				t.Fatalf("bad maintenance response: %d %v", response.StatusCode, response.Header)
+			}
+			page := string(body)
+			if !strings.HasPrefix(page, "<!doctype html>\n") || !strings.Contains(page, `<html lang="fa" dir="rtl">`) || !strings.Contains(page, "در حال به&zwnj;روزرسانی هستیم") || strings.Contains(page, "\n ") {
+				t.Fatalf("bad maintenance page:\n%s", page)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// The maintenance page carries its Persian font, so it never depends on a
+// font CDN that visitors may not reach, and offers English beside Persian.
+func TestMaintenancePageFontAndLanguages(t *testing.T) {
+	a := config.App{Name: "app", User: "abr-app", Directory: "/srv/apps/app", Type: "laravel", Domain: "app.test", Web: config.Web{Driver: "fpm"}}
+	f, err := RenderMaintenance(a, "../../templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, ok := strings.Cut(string(f.Data), "@font-face{font-family:Vazirmatn;")
+	if !ok {
+		t.Fatal("maintenance page lacks the Vazirmatn font face")
+	}
+	_, rest, ok = strings.Cut(rest, "url(data:font/woff2;base64,")
+	encoded, _, closed := strings.Cut(rest, ")")
+	if !ok || !closed {
+		t.Fatal("Vazirmatn font is not embedded")
+	}
+	font, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || !strings.HasPrefix(string(font), "wOF2") {
+		t.Fatalf("embedded Vazirmatn font is not WOFF2: %v", err)
+	}
+	if !strings.Contains(string(f.Data), "font-family:Vazirmatn,system-ui") {
+		t.Fatal("maintenance page does not use Vazirmatn")
+	}
+	for _, want := range []string{`<html lang="fa" dir="rtl">`, `<button class="lang" id="lang" type="button">`, `<span class="t-en" lang="en">We’re updating the site</span>`, `root.dir=lang==="fa"?"rtl":"ltr"`} {
+		if !strings.Contains(string(f.Data), want) {
+			t.Fatalf("maintenance page lacks %q", want)
+		}
 	}
 }
