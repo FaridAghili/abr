@@ -854,7 +854,13 @@ func TestCaddyMaintenancePage(t *testing.T) {
 	address := listener.Addr().String()
 	_ = listener.Close()
 	dir := t.TempDir()
-	site := strings.Replace(string(f.Data), "\napp.test {", "\nhttp://"+address+" {", 1)
+	// Serve only the HTTPS site block over loopback HTTP: its port 80
+	// redirect blocks would need privileges this test does not have.
+	site, _, ok := strings.Cut(string(f.Data), "\nhttp://app.test {")
+	if !ok {
+		t.Fatalf("maintenance site lacks its HTTP redirect:\n%s", f.Data)
+	}
+	site = strings.Replace(site, "\napp.test {", "\nhttp://"+address+" {", 1)
 	path := filepath.Join(dir, "Caddyfile")
 	if err := os.WriteFile(path, []byte("{\n admin off\n auto_https off\n}\n"+site), 0600); err != nil {
 		t.Fatal(err)
@@ -862,8 +868,13 @@ func TestCaddyMaintenancePage(t *testing.T) {
 	if output, err := exec.Command(caddy, "fmt", "--overwrite", path).CombinedOutput(); err != nil {
 		t.Fatalf("Caddy could not format maintenance site: %v\n%s", err, output)
 	}
+	if output, err := exec.Command(caddy, "adapt", "--config", path, "--adapter", "caddyfile").CombinedOutput(); err != nil {
+		t.Fatalf("Caddy rejected maintenance site: %v\n%s", err, output)
+	}
+	var output strings.Builder
 	cmd := exec.Command(caddy, "run", "--config", path, "--adapter", "caddyfile")
 	cmd.Env = append(os.Environ(), "HOME="+dir, "XDG_DATA_HOME="+dir, "XDG_CONFIG_HOME="+dir)
+	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -888,7 +899,10 @@ func TestCaddyMaintenancePage(t *testing.T) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal(err)
+			// Stop Caddy before reading what it wrote.
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			t.Fatalf("%v\n%s", err, output.String())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
