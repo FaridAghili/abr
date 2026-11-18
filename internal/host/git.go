@@ -197,11 +197,15 @@ func (h Host) gitSSHWithKey(key string) string {
 	return gitSSHCommand(key, filepath.Join(dir, "known_hosts"))
 }
 
+// GitHub serves SSH on port 443 at ssh.github.com with github.com's host key.
+// Some networks stall port 22 connections mid-transfer while 443 gets through,
+// so every connection uses 443; remotes stay git@github.com:OWNER/REPO.git.
+//
 // ConnectTimeout covers only connecting. A connection that stalls later, with
 // packets silently dropped, would otherwise block Git forever; keepalives end
 // it after about a minute without replies.
 func gitSSHCommand(key, knownHosts string) string {
-	return "ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o UserKnownHostsFile=" + shellQuote(knownHosts) + " -i " + shellQuote(key)
+	return "ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o HostName=ssh.github.com -o Port=443 -o HostKeyAlias=github.com -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o UserKnownHostsFile=" + shellQuote(knownHosts) + " -i " + shellQuote(key)
 }
 
 func (h Host) sharedGit() (bool, error) {

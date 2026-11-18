@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/http"
@@ -119,6 +120,12 @@ func (h Host) Deploy(names []string, o DeployOptions) error {
 }
 
 func (h Host) asUser(a config.App, environment map[string]string, private bool, name string, args ...string) ([]byte, error) {
+	return h.asUserStderr(a, environment, private, nil, name, args...)
+}
+
+// asUserStderr also captures the command's error output in stderr, for callers
+// that report why a command failed. Use it only for output free of secrets.
+func (h Host) asUserStderr(a config.App, environment map[string]string, private bool, stderr io.Writer, name string, args ...string) ([]byte, error) {
 	if a.User == "" || a.User == "root" {
 		return nil, fmt.Errorf("application commands require a dedicated non-root user")
 	}
@@ -150,10 +157,14 @@ func (h Host) asUser(a config.App, environment map[string]string, private bool, 
 			environment["GIT_SSH_COMMAND"] = h.gitSSH()
 		}
 	}
-	return h.unprivileged(a.User, "/var/lib/abr-users/"+a.User, a.Directory, environment, private, name, args...)
+	return h.unprivilegedStderr(a.User, "/var/lib/abr-users/"+a.User, a.Directory, environment, private, stderr, name, args...)
 }
 
 func (h Host) unprivileged(user, home, directory string, environment map[string]string, private bool, name string, args ...string) ([]byte, error) {
+	return h.unprivilegedStderr(user, home, directory, environment, private, nil, name, args...)
+}
+
+func (h Host) unprivilegedStderr(user, home, directory string, environment map[string]string, private bool, stderr io.Writer, name string, args ...string) ([]byte, error) {
 	if user == "" || user == "root" {
 		return nil, fmt.Errorf("refusing to run application/tool commands as root")
 	}
@@ -172,7 +183,7 @@ func (h Host) unprivileged(user, home, directory string, environment map[string]
 	// of setuid programs. runuser alone does not prevent privilege escalation.
 	command = append(command, "/usr/bin/setpriv", "--no-new-privs", "--", name)
 	command = append(command, args...)
-	return h.run(fmt.Sprintf("Run %s as %s", strings.Join(append([]string{name}, args...), " "), user), Command{Name: "runuser", Args: command, Dir: directory, Private: private, Stream: !private || name != "git"})
+	return h.run(fmt.Sprintf("Run %s as %s", strings.Join(append([]string{name}, args...), " "), user), Command{Name: "runuser", Args: command, Dir: directory, Private: private, Stream: !private || name != "git", Stderr: stderr})
 }
 
 func (h Host) deploy(a config.App, r ports.Registry, o DeployOptions) (result error) {

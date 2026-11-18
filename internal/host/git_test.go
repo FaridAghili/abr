@@ -3,6 +3,7 @@ package host
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -248,7 +249,8 @@ func TestFetchRetriesInterruptedConnections(t *testing.T) {
 		if slices.Contains(c.Args, "fetch") {
 			fetches++
 			if fetches <= failures {
-				return errors.New("Connection to github.com timed out")
+				fmt.Fprint(c.Stderr, "Timeout, server github.com not responding.\r\nfatal: expected flush after ref listing\n")
+				return errors.New("runuser failed: exit status 128")
 			}
 		}
 		return nil
@@ -256,18 +258,35 @@ func TestFetchRetriesInterruptedConnections(t *testing.T) {
 	if err := h.fetch(a, nil); err != nil || fetches != 3 {
 		t.Fatalf("fetch was not retried: %v after %d attempts", err, fetches)
 	}
-	if !strings.Contains(out.String(), "retrying (3 of 3)") {
-		t.Fatalf("retry not reported:\n%s", out)
+	if !strings.Contains(out.String(), "Fetching code failed (Timeout, server github.com not responding.); retrying (3 of 3)") {
+		t.Fatalf("retry and its reason not reported:\n%s", out)
 	}
 	fetches, failures = 0, 10
-	if err := h.fetch(a, nil); err == nil || fetches != fetchAttempts {
-		t.Fatalf("fetch retried without bound: %v after %d attempts", err, fetches)
+	if err := h.fetch(a, nil); err == nil || fetches != fetchAttempts || !strings.Contains(err.Error(), "Timeout, server github.com not responding") {
+		t.Fatalf("fetch retried without bound or hid the reason: %v after %d attempts", err, fetches)
+	}
+}
+
+func TestFetchDoesNotRetryRejectedKeys(t *testing.T) {
+	h, runner, out, a := fixture(t)
+	fetches := 0
+	runner.fail = func(c Command) error {
+		if slices.Contains(c.Args, "fetch") {
+			fetches++
+			fmt.Fprint(c.Stderr, "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n")
+			return errors.New("runuser failed: exit status 128")
+		}
+		return nil
+	}
+	err := h.fetch(a, nil)
+	if err == nil || fetches != 1 || !strings.Contains(err.Error(), "Permission denied (publickey)") || strings.Contains(out.String(), "retrying") {
+		t.Fatalf("rejected key was retried or not reported: %v after %d attempts\n%s", err, fetches, out)
 	}
 }
 
 func TestGitSSHEndsStalledConnections(t *testing.T) {
 	command := gitSSHCommand("/key", "/known_hosts")
-	for _, option := range []string{"BatchMode=yes", "ConnectTimeout=15", "ServerAliveInterval=15", "ServerAliveCountMax=4"} {
+	for _, option := range []string{"BatchMode=yes", "HostName=ssh.github.com", "Port=443", "HostKeyAlias=github.com", "ConnectTimeout=15", "ServerAliveInterval=15", "ServerAliveCountMax=4"} {
 		if !strings.Contains(command, "-o "+option+" ") {
 			t.Fatalf("missing %s: %s", option, command)
 		}

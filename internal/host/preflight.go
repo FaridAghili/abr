@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"abr/internal/config"
 	"abr/internal/services"
@@ -52,19 +53,60 @@ var (
 
 // fetch retries a failed git fetch, such as a connection to GitHub that
 // stalled and was ended by SSH keepalives. Fetching changes only remote
-// refs, and the app keeps serving, so another attempt is safe.
+// refs, and the app keeps serving, so another attempt is safe. Failures that
+// another attempt cannot fix, such as a key GitHub rejects, end at once.
 func (h Host) fetch(a config.App, env map[string]string) error {
 	var err error
 	for attempt := 1; attempt <= fetchAttempts; attempt++ {
-		if _, err = h.asUser(a, env, true, "git", "fetch", "--prune"); err == nil || h.DryRun {
+		var stderr commandOutput
+		if _, err = h.asUserStderr(a, env, true, &stderr, "git", "fetch", "--prune"); err == nil || h.DryRun {
+			return err
+		}
+		reason := fetchFailure(string(stderr.Bytes()))
+		if reason != "" {
+			err = fmt.Errorf("%w: %s", err, reason)
+		}
+		if permanentFetchFailure(string(stderr.Bytes())) {
 			return err
 		}
 		if attempt < fetchAttempts {
-			h.note("  Fetching code failed; retrying (%d of %d)", attempt+1, fetchAttempts)
+			if reason == "" {
+				reason = "no error output"
+			}
+			h.note("  Fetching code failed (%s); retrying (%d of %d)", reason, attempt+1, fetchAttempts)
 			time.Sleep(fetchRetryDelay)
 		}
 	}
 	return err
+}
+
+// fetchFailure is the first line of Git's error output, which names the cause
+// (a timeout or rejected key); later lines are generic follow-ups.
+func fetchFailure(stderr string) string {
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return -1
+			}
+			return r
+		}, line)
+		if line = strings.TrimSpace(line); line != "" {
+			if runes := []rune(line); len(runes) > 200 {
+				line = string(runes[:200]) + "…"
+			}
+			return line
+		}
+	}
+	return ""
+}
+
+func permanentFetchFailure(stderr string) bool {
+	for _, message := range []string{"Permission denied (publickey)", "Host key verification failed", "Repository not found", "does not appear to be a git repository"} {
+		if strings.Contains(stderr, message) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h Host) preflight(a config.App, env map[string]string, commit string, noPull bool) error {
