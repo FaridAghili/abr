@@ -299,7 +299,19 @@ sudo apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confo
   install -y --allow-downgrades "caddy=$caddy_ubuntu_version"
 sudo cp /etc/caddy/Caddyfile "$abr_binary_directory/caddy-before-update"
 sudo cp /etc/systemd/system/caddy.service.d/abr-admin.conf "$abr_binary_directory/caddy-admin-before-update"
+# The runner image lags Ubuntu and carries its own tools (kernel, kubectl, ...).
+# Hold what it could upgrade, except packages Abr manages, so update's
+# full-upgrade runs without downloading hundreds of MB of runner-only packages
+# from a mirror that can stall.
+sudo apt-get -o APT::Update::Error-Mode=any update
+mapfile -t runner_held < <(apt list --upgradable 2>/dev/null | awk -F/ 'NR > 1 && $1 !~ /^(caddy|nodejs|redis.*)?$/ {print $1}')
+if ((${#runner_held[@]})); then
+  sudo apt-mark hold "${runner_held[@]}" >/dev/null
+fi
 abr_ci update
+if ((${#runner_held[@]})); then
+  sudo apt-mark unhold "${runner_held[@]}" >/dev/null
+fi
 fixture_caddy_version
 sudo cmp /etc/caddy/Caddyfile "$abr_binary_directory/caddy-before-update"
 sudo cmp /etc/systemd/system/caddy.service.d/abr-admin.conf "$abr_binary_directory/caddy-admin-before-update"
