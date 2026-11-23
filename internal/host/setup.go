@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -46,7 +45,7 @@ func (h Host) Setup(o SetupOptions) error {
 	if err := config.ValidateHostname(o.Hostname); err != nil {
 		return fmt.Errorf("VPS name: %w", err)
 	}
-	if o.RoadRunnerVersion != "latest" && !regexp.MustCompile(`^\d{4}\.\d+\.\d+$`).MatchString(o.RoadRunnerVersion) {
+	if o.RoadRunnerVersion != "latest" && !roadRunnerVersionPattern.MatchString(o.RoadRunnerVersion) {
 		return fmt.Errorf("invalid RoadRunner version")
 	}
 	if o.SSHPort < 0 || o.SSHPort > 65535 {
@@ -325,7 +324,7 @@ func githubDownloadAuth(request *http.Request) {
 }
 
 func (h Host) installRoadRunner(version string) error {
-	h.say("Install shared RoadRunner %s (latest follows the Octane-compatible 2025.1 series) with GitHub asset SHA256 verification", version)
+	h.say("Install shared RoadRunner %s (latest follows the Octane-compatible 3.x series) with GitHub asset SHA256 verification", version)
 	if h.DryRun {
 		h.say("Would install /opt/roadrunner/%s/rr and link /usr/local/bin/rr", version)
 		return nil

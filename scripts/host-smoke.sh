@@ -227,7 +227,7 @@ fixture_caddy_version() {
   sudo systemctl is-active --quiet caddy
 }
 fixture_caddy_version
-/usr/local/bin/rr --version | grep -E 'version 2025\.1\.[0-9]+'
+/usr/local/bin/rr --version | grep -E 'version 3\.[0-9]+\.[0-9]+'
 fixture_caddy_format /etc/caddy/Caddyfile
 for repository in node redis; do
   repository_key="/etc/apt/keyrings/abr/$repository.gpg"
@@ -439,10 +439,10 @@ fixture_source=$(mktemp -d)
 composer create-project --no-install --no-scripts --prefer-dist 'laravel/laravel:^13.0' "$fixture_source/laravel"
 (
   cd "$fixture_source/laravel"
-  # Match Abr's shared 2025.1 runtime. HTTP 4.2 requires the old 3.0
-  # metapackage, which Composer correctly blocks for a security advisory.
+  # Match Abr's shared RoadRunner 3.x runtime (HTTP 4.2.1 requires
+  # roadrunner/roadrunner ^3.0).
   composer require laravel/octane laravel/reverb spiral/roadrunner-cli \
-    'spiral/roadrunner-http:~4.1.0' 'spiral/roadrunner:~2025.1.0' \
+    'spiral/roadrunner-http:^4.2.1' \
     --no-update --no-scripts --no-interaction
   composer update --no-install --no-scripts --no-interaction
   # The skeleton pins concurrently's vulnerable shell-quote dependency.

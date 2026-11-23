@@ -26,7 +26,7 @@ func testOptions(t *testing.T) Options {
 	if err := os.WriteFile(path, []byte("[ports]\nfirst = 10000\nlast = 19999\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	return Options{Version: abr.Version, ConfigPath: path, StateDir: filepath.Join(dir, "state"), TemplatesDir: filepath.Join(dir, "templates"), AppsDir: filepath.Join(dir, "apps"), RoadRunnerVersion: "2025.1.15"}
+	return Options{Version: abr.Version, ConfigPath: path, StateDir: filepath.Join(dir, "state"), TemplatesDir: filepath.Join(dir, "templates"), AppsDir: filepath.Join(dir, "apps"), RoadRunnerVersion: "3.0.1"}
 }
 
 // viewText is the visible screen; styling may split phrases with escape codes.

@@ -1405,7 +1405,7 @@ func (h Host) startRestoredRedis() (result error) {
 }
 
 func (h Host) validateFullBackup(m backup.Manifest, stage string) error {
-	if !regexp.MustCompile(`^(latest|[0-9]{4}\.[0-9]+\.[0-9]+)$`).MatchString(m.Settings.RoadRunnerVersion) {
+	if m.Settings.RoadRunnerVersion != "latest" && !roadRunnerVersionPattern.MatchString(m.Settings.RoadRunnerVersion) {
 		return fmt.Errorf("invalid RoadRunner setting in backup")
 	}
 	for _, record := range m.Apps {
