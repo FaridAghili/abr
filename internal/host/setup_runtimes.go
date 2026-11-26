@@ -267,7 +267,11 @@ func (h Host) prepareRedisAccounts() error {
 	return h.writeRedisACL()
 }
 
-// Test an actual SVG-to-PNG conversion, rather than merely listing a codec.
+// heicSample is a 16x16 red HEIC photo encoded by Apple's HEVC encoder.
+const heicSample = "AAAAJGZ0eXBoZWljAAAAAG1pZjFNaVBybWlhZk1pSEJoZWljAAABhm1ldGEAAAAAAAAAIWhkbHIAAAAAAAAAAHBpY3QAAAAAAAAAAAAAAAAAAAAAJGRpbmYAAAAcZHJlZgAAAAAAAAABAAAADHVybCAAAAABAAAADnBpdG0AAAAAAAEAAAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABodmMxAAAAAOZpcHJwAAAAxWlwY28AAAATY29scm5jbHgAAgACAAaAAAAADGNsbGkAywBAAAAAFGlzcGUAAAAAAAAAEAAAABAAAAAJaXJvdAAAAAAQcGl4aQAAAAADCAgIAAAAcWh2Y0MBA3AAAACwAAAAAAAe8AD8/fj4AAALA6AAAQAXQAEMAf//A3AAAAMAsAAAAwAAAwAecCShAAEAI0IBAQNwAAADALAAAAMAAAMAHqAUIEHAkwziHuRZVNwICBgCogABAAlEAcBnLIQFMkAAAAAZaXBtYQAAAAAAAAABAAEGgQIDBYaEAAAAHmlsb2MAAAAARAAAAQABAAAAAQAAAboAAAA6AAAAAW1kYXQAAAAAAAAASgAAADYoAa+i7vcKH//jm7/7VbC9tZCmr/aw7LuU5/oMEswobnRvMonmkXuJE9/IGa0OM3VVIEVC3uA="
+
+// Test actual SVG and HEIC conversions, rather than merely listing a codec:
+// ImageMagick lists HEIC even when libheif has no HEVC decoder plugin.
 // Keep ImageMagick's packaged limits and disabled unsafe coders intact.
 func (h Host) verifyPHP() error {
 	code := `if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 5) { fwrite(STDERR, "PHP 8.5 required\n"); exit(1); }
@@ -278,7 +282,11 @@ $image = new Imagick();
 $image->readImageBlob('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="red"/></svg>');
 $image->setImageFormat("png");
 if (!str_starts_with($image->getImageBlob(), "\x89PNG\r\n\x1a\n")) { exit(1); }
-echo "PHP 8.5 extensions and Imagick SVG conversion verified\n";`
+$photo = new Imagick();
+$photo->readImageBlob(base64_decode("` + heicSample + `"));
+$photo->setImageFormat("jpeg");
+if ($photo->getImageWidth() !== 16 || !str_starts_with($photo->getImageBlob(), "\xff\xd8")) { fwrite(STDERR, "Imagick cannot decode HEIC\n"); exit(1); }
+echo "PHP 8.5 extensions and Imagick SVG and HEIC conversion verified\n";`
 	_, err := h.unprivileged("_apt", "/nonexistent", "/", nil, false, "/usr/bin/php"+services.PHPVersion, "-r", code)
 	return err
 }
